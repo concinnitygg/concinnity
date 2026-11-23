@@ -1,8 +1,9 @@
-//! The `#[asset(...)]` field attribute: `owned_file` marks a path field as a
-//! file the asset owns, `default = <expr>` states the field's default, and
-//! `min = <expr>` / `max = <expr>` / `apply = <class>` declare it a parameter:
-//! the range an authored number is clamped into, and when a change to it takes
-//! effect (`live`, `rebuild`, `variant` or `restart`). `section` on a struct
+//! The `#[asset(...)]` field attribute: `file` marks a field as a path to a
+//! file, `owned_file` marks one as a file the asset owns, `default = <expr>`
+//! states the field's default, and `min = <expr>` / `max = <expr>` /
+//! `apply = <class>` declare it a parameter: the range an authored number is
+//! clamped into, and when a change to it takes effect (`live`, `rebuild`,
+//! `variant` or `restart`). `section` on a struct
 //! generates its sparse override twin; on a field whose type is such a twin,
 //! it clamps that section's parameters along with the parent's.
 
@@ -13,6 +14,8 @@ use syn::{Attribute, Expr, Ident};
 /// What a field's `#[asset(...)]` attributes declare.
 #[derive(Default)]
 pub(crate) struct AssetAttrs {
+    /// The field holds a path to a file.
+    pub(crate) file: bool,
     /// The field holds a file the asset owns.
     pub(crate) owned_file: bool,
     /// The field's default, when it states one.
@@ -89,7 +92,9 @@ pub(crate) fn asset_attrs(attrs: &[Attribute]) -> syn::Result<AssetAttrs> {
                     Ok(())
                 }
             };
-            if meta.path.is_ident("owned_file") {
+            if meta.path.is_ident("file") {
+                out.file = true;
+            } else if meta.path.is_ident("owned_file") {
                 out.owned_file = true;
             } else if meta.path.is_ident("section") {
                 out.section = true;
@@ -114,7 +119,7 @@ pub(crate) fn asset_attrs(attrs: &[Attribute]) -> syn::Result<AssetAttrs> {
                 out.apply = Some(class);
             } else {
                 return Err(meta.error(
-                    "expected `owned_file`, `section`, `default = <expr>`, \
+                    "expected `file`, `owned_file`, `section`, `default = <expr>`, \
                      `min = <expr>`, `max = <expr>` or `apply = <class>`",
                 ));
             }
@@ -140,9 +145,11 @@ mod tests {
             source: String
         };
         assert!(attrs(&field).unwrap().owned_file);
+        let file: syn::Field = syn::parse_quote! { #[asset(file)] icon: String };
+        assert!(attrs(&file).unwrap().file);
         let plain: syn::Field = syn::parse_quote! { #[serde(default)] source: String };
         let plain = attrs(&plain).unwrap();
-        assert!(!plain.owned_file && plain.default.is_none() && !plain.is_param());
+        assert!(!plain.file && !plain.owned_file && plain.default.is_none() && !plain.is_param());
     }
 
     #[test]

@@ -9,10 +9,12 @@
 //! and `sdf_edits.rs`.
 
 use concinnity_engine::ecs::World;
+use std::path::Path;
 
 use super::shaders_state::RowsKey;
 use crate::debug::hot_reload::ReloadReports;
 use crate::editor::asset_handle::AssetHandle;
+use crate::editor::entry_list::Origin;
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::sdf;
@@ -29,30 +31,44 @@ impl EditorHook {
         self.shaders.reports.clone()
     }
 
-    // Every Shader the working entries declare, each file resolved once it
-    // exists and kept (`ShadersState::resolved`).
+    // Every Shader the working entries declare, each file resolved under the
+    // root of the file declaring it.
     pub(in crate::editor::hook) fn declared_shaders(&mut self) -> Vec<ShaderDecl> {
-        let dir = crate::project::assets_dir();
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        let entries = &self.entries;
         let state = &mut self.shaders;
-        shader::list::declared(&self.entries, |declared| {
-            state.resolved(declared, dir.as_deref())
+        shader::list::declared(entries, |i, declared| {
+            let root = state.root_for(entries, entries.included_from(i), origin);
+            shader::source::resolve_path(declared, Some(&root))
         })
     }
 
     // Every distance field the working entries' SdfVolumes read, each file
-    // resolved once it exists and kept (`ShadersState::resolved_field`).
+    // resolved under the root of the file declaring it.
     pub(in crate::editor::hook) fn declared_fields(&mut self) -> Vec<FieldDecl> {
-        let dir = crate::project::assets_dir();
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        let entries = &self.entries;
         let state = &mut self.shaders;
-        sdf::field_list::declared_fields(&self.entries, |declared| {
-            state.resolved_field(declared, dir.as_deref())
+        sdf::field_list::declared_fields(entries, |i, declared| {
+            let root = state.root_for(entries, entries.included_from(i), origin);
+            shader::source::resolve_path(declared, Some(&root))
         })
     }
 
-    // A declared field path's on-disk path.
+    // A field path the world file declares, on disk.
     pub(in crate::editor::hook) fn resolved_field(&mut self, declared: &str) -> String {
-        let dir = crate::project::assets_dir();
-        self.shaders.resolved_field(declared, dir.as_deref())
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        let root = self.shaders.root_for(&self.entries, None, origin);
+        shader::source::resolve_path(declared, Some(&root))
     }
 
     // The list's rows, rebuilt only when the declared Shaders or fields, the

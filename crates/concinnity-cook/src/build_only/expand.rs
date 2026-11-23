@@ -193,13 +193,14 @@ impl ExpandReport {
 }
 
 // Run all expansion passes in order. Mutates the asset list in place and
-// reports what the injection passes added. `assets_dir` is the asset search
-// root the source-reading passes (scene imports, presets) resolve against.
+// reports what the injection passes added. `root` is the content root a
+// scene import's source resolves against; presets are looked up by name under
+// its `assets/`.
 // Returns an error only when a hard failure occurs (e.g. prefab cycle or
 // missing prefab reference).
 pub(crate) fn expand_world(
     assets: &mut Vec<serde_json::Value>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<ExpandReport, Diagnostic> {
     let mut report = ExpandReport::default();
     // The assets the world declares itself, snapshotted before any pass runs:
@@ -214,19 +215,21 @@ pub(crate) fn expand_world(
     // Imports expand first so the assets they generate (materials, meshes,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
-    expand_scene_imports(assets, &mut report, assets_dir)?;
+    let presets = root.map(concinnity_host::store::paths::assets_dir_of);
+    let presets = presets.as_deref();
+    expand_scene_imports(assets, &mut report, root)?;
     // Stories expand to External UI assets (Screens, TextLabels, HitRegions)
     // that need no further expansion but must exist before companion
     // injection so their TextLabels pull in Window + Font companions.
-    expand_stories(assets)?;
-    expand_camera_shots(assets, assets_dir)?;
+    expand_stories(assets, root)?;
+    expand_camera_shots(assets, presets)?;
     // Character models become the skinned meshes they emit, under their own
     // names, so every later pass (companions, references) sees a SkinnedMesh.
     expand_character_models(assets)?;
-    expand_light_rigs(assets, assets_dir)?;
-    expand_material_palettes(assets, assets_dir)?;
+    expand_light_rigs(assets, presets)?;
+    expand_material_palettes(assets, presets)?;
     expand_ground_looks(assets)?;
-    expand_prefabs(assets, &authored, &mut report, assets_dir)?;
+    expand_prefabs(assets, &authored, &mut report, presets)?;
     expand_room_textures(assets);
     // First companion round: materialize the Window implied by everything
     // authored or expanded above, so the defaults pass can key off "this world
@@ -269,7 +272,7 @@ pub(crate) fn expand_world(
 }
 
 /// Load and structurally validate world text, then run all expansion passes,
-/// resolving bare source filenames under `assets_dir`. Returns the fully
+/// resolving paths under the source's root. Returns the fully
 /// expanded asset list. Does not run semantic validation; see
 /// `crate::build_only::prepare_world` for the full build-pipeline front half.
 ///
@@ -279,12 +282,12 @@ pub(crate) fn expand_world(
 /// expansion pass fails.
 pub fn expand_world_from_str<'a>(
     source: impl Into<WorldSource<'a>>,
-    assets_dir: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
-    let mut assets = load_world(source.into())
+    let source = source.into();
+    let mut assets = load_world(source)
         .map_err(|errs| std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n")))?;
 
-    expand_world(&mut assets, assets_dir)
+    expand_world(&mut assets, source.root)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(assets)
@@ -454,12 +457,12 @@ mod tests {
     // finds and the expansion failures that follow it.
     #[test]
     fn expand_world_from_str_surfaces_load_and_expansion_errors() {
-        let malformed = expand_world_from_str("not json at all\n", None).unwrap_err();
+        let malformed = expand_world_from_str("not json at all\n").unwrap_err();
         assert_eq!(malformed.kind(), std::io::ErrorKind::InvalidData);
         assert!(!malformed.to_string().is_empty());
 
         let broken = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let err = expand_world_from_str(broken, None).unwrap_err();
+        let err = expand_world_from_str(broken).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("ghost"), "{err}");
     }
@@ -541,7 +544,7 @@ mod tests {
     #[test]
     fn expand_world_from_str_injects_companions() {
         let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
-        let assets = expand_world_from_str(content, None).unwrap();
+        let assets = expand_world_from_str(content).unwrap();
         assert!(
             assets
                 .iter()
@@ -558,7 +561,7 @@ mod tests {
     #[test]
     fn bare_main_menu_world_expands_and_pulls_companions() {
         let content = r#"["MainMenu",{"$id":"main_menu"}]"#;
-        let assets = expand_world_from_str(content, None).unwrap();
+        let assets = expand_world_from_str(content).unwrap();
         // The MainMenu is gone, replaced by its UI assets.
         assert!(
             !assets

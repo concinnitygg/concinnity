@@ -13,7 +13,7 @@ impl BuildAsset for SkinnedMesh {
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        super::resources::source_files(args, ctx.assets_dir)
+        super::resources::source_files(args, ctx.root)
     }
 
     fn compile_data(name: &str, args: &serde_json::Value) -> std::io::Result<Option<Vec<u8>>> {

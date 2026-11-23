@@ -18,7 +18,7 @@ use concinnity_engine::render::{
 use concinnity_engine::simulation::animation::skeleton;
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::decode::*;
@@ -31,7 +31,7 @@ fn empty_map_round_trips() {
     let m = TextureSourceMap::new();
     assert!(m.is_empty());
     assert_eq!(m.len(), 0);
-    assert!(m.watch_dirs().is_empty());
+    assert!(m.watch_dirs(Path::new("")).is_empty());
 }
 
 #[test]
@@ -41,19 +41,19 @@ fn pushes_and_collects_unique_parent_dirs() {
     m.push_texture("assets/b.png".to_string(), 0, 1);
     m.push_texture("textures/nm.png".to_string(), 0, 1);
     assert_eq!(m.entries.len(), 3);
-    let dirs = m.watch_dirs();
+    let dirs = m.watch_dirs(Path::new(""));
     assert_eq!(dirs.len(), 2);
     assert!(dirs.iter().any(|p| p.ends_with("assets")));
     assert!(dirs.iter().any(|p| p.ends_with("textures")));
 }
 
 #[test]
-fn bare_filenames_skip_watch_dir() {
-    // A source with no parent directory has nowhere to watch; the watcher
-    // would otherwise try to subscribe to "" which notify rejects.
+fn a_file_at_the_root_watches_the_root() {
+    // A source named with no folder is a file at the root, so the root is
+    // watched; spelled as nothing, it is ".", which notify accepts.
     let mut m = TextureSourceMap::new();
     m.push_texture("standalone.png".to_string(), 0, 0);
-    assert!(m.watch_dirs().is_empty());
+    assert_eq!(m.watch_dirs(Path::new("")), [PathBuf::from(".")]);
 }
 
 #[test]
@@ -162,17 +162,15 @@ fn mesh_source_map_collects_unique_parent_dirs() {
         lod_distances: Vec::new(),
         draw_indices: vec![DrawIndex(3)],
     });
-    let dirs = m.watch_dirs();
+    let dirs = m.watch_dirs(Path::new(""));
     assert_eq!(dirs.len(), 2);
     assert!(dirs.iter().any(|p| p.ends_with("assets/models")));
     assert!(dirs.iter().any(|p| p.ends_with("assets/hdri")));
 }
 
 #[test]
-fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
-    // A bare filename has no parent directory; the watcher would otherwise
-    // try to subscribe to "" which notify rejects. The `reload-assets`
-    // debug tool call still works for these.
+fn mesh_source_map_watches_the_root_for_a_file_there() {
+    // A file named with no folder sits in the root.
     let mut m = MeshSourceMap::new();
     m.entries.push(MeshSourceEntry {
         source: "standalone.glb".to_string(),
@@ -181,7 +179,7 @@ fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
         lod_distances: Vec::new(),
         draw_indices: vec![DrawIndex(0)],
     });
-    assert!(m.watch_dirs().is_empty());
+    assert_eq!(m.watch_dirs(Path::new("/p")), [PathBuf::from("/p")]);
 }
 
 #[test]
@@ -229,7 +227,7 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
         index_count: 150,
         joint_count: 5,
     });
-    let dirs = m.watch_dirs();
+    let dirs = m.watch_dirs(Path::new(""));
     assert_eq!(dirs.len(), 1);
     assert!(dirs[0].ends_with("assets/models"));
 }
@@ -934,12 +932,12 @@ impl backend::EmitterPass for RecordingBackend {}
 impl backend::WorldReload for RecordingBackend {}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
-fn write_tiny_png(path: &std::path::Path) {
+fn write_tiny_png(path: &Path) {
     std::fs::write(path, concinnity_testing::fixtures::png::one_pixel()).unwrap();
 }
 
 // Write a 2x2x2 identity-ish Adobe Cube LUT (8 data lines).
-fn write_tiny_cube(path: &std::path::Path) {
+fn write_tiny_cube(path: &Path) {
     let text = "LUT_3D_SIZE 2\n\
                 0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
     std::fs::write(path, text).unwrap();
@@ -1682,7 +1680,7 @@ fn poll_pending_assets_survives_a_skinned_in_place_rejection() {
 
 // reload_volumetric_fog
 
-fn write_world_line(dir: &std::path::Path, line: &str) -> PathBuf {
+fn write_world_line(dir: &Path, line: &str) -> PathBuf {
     let path = dir.join("world.jsonl");
     std::fs::write(&path, format!("{line}\n")).unwrap();
     path
@@ -1814,11 +1812,7 @@ fn box_world_line(name: &str, half: f32) -> String {
 fn reload_procedural_meshes_with_an_empty_map_short_circuits() {
     let mut map = ProceduralMeshSourceMap::new();
     let mut backend = RecordingBackend::default();
-    let r = reload_procedural_meshes(
-        std::path::Path::new("does_not_matter.jsonl"),
-        &mut map,
-        &mut backend,
-    );
+    let r = reload_procedural_meshes(Path::new("does_not_matter.jsonl"), &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
 }
 

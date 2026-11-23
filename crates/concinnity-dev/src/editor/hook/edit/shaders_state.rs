@@ -6,8 +6,8 @@ use std::time::SystemTime;
 
 use concinnity_engine::render::shader::programs::vocabulary::{self, Entry};
 
-use super::path_cache::PathCache;
 use crate::debug::hot_reload::{Latest, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard};
+use crate::editor::entry_list::{EntryList, Origin};
 use crate::editor::panels::sdf::field_list::FieldDecl;
 use crate::editor::panels::shader;
 use crate::editor::panels::shader::diagnostics::{Status, Tone};
@@ -22,23 +22,17 @@ use concinnity_engine::presentation::text_edit::highlight::{HLSL, SDF_HLSL};
 // The board the hot-reload driver publishes
 // each Shader's and volume's latest outcome to, and the file open in the
 // source panel.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(in crate::editor::hook) struct ShadersState {
     // The row whose context menu is open, by what it stands for, so a rebuild of
     // the rows keeps it on the same row.
     pub(in crate::editor::hook) menu: Option<RowKind>,
     pub(in crate::editor::hook) reports: ReloadReports,
     pub(in crate::editor::hook) source: Option<SourceState>,
-    // Each declared path's on-disk path under `paths_dir`, from `resolve` for
-    // a Shader's files and `resolve_field` for a distance field's, which the
-    // build looks for differently. A path not on disk yet is looked for again
-    // every `MISSING_RETRY_S`, from `retry_at`.
-    pub(in crate::editor::hook) paths: PathCache,
-    pub(in crate::editor::hook) field_paths: PathCache,
-    pub(in crate::editor::hook) paths_dir: Option<PathBuf>,
-    pub(in crate::editor::hook) retry_at: f64,
-    pub(in crate::editor::hook) resolve: fn(&str, Option<&Path>) -> String,
-    pub(in crate::editor::hook) resolve_field: fn(&str, Option<&Path>) -> String,
+    // The root each file the entries come from resolves its paths against,
+    // `None` standing for the world file, kept since finding one reads the
+    // directories above it.
+    pub(in crate::editor::hook) roots: Vec<(Option<PathBuf>, PathBuf)>,
     // The list's rows, rebuilt only when what they show changes.
     pub(in crate::editor::hook) rows: Vec<Row>,
     pub(in crate::editor::hook) rows_key: Option<RowsKey>,
@@ -58,79 +52,31 @@ pub(in crate::editor::hook) struct RowsKey {
     pub(in crate::editor::hook) open: Option<SourceKey>,
 }
 
-impl Default for ShadersState {
-    fn default() -> Self {
-        Self {
-            rows_rev: 0,
-            menu: None,
-            reports: ReloadReports::default(),
-            source: None,
-            paths: PathCache::default(),
-            field_paths: PathCache::default(),
-            paths_dir: None,
-            retry_at: 0.0,
-            resolve: shader::source::resolve_path,
-            resolve_field: shader::source::resolve_field_path,
-            rows: Vec::new(),
-            rows_key: None,
-            reference: Reference::default(),
-        }
-    }
-}
-
 impl ShadersState {
     // Drop what was read out of the world being left: the open file and the
     // resolved paths. Shown state is not the world's.
     pub(in crate::editor::hook) fn reset_for_world(&mut self) {
         self.menu = None;
         self.source = None;
-        self.paths.clear();
-        self.field_paths.clear();
+        self.roots.clear();
         self.rows.clear();
         self.rows_key = None;
     }
 
-    // `declared`'s on-disk path, resolved against `dir` and kept once the file
-    // exists. A different `dir` (another project) drops what was kept.
-    pub(in crate::editor::hook) fn resolved(
+    // The root the paths of an entry of `file` (`None` for the world file)
+    // resolve against.
+    pub(in crate::editor::hook) fn root_for(
         &mut self,
-        declared: &str,
-        dir: Option<&Path>,
-    ) -> String {
-        self.follow_dir(dir);
-        let resolve = self.resolve;
-        self.paths.get(declared, |d| resolve(d, dir))
-    }
-
-    // A distance field's on-disk path, kept as `resolved` keeps a Shader
-    // file's.
-    pub(in crate::editor::hook) fn resolved_field(
-        &mut self,
-        declared: &str,
-        dir: Option<&Path>,
-    ) -> String {
-        self.follow_dir(dir);
-        let resolve = self.resolve_field;
-        self.field_paths.get(declared, |d| resolve(d, dir))
-    }
-
-    // Look again for the declared files that were not on disk, at most every
-    // `MISSING_RETRY_S` of session time `now`.
-    pub(in crate::editor::hook) fn retry_missing(&mut self, now: f64) {
-        if now < self.retry_at {
-            return;
+        entries: &EntryList,
+        file: Option<&Path>,
+        origin: Origin<'_>,
+    ) -> PathBuf {
+        if let Some((_, root)) = self.roots.iter().find(|(f, _)| f.as_deref() == file) {
+            return root.clone();
         }
-        self.retry_at = now + MISSING_RETRY_S;
-        self.paths.forget_missing();
-        self.field_paths.forget_missing();
-    }
-
-    fn follow_dir(&mut self, dir: Option<&Path>) {
-        if self.paths_dir.as_deref() != dir {
-            self.paths.clear();
-            self.field_paths.clear();
-            self.paths_dir = dir.map(Path::to_path_buf);
-        }
+        let root = entries.file_root(file, origin);
+        self.roots.push((file.map(Path::to_path_buf), root.clone()));
+        root
     }
 }
 
@@ -195,9 +141,6 @@ fn shown<'a>(newer: &[&'a Latest]) -> Option<&'a Latest> {
 
 // How often the open file is checked for a change on disk.
 const DISK_CHECK_S: f64 = 0.5;
-
-// How often a declared file not on disk is looked for again.
-const MISSING_RETRY_S: f64 = 1.0;
 
 impl SourceState {
     pub(in crate::editor::hook) fn new(key: SourceKey, path: String, text: String) -> Self {
@@ -501,44 +444,6 @@ mod tests {
         assert!(!s.take_board(&reports.snapshot(), &volumes), "taken once");
     }
 
-    // A declared file not on disk is looked for again once a retry is due, so
-    // one created later (found by the assets walk) replaces the fallback path.
-    #[test]
-    fn a_missing_file_is_found_once_a_retry_is_due() {
-        let dir = tempfile::tempdir().unwrap();
-        let shaders = dir.path().join("shaders");
-        std::fs::create_dir_all(&shaders).unwrap();
-        let mut s = ShadersState::default();
-        let resolved = |s: &mut ShadersState, name: &str| s.resolved(name, Some(dir.path()));
-
-        assert_eq!(
-            resolved(&mut s, "water.hlsl"),
-            dir.path().join("water.hlsl").to_string_lossy()
-        );
-        std::fs::write(shaders.join("water.hlsl"), "").unwrap();
-        s.retry_missing(0.0);
-        assert_eq!(
-            resolved(&mut s, "water.hlsl"),
-            shaders.join("water.hlsl").to_string_lossy()
-        );
-
-        resolved(&mut s, "lava.hlsl");
-        std::fs::write(shaders.join("lava.hlsl"), "").unwrap();
-        s.retry_missing(0.5);
-        assert_eq!(
-            resolved(&mut s, "lava.hlsl"),
-            dir.path().join("lava.hlsl").to_string_lossy(),
-            "not due yet"
-        );
-        s.retry_missing(1.0);
-        assert_eq!(
-            resolved(&mut s, "lava.hlsl"),
-            shaders.join("lava.hlsl").to_string_lossy()
-        );
-    }
-
-    // A clean buffer follows the file on disk; a dirty one keeps its edits and
-    // says so once.
     #[test]
     fn a_change_on_disk_reloads_clean_and_notices_dirty() {
         let dir = tempfile::tempdir().unwrap();

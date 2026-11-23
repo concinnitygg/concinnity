@@ -54,12 +54,10 @@ pub(crate) fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), St
 // Compile a `ColorLut` component's JSON args into a packed binary payload.
 pub(crate) fn compile_color_lut_payload(
     args: &serde_json::Value,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<Vec<u8>, CompileError> {
     let source = color_lut_source(args)?;
-    let (size, data) = decode(&concinnity_host::store::source::resolve_source_path(
-        source, assets_dir,
-    ))?;
+    let (size, data) = decode(&concinnity_host::store::source::resolve(source, root))?;
     Ok(serialize(size, color_lut_strength(args), &data))
 }
 
@@ -342,21 +340,21 @@ LUT_3D_SIZE 2
         assert_eq!(strength(-1.0), 0.0);
     }
 
-    // The build's asset search root is a parameter, so a bare `source` resolves
-    // under whichever tree the caller passes and nowhere else.
+    // The build's root is a parameter, so a relative `source` resolves under
+    // whichever tree the caller passes and nowhere else.
     #[test]
-    fn compile_color_lut_payload_finds_a_bare_source_under_the_assets_dir() {
-        let assets = tempfile::tempdir().expect("tempdir");
-        let nested = assets.path().join("grades");
+    fn compile_color_lut_payload_reads_a_relative_source_under_the_root() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let nested = root.path().join("grades");
         std::fs::create_dir_all(&nested).expect("assets tree");
         std::fs::write(nested.join("t.cube"), CUBE_2).expect("write cube");
-        let args = serde_json::json!({"source": "t.cube"});
+        let args = serde_json::json!({"source": "grades/t.cube"});
 
         let payload =
-            compile_color_lut_payload(&args, Some(assets.path())).expect("bare source resolves");
+            compile_color_lut_payload(&args, Some(root.path())).expect("relative source resolves");
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
 
-        // Another root, and no root at all, both leave the bare name unresolved.
+        // Another root, and no root at all, both leave the path unresolved.
         let elsewhere = tempfile::tempdir().expect("tempdir");
         assert!(compile_color_lut_payload(&args, Some(elsewhere.path())).is_err());
         assert!(compile_color_lut_payload(&args, None).is_err());

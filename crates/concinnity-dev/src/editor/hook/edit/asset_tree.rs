@@ -13,7 +13,7 @@ use concinnity_engine::ecs::World;
 
 use super::assets_state::{DecorKey, RowsKey};
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::entry_list::build_text;
+use crate::editor::entry_list::{EntryList, Origin};
 use crate::editor::hook::{EditorHook, FormTarget, entry_type_name, short_status};
 use crate::editor::panels::asset_tree::{self, TreeRow};
 use crate::editor::panels::assets_panel::{self, AssetsView, PanelAction, PickerOption, RowDecor};
@@ -60,7 +60,7 @@ impl EditorHook {
     pub(super) fn cook_working_entries(
         &self,
     ) -> Result<concinnity_cook::build_only::LoadedWorld, String> {
-        Self::cook_entries(&self.entries)
+        Self::cook_entries(&self.entries, self.world_origin())
     }
 
     // The expansion front half over an arbitrary entry list. Named apart from
@@ -68,17 +68,20 @@ impl EditorHook {
     // running world was built from, which a pending edit has already moved on
     // from.
     pub(in crate::editor::hook) fn cook_entries(
-        entries: &[serde_json::Value],
+        entries: &EntryList,
+        origin: Origin<'_>,
     ) -> Result<concinnity_cook::build_only::LoadedWorld, String> {
-        let content = build_text(entries).map_err(|e| e.to_string())?;
-        concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref()).map_err(
-            |errs| {
-                errs.diagnostics().first().map_or_else(
-                    || "the world does not build".to_string(),
-                    ToString::to_string,
-                )
-            },
-        )
+        let content = entries.build_text(origin).map_err(|e| e.to_string())?;
+        concinnity_cook::prepare_world(concinnity_cook::WorldSource::text(
+            &content,
+            Some(origin.root),
+        ))
+        .map_err(|errs| {
+            errs.diagnostics().first().map_or_else(
+                || "the world does not build".to_string(),
+                ToString::to_string,
+            )
+        })
     }
 
     // The flattened tree under the search filter. Unfiltered while the

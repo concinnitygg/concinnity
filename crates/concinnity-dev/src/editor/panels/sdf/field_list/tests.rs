@@ -24,7 +24,7 @@ fn entries() -> Vec<serde_json::Value> {
 }
 
 // Two spellings of one file resolve to one path, so they are one field.
-fn resolve(declared: &str) -> String {
+fn resolve(_: usize, declared: &str) -> String {
     format!("/cn-none/assets/{}", declared.trim_start_matches("./"))
 }
 

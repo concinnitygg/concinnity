@@ -121,6 +121,7 @@ pub struct Animation {
     /// Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the
     /// build imports `duration` + `tracks` from it; inline-authored clips
     /// leave this empty.
+    #[asset(file)]
     pub source: String,
     /// Index of the animation to import when `source` is set and the file
     /// contains several. Ignored when `animation_name` is non-empty.

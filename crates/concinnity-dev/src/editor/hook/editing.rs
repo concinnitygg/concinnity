@@ -63,7 +63,7 @@ impl EditorHook {
         };
         self.form.extras = match &template {
             Some(_) => None,
-            None => form_extras::for_type(&ty, &self.entries, &target),
+            None => form_extras::for_type(&ty, &self.entries, &target, self.world_origin()),
         };
         self.form.template = template;
         self.form.touched = false;

@@ -26,7 +26,13 @@ use crate::build_status::{BuildStatus, Verbosity};
 // validation and asset fetching behave identically. The `cn cook` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(source: WorldSource<'_>) -> std::io::Result<LoadedWorld> {
-    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
+    // A world named without a root builds under the open project's.
+    let root = crate::project::content_root();
+    let source = WorldSource {
+        root: source.root.or(root.as_deref()),
+        ..source
+    };
+    let loaded = concinnity_cook::prepare_world(source)
         .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     Ok(loaded)
@@ -96,7 +102,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 
     let mut result = build_compiled(
         loaded.assets,
-        crate::project::assets_dir().as_deref(),
+        crate::project::content_root().as_deref(),
         crate::cook_platform().into(),
     )?;
 
@@ -194,7 +200,8 @@ pub(crate) fn build_world_and_shadows<'a>(
 /// + `world_from_loaded`.
 pub(crate) fn build_world_from_path(world_path: &Path) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
-    build_world_from_str(WorldSource::file(&content, world_path))
+    let root = crate::project::content_root();
+    build_world_from_str(WorldSource::file(&content, world_path, root.as_deref()))
 }
 
 // Compile the world file at `json_path` into the project's state tree, showing
@@ -232,8 +239,8 @@ fn build_world(
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
     let status = BuildStatus::start(&shown.display().to_string(), targets, verbosity);
-    let source = WorldSource::file(&content, json_path);
-    let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
+    let source = WorldSource::file(&content, json_path, Some(tree.content_root()));
+    let loaded = match concinnity_cook::prepare_world(source) {
         Ok(loaded) => loaded,
         Err(errs) => {
             status.fail_validation(errs.diagnostics());
@@ -265,7 +272,7 @@ pub(crate) fn build_world_str_to_disk(
     let loaded = prepare(content.into())?;
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
-        crate::project::assets_dir().as_deref(),
+        crate::project::content_root().as_deref(),
         crate::cook_targets(),
         progress,
     )?;

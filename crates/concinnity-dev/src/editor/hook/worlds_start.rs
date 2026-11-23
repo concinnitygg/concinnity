@@ -96,11 +96,11 @@ impl EditorHook {
     // flag the frame loop consumes once, so a burst of row clicks costs one
     // compile of the world last picked rather than one per click.
     fn preview_world(&mut self, path: &str) {
-        match worlds::files::read_entries(Path::new(path)) {
+        match worlds::files::read_entries(Path::new(path), &self.content_root) {
             Ok(entries) => {
                 self.worlds.status = None;
                 self.worlds.preview = Some(path.to_string());
-                self.stage_preview(entries);
+                self.stage_preview(entries, Some(path.to_string()));
             }
             // A world that will not parse cannot be shown: the screen says so
             // and keeps whatever was already behind it.
@@ -120,13 +120,13 @@ impl EditorHook {
     // session with no world to show opens on.
     fn clear_preview(&mut self) {
         self.worlds.preview = None;
-        self.stage_preview(EntryList::default());
+        self.stage_preview(EntryList::default(), None);
     }
 
     // Hold `entries` as the world the session is showing. Nothing here is an
     // edit: the list reads as saved and carries no history, so the start screen
     // can never present a world as having unsaved changes.
-    fn stage_preview(&mut self, entries: EntryList) {
+    fn stage_preview(&mut self, entries: EntryList, from: Option<String>) {
         // The world these entries replace is the one the attract camera was
         // framing, so the cycle starts again (on its first shot, from black)
         // over whatever the rebuild brings up.
@@ -135,6 +135,7 @@ impl EditorHook {
         self.baseline = entries.clone();
         self.saved = entries.clone();
         self.entries = entries;
+        self.entries_from = from;
         self.dirty = false;
         self.require_rebuild();
         // The compile blocks the frame it runs on, so it waits for the loading
@@ -157,7 +158,7 @@ impl EditorHook {
             self.retarget(path, entries, Adopt::Showing);
             return;
         }
-        match worlds::files::read_entries(Path::new(&path)) {
+        match worlds::files::read_entries(Path::new(&path), &self.content_root) {
             Ok(entries) => {
                 // The world showing gets its own camera back before it goes:
                 // should the compile fail, it is the world the session keeps.

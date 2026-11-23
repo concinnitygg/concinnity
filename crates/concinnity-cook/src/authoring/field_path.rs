@@ -92,6 +92,30 @@ fn retarget(value: &mut Value, segments: &[&str], from: &str, to: Option<&str>) 
     }
 }
 
+/// Replace every non-empty string at `path` in `args` with what `f` makes of
+/// it. Returns how many strings were rewritten.
+pub fn map_leaves(args: &mut Value, path: &str, f: &mut dyn FnMut(&str) -> String) -> usize {
+    let segments: Vec<&str> = path.split('.').collect();
+    map(args, &segments, f)
+}
+
+fn map(value: &mut Value, segments: &[&str], f: &mut dyn FnMut(&str) -> String) -> usize {
+    match value {
+        Value::Array(items) => items.iter_mut().map(|item| map(item, segments, f)).sum(),
+        Value::String(s) if segments.is_empty() && !s.is_empty() => {
+            *s = f(s);
+            1
+        }
+        Value::Object(obj) => {
+            let Some((first, rest)) = segments.split_first() else {
+                return 0;
+            };
+            obj.get_mut(*first).map_or(0, |next| map(next, rest, f))
+        }
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +208,25 @@ mod tests {
         assert_eq!(
             args,
             json!({"palette": ["z", "b", "z"], "meshes": [{}, {"material": "c"}]})
+        );
+    }
+
+    #[test]
+    fn map_leaves_rewrites_every_string_at_the_path() {
+        let mut args = json!({
+            "source": "a.png",
+            "layers": [{"source": "b.png"}, {"source": ""}, {"other": "c.png"}],
+        });
+        let mut up = |s: &str| format!("lib/{s}");
+        assert_eq!(map_leaves(&mut args, "source", &mut up), 1);
+        assert_eq!(map_leaves(&mut args, "layers.source", &mut up), 1);
+        assert_eq!(map_leaves(&mut args, "missing", &mut up), 0);
+        assert_eq!(
+            args,
+            json!({
+                "source": "lib/a.png",
+                "layers": [{"source": "lib/b.png"}, {"source": ""}, {"other": "c.png"}],
+            })
         );
     }
 }

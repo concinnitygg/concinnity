@@ -10,8 +10,6 @@ use std::sync::Arc;
 
 use concinnity_cook::build_only::include::is_include;
 
-use super::paths::include_target;
-
 // One `Include` line and the run of entries it brings in.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Opening {
@@ -31,12 +29,13 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-    // Walk `values` (tagged by `files`, `None` for the world file at `world`)
-    // as the build reads them.
+    // Walk `values` (tagged by `files`, `None` for the world file) as the build
+    // reads them, with every `Include` path resolved under the root `root_of`
+    // gives the file holding it.
     pub(super) fn of(
         values: &[serde_json::Value],
         files: &[Option<Arc<Path>>],
-        world: &Path,
+        root_of: impl Fn(Option<&Path>) -> PathBuf,
     ) -> Self {
         let mut layout = Self::default();
         // The files being read, outermost first, each beside its opening.
@@ -55,7 +54,7 @@ impl Layout {
             let Some(path) = include_path(value) else {
                 continue;
             };
-            let target = include_target(file.unwrap_or(world), path);
+            let target = concinnity_host::store::source::resolve(path, Some(&root_of(file)));
             stack.push((Some(target.clone()), Some(layout.openings.len())));
             layout.openings.push(Opening {
                 line: i,

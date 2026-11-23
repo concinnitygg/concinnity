@@ -4,7 +4,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{WorldJsonlAsset, WorldSource, load_world};
 use concinnity_cook::build_only::prepare_world;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::AppMeta;
 
@@ -12,24 +12,23 @@ use super::AppMeta;
 // world, so an error here is mapped plainly rather than reported per asset.
 pub(super) fn world_app_meta(
     source: WorldSource<'_>,
-    assets_dir: Option<&Path>,
     cli_name: Option<&str>,
     cli_version: Option<&str>,
 ) -> io::Result<AppMeta> {
     let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let loaded = prepare_world(source, assets_dir).map_err(|errs| invalid(errs.to_string()))?;
+    let loaded = prepare_world(source).map_err(|errs| invalid(errs.to_string()))?;
     let authored = load_world(source)
         .map_err(|errs| invalid(errs.join("\n")))?
         .iter()
         .map(WorldJsonlAsset::from_value)
         .collect::<Result<Vec<_>, _>>()
         .map_err(invalid)?;
-    Ok(read_app_meta(
-        cli_name,
-        cli_version,
-        &loaded.assets,
-        &authored,
-    ))
+    let mut meta = read_app_meta(cli_name, cli_version, &loaded.assets, &authored);
+    // The build saw the icon's path from its root, which is where it is read.
+    meta.icon = meta
+        .icon
+        .map(|icon| concinnity_host::store::source::resolve(&icon.to_string_lossy(), source.root));
+    Ok(meta)
 }
 
 // Read the app metadata from the expanded world, applying the `--name` /

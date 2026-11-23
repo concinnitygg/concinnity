@@ -9,7 +9,7 @@ use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_cook::build_only::include::with_includes;
 use std::path::{Path, PathBuf};
 
-use crate::editor::entry_list::EntryList;
+use crate::editor::entry_list::{EntryList, Origin};
 use std::time::SystemTime;
 
 // The extension every world file carries.
@@ -74,18 +74,26 @@ pub(crate) fn newest(dir: Option<&Path>) -> Option<WorldFile> {
     list(dir).into_iter().next()
 }
 
-// Read a world file's authored entries with its includes resolved in place, or
-// the reason it could not be read (shown on the panel's status line). A file
+// The root the editor resolves and writes `Include` paths against: the open
+// project's, or the working directory when none is open.
+pub(crate) fn content_root() -> PathBuf {
+    crate::project::content_root().unwrap_or_else(|| PathBuf::from("."))
+}
+
+// Read a world file's authored entries with its includes resolved in place
+// against `root`, or the reason it could not be read (shown on the panel's
+// status line). A file
 // that vanished under the listing reads as empty rather than as a failure: the
 // panel stays usable, and the next SAVE writes it back.
-pub(crate) fn read_entries(path: &Path) -> Result<EntryList, String> {
+pub(crate) fn read_entries(path: &Path, root: &Path) -> Result<EntryList, String> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(EntryList::default()),
         Err(e) => return Err(format!("Open failed: {e}")),
     };
     let lines = parse_world_jsonl(&content).map_err(|e| format!("{e}"))?;
-    with_includes(lines, Some(path)).map(|sourced| EntryList::with_includes(sourced, path))
+    with_includes(lines, Some(path), Some(root))
+        .map(|sourced| EntryList::with_includes(sourced, Origin { world: path, root }))
 }
 
 // Check a typed world name, returning the name to create or the reason it was
@@ -206,32 +214,34 @@ mod tests {
         let tree = concinnity_testing::TempTree::new();
         let path = tree.path().join("arena.jsonl");
         std::fs::write(&path, "[\"Prop\",{\"$id\":\"a\"}]").unwrap();
-        let entries = read_entries(&path).unwrap();
+        let entries = read_entries(&path, tree.path()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["args"]["$id"], "a");
 
         std::fs::write(&path, "{not json").unwrap();
-        assert!(read_entries(&path).is_err());
+        assert!(read_entries(&path, tree.path()).is_err());
 
         assert_eq!(
-            read_entries(&tree.path().join("gone.jsonl")),
+            read_entries(&tree.path().join("gone.jsonl"), tree.path()),
             Ok(EntryList::default())
         );
     }
 
-    // An included file's entries are read in place, each tagged with the file,
-    // and a broken include is reported like a file that will not parse.
+    // An included file's entries are read in place, each tagged with the file
+    // named from the root, and a broken include is reported like a file that
+    // will not parse.
     #[test]
-    fn read_entries_resolves_includes_beside_the_world() {
+    fn read_entries_resolves_includes_against_the_root() {
         let tree = concinnity_testing::TempTree::new();
-        let path = tree.path().join("arena.jsonl");
+        let path = tree.path().join("worlds/arena.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
             "[\"Prop\"]\n[\"Include\",{\"path\":\"parts/lights.jsonl\"}]\n[\"Prop\"]\n",
         )
         .unwrap();
         let lights = tree.write("parts/lights.jsonl", "[\"PointLight\"]\n");
-        let entries = read_entries(&path).unwrap();
+        let entries = read_entries(&path, tree.path()).unwrap();
         let types: Vec<&str> = entries
             .iter()
             .map(|e| e["type"].as_str().unwrap())
@@ -241,7 +251,7 @@ mod tests {
         assert_eq!(entries.included_from(1), None);
 
         std::fs::remove_file(&lights).unwrap();
-        let err = read_entries(&path).unwrap_err();
+        let err = read_entries(&path, tree.path()).unwrap_err();
         assert!(err.contains("lights.jsonl"), "{err}");
     }
 

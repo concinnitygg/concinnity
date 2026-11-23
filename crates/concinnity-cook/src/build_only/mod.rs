@@ -58,10 +58,9 @@ pub struct LoadedWorld {
 /// compile stage needs, computed exactly once. Errors from every stage are
 /// collected, so the caller gets the full picture in a single pass.
 ///
-/// `source` is the world text, with the file it was read from when an
-/// `Include` in it should resolve beside that file. `assets_dir` is the asset
-/// search root the expansion passes resolve bare source filenames and preset
-/// names against; `None` leaves them unresolved.
+/// `source` is the world text, with the file it was read from and the root
+/// every path in it resolves against; presets are looked up by name under that
+/// root's `assets/`. With no root a relative path stays as written.
 ///
 /// # Errors
 ///
@@ -69,24 +68,20 @@ pub struct LoadedWorld {
 /// structurally, expand, or pass semantic validation.
 pub fn prepare_world<'a>(
     source: impl Into<WorldSource<'a>>,
-    assets_dir: Option<&std::path::Path>,
 ) -> Result<LoadedWorld, WorldValidationError> {
     // Ids the checks intern are throwaway; the compile assigns the build's own.
     let _check = concinnity_host::thread::asset_id::BuildScope::fresh();
-    prepare(source.into(), assets_dir).map_err(WorldValidationError::new)
+    prepare(source.into()).map_err(WorldValidationError::new)
 }
 
-fn prepare(
-    source: WorldSource<'_>,
-    assets_dir: Option<&std::path::Path>,
-) -> Result<LoadedWorld, Vec<Diagnostic>> {
+fn prepare(source: WorldSource<'_>) -> Result<LoadedWorld, Vec<Diagnostic>> {
     let mut expanded = load_world(source).map_err(diagnostics)?;
     let authored: Vec<String> = expanded
         .iter()
         .filter_map(crate::authoring::world::entry_id)
         .map(str::to_string)
         .collect();
-    let report = expand_world(&mut expanded, assets_dir).map_err(|e| vec![e])?;
+    let report = expand_world(&mut expanded, source.root).map_err(|e| vec![e])?;
     // The expansion is the work this half of the build produces cache entries
     // for, so its segment is written here rather than left to a compile that a
     // check-only run never reaches.
@@ -153,7 +148,7 @@ mod tests {
     #[test]
     fn prepare_world_expands_and_validates() {
         let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
-        let loaded = prepare_world(content, None).unwrap();
+        let loaded = prepare_world(content).unwrap();
         // A TextLabel pulls in its companions, so the prepared world holds
         // more than the single declared asset.
         assert!(loaded.assets.len() > 1);
@@ -173,7 +168,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let errs = prepare_world(content, None)
+        let errs = prepare_world(content)
             .err()
             .map(|e| {
                 e.diagnostics()
@@ -190,7 +185,7 @@ mod tests {
     #[test]
     fn an_expansion_failure_names_its_asset() {
         let content = r#"["Panel",{"$id":"hud","width":"wide"}]"#;
-        let Err(err) = prepare_world(content, None) else {
+        let Err(err) = prepare_world(content) else {
             panic!("mistyped args fail");
         };
         let [diagnostic] = err.diagnostics() else {
@@ -212,7 +207,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"["Prop",{"$id":"prop","mesh":"nope"}]"#;
-        let errs = prepare_world(content, None)
+        let errs = prepare_world(content)
             .err()
             .map(|e| {
                 e.diagnostics()
@@ -233,7 +228,7 @@ mod tests {
     fn prepare_world_expands_presets_from_the_root_it_is_given() {
         fn rig_root(intensity: f64) -> tempfile::TempDir {
             let dir = tempfile::tempdir().unwrap();
-            let rigs = dir.path().join("light_rigs");
+            let rigs = dir.path().join("assets").join("light_rigs");
             std::fs::create_dir_all(&rigs).unwrap();
             std::fs::write(
                 rigs.join("dusk.json"),
@@ -260,14 +255,14 @@ mod tests {
         let dim = rig_root(0.25);
 
         assert_eq!(
-            key_intensity(&prepare_world(content, Some(bright.path())).unwrap()),
+            key_intensity(&prepare_world(WorldSource::text(content, Some(bright.path()))).unwrap()),
             Some(3.5)
         );
         assert_eq!(
-            key_intensity(&prepare_world(content, Some(dim.path())).unwrap()),
+            key_intensity(&prepare_world(WorldSource::text(content, Some(dim.path()))).unwrap()),
             Some(0.25)
         );
         // No root: the preset is never found, so the rig expands to nothing.
-        assert_eq!(key_intensity(&prepare_world(content, None).unwrap()), None);
+        assert_eq!(key_intensity(&prepare_world(content).unwrap()), None);
     }
 }

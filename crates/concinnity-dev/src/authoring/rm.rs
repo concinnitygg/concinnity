@@ -15,9 +15,11 @@ use concinnity_cook::build_only::include::with_includes;
 /// that an `Include` brings in is refused: its line is in the included file.
 pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
     let mut removed = false;
+    let root = crate::project::content_root();
+    let root = root.as_deref();
 
     patch_world_jsonl_to(world_path, world_path, |assets| {
-        let found = line_index(assets, world_path, name)
+        let found = line_index(assets, world_path, root, name)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         if let Some(i) = found {
             let asset = assets.remove(i);
@@ -29,7 +31,7 @@ pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
     })?;
 
     if !removed {
-        let known = known_names(world_path).unwrap_or_default();
+        let known = known_names(world_path, root).unwrap_or_default();
         if known.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -51,15 +53,16 @@ pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
 
 // The position among `lines` (the entries of `world_file` itself) of the entry
 // `name` addresses. Handles are matched over the world with its includes
-// resolved, so a label counts the anonymous entries an include brings in, as
+// resolved against `root`, so a label counts the anonymous entries an include brings in, as
 // the build does. `None` when nothing is named so; an error when the entry is
 // declared in an included file rather than this one.
 fn line_index(
     lines: &[serde_json::Value],
     world_file: &Path,
+    root: Option<&Path>,
     name: &str,
 ) -> Result<Option<usize>, String> {
-    let sourced = with_includes(lines.to_vec(), Some(world_file))?;
+    let sourced = with_includes(lines.to_vec(), Some(world_file), root)?;
     let entries: Vec<serde_json::Value> = sourced.iter().map(|s| s.entry.clone()).collect();
     let Some(i) = find_entry(&entries, name) else {
         return Ok(None);
@@ -125,7 +128,7 @@ mod tests {
         .unwrap();
 
         rm_at_path(&path, "log").unwrap();
-        assert_eq!(known_names(&path).unwrap(), ["log2"]);
+        assert_eq!(known_names(&path, Some(dir.path())).unwrap(), ["log2"]);
         assert!(!dir.path().join("data").exists());
     }
 
@@ -156,11 +159,23 @@ mod tests {
             serde_json::json!({"type": "Include", "args": {"path": "props.jsonl"}}),
             serde_json::json!({"type": "Prop", "args": {"mesh": "b"}}),
         ];
-        assert_eq!(line_index(&lines, &world, "Prop#0"), Ok(Some(0)));
-        assert_eq!(line_index(&lines, &world, "Prop#2"), Ok(Some(2)));
-        assert_eq!(line_index(&lines, &world, "Include#0"), Ok(Some(1)));
-        assert_eq!(line_index(&lines, &world, "Prop#3"), Ok(None));
-        let err = line_index(&lines, &world, "Prop#1").unwrap_err();
+        assert_eq!(
+            line_index(&lines, &world, Some(dir.path()), "Prop#0"),
+            Ok(Some(0))
+        );
+        assert_eq!(
+            line_index(&lines, &world, Some(dir.path()), "Prop#2"),
+            Ok(Some(2))
+        );
+        assert_eq!(
+            line_index(&lines, &world, Some(dir.path()), "Include#0"),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            line_index(&lines, &world, Some(dir.path()), "Prop#3"),
+            Ok(None)
+        );
+        let err = line_index(&lines, &world, Some(dir.path()), "Prop#1").unwrap_err();
         assert!(
             err.contains("props.jsonl") && err.contains("remove it there"),
             "{err}"

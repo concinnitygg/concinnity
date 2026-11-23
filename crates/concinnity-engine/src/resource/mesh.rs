@@ -44,6 +44,7 @@ pub struct VertexData {
 pub struct Mesh {
     /// Optional path to a `.glb` file. When set, the build imports
     /// `vertices` / `indices` from it; inline geometry leaves this empty.
+    #[asset(file)]
     pub source: String,
     /// Which primitive (counted across all meshes in the file) to import from
     /// `source`. Ignored when `source` is empty.

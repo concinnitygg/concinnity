@@ -18,14 +18,14 @@ pub(crate) fn import_model(
     name: &str,
     schema: &CharacterSchema,
     model: &CharacterModel,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<ImportedSkinnedMesh, String> {
     let errors = validate::model_errors(model);
     if !errors.is_empty() {
         return Err(format!("CharacterModel '{name}': {}", errors.join("; ")));
     }
     let source = &model.source;
-    let doc = GltfDoc::parse_file(&crate::import::glb::resolve_source(source, assets_dir))?;
+    let doc = GltfDoc::parse_file(&crate::import::glb::resolve_source(source, root))?;
     let mut mesh = import_skinned_from_doc(&doc, source, model.skin_index)?;
     let errors = validate::source_errors(schema, &mesh.skeleton, &mesh.morph_target_names);
     if !errors.is_empty() {
@@ -79,12 +79,15 @@ impl CharacterModelArg {
         Ok(Self { schema, model })
     }
 
-    // The file the model reads.
-    pub(crate) fn source_files(&self) -> Vec<std::path::PathBuf> {
+    // The file the model reads, under `root`.
+    pub(crate) fn source_files(&self, root: Option<&Path>) -> Vec<std::path::PathBuf> {
         if self.model.source.is_empty() {
             Vec::new()
         } else {
-            vec![std::path::PathBuf::from(&self.model.source)]
+            vec![concinnity_host::store::source::resolve(
+                &self.model.source,
+                root,
+            )]
         }
     }
 }
@@ -138,7 +141,10 @@ mod tests {
         };
         let arg = CharacterModelArg::resolve("body", model.clone(), &[]).unwrap();
         assert_eq!(arg.schema.joints.len(), 25);
-        assert_eq!(arg.source_files(), [std::path::PathBuf::from("hero.glb")]);
+        assert_eq!(
+            arg.source_files(None),
+            [std::path::PathBuf::from("hero.glb")]
+        );
         let bad = CharacterModel {
             schema: "mine".into(),
             ..model
@@ -162,7 +168,7 @@ mod tests {
         assert!(
             CharacterModelArg::resolve("b", CharacterModel::default(), &[])
                 .unwrap()
-                .source_files()
+                .source_files(None)
                 .is_empty()
         );
     }

@@ -7,7 +7,6 @@
 
 use concinnity_engine::components::ShaderStage;
 use concinnity_engine::ecs::World;
-use std::cell::Cell;
 use std::path::Path;
 
 use crate::debug::hot_reload::{ReloadOutcome, ReloadReport, ReloadSubject};
@@ -195,47 +194,6 @@ fn failed_at(path: &str, line: u32, column: u32) -> ReloadOutcome {
         }],
         hint: "",
     }))
-}
-
-thread_local! {
-    static RESOLVED: Cell<usize> = const { Cell::new(0) };
-}
-
-fn counting_resolve(declared: &str, dir: Option<&Path>) -> String {
-    RESOLVED.with(|n| n.set(n.get() + 1));
-    shader::source::resolve_path(declared, dir)
-}
-
-// The list resolves each declared file once, however many frames ask for its
-// rows, while a new report still reaches the row it concerns.
-#[test]
-fn the_list_resolves_each_file_once() {
-    let _guard = crate::test_support::lock();
-    let dir = tempfile::tempdir().unwrap();
-    let mut h = session(dir.path());
-    h.shaders.resolve = counting_resolve;
-    RESOLVED.with(|n| n.set(0));
-    h.shaders
-        .reports
-        .arm([ReloadSubject::shader("lit"), ReloadSubject::shader("water")]);
-    for _ in 0..5 {
-        h.shader_rows();
-    }
-    assert_eq!(RESOLVED.with(Cell::get), 2, "one per declared file");
-
-    let lit = dir.path().join("lit.hlsl").to_string_lossy().into_owned();
-    h.shaders.reports.publish(&[ReloadReport {
-        subject: ReloadSubject::shader("lit"),
-        outcome: failed_at(&lit, 1, 1),
-    }]);
-    let badge = h
-        .shader_rows()
-        .iter()
-        .find(|r| r.kind == RowKind::File(key("lit")))
-        .and_then(|r| r.badge.clone())
-        .unwrap();
-    assert_eq!(badge.0, "failed");
-    assert_eq!(RESOLVED.with(Cell::get), 2);
 }
 
 // Tick the hook over `world` on a plain frame, with the source panel's disk

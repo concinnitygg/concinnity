@@ -164,7 +164,7 @@ mod tests {
         let blob = field(&["a"]);
         let shaders = declared(
             &[json!({"type": "Shader", "args": {"$id": "lit", "fragment": "x"}})],
-            |_| blob.path.clone(),
+            |_, _| blob.path.clone(),
         );
         let delete = plan(&blob, |_| false, &shaders);
         assert_eq!(delete.readers, ["lit"]);

@@ -522,6 +522,11 @@ macro_rules! define_registered_type {
             pub fn action_fields(self) -> &'static [ActionField] {
                 &self.field_table().actions
             }
+            /// The fields holding a path to a file, owned or not. Each is the
+            /// dotted path [`Self::ref_fields`] uses.
+            pub fn file_fields(self) -> &'static [String] {
+                &self.field_table().files
+            }
             /// The fields holding a file this type owns: its authored source,
             /// which belongs to the asset rather than being content other
             /// assets share. Each is the dotted path [`Self::ref_fields`] uses.

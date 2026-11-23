@@ -9,4 +9,6 @@
 pub(crate) mod resolve;
 pub(crate) mod schema;
 
-pub use resolve::{SourcedEntry, is_include, resolve_includes, with_includes};
+pub use resolve::{
+    SourcedEntry, file_root, is_include, rebase_files, resolve_includes, with_includes,
+};

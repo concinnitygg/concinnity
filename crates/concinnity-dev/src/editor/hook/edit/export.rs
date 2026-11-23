@@ -8,7 +8,6 @@ use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::atomic::Ordering;
 
-use crate::editor::entry_list::build_text;
 use crate::editor::hook::EditorHook;
 use crate::editor::{gltf_export, notify};
 
@@ -32,7 +31,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match build_text(&self.entries) {
+        let content = match self.entries.build_text(self.world_origin()) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);

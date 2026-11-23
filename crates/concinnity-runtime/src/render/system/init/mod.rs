@@ -433,7 +433,7 @@ impl GraphicsSystem {
         self.extractor
             .set_reflection_layers(core::mem::take(&mut fx.reflection_layers));
         let sdf_fields = if capture_sources {
-            resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
+            resolve_sdf_fields(&fx.sdf_volumes, self.content_root().as_deref())
         } else {
             concinnity_engine::render::world_load::source_maps::SdfFieldMap::default()
         };

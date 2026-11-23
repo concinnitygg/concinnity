@@ -9,5 +9,5 @@ pixels each, used as an environment / image-based-lighting source.
 
 ## Parameters
 
-- `source`: A string. Path to the source equirectangular HDR (`.hdr`) file, relative to the project root. Defaults to `""`.
+- `source`: A string. Path to the source equirectangular HDR (`.hdr`) file, relative to the root of the file holding the line. Defaults to `""`.
 - `face_size`: An integer. Edge length of each cube face in pixels. Must be a power of two. Defaults to `256`.

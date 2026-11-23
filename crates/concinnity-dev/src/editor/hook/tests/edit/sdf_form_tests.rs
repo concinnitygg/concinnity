@@ -60,14 +60,14 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
         assert!(!keys.contains(&"fragment_shader") && !keys.contains(&"volumetric"));
         assert_eq!(
             detail(&h, "Field file").as_deref(),
-            Some("shaders/blob.hlsl")
+            Some("assets/shaders/blob.hlsl")
         );
         assert_eq!(blocked(&h), None);
         confirm(&mut h, &world);
 
         assert!(!h.form_open());
         let blob = args(&h, "blob");
-        assert_eq!(blob["fragment_shader"], "shaders/blob.hlsl");
+        assert_eq!(blob["fragment_shader"], "assets/shaders/blob.hlsl");
         assert_eq!(blob["volumetric"], false);
         let file = root.join("assets/shaders/blob.hlsl");
         assert_eq!(
@@ -80,7 +80,7 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
         assert!(
             toasts(&mut h)
                 .iter()
-                .any(|t| t == "Added SDF field 'blob' (shaders/blob.hlsl)")
+                .any(|t| t == "Added SDF field 'blob' (assets/shaders/blob.hlsl)")
         );
 
         h.undo();

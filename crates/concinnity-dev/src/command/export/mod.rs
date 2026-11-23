@@ -42,7 +42,8 @@ struct AppMeta {
     identifier: String,
     // Version string (macOS CFBundle[Short]Version).
     version: String,
-    // Source icon path (relative to the world), if the AppConfig asset set one.
+    // Source icon path, resolved under the world's root, if the AppConfig asset
+    // set one.
     icon: Option<PathBuf>,
 }
 
@@ -111,9 +112,9 @@ pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
     crate::authoring::build_world_file_for(&world_path, targets)?;
 
     let content = fs::read_to_string(&world_path)?;
+    let root = crate::project::content_root();
     let meta = world_app_meta(
-        WorldSource::file(&content, &world_path),
-        crate::project::assets_dir().as_deref(),
+        WorldSource::file(&content, &world_path, root.as_deref()),
         name,
         version,
     )?;

@@ -30,7 +30,7 @@ const EXPANSION: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Ex
 pub(crate) fn expand_scene_imports(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<(), Diagnostic> {
     if !assets
         .iter()
@@ -95,7 +95,7 @@ pub(crate) fn expand_scene_imports(
 
         // Stamped outside `expand_one`: the generated entries are cached by
         // source contents + options, which do not include the scene.
-        let mut entries = expand_one(&import.source, &opts, assets_dir)
+        let mut entries = expand_one(&import.source, &opts, root)
             .map_err(|e| Diagnostic::asset("SceneImport", &import_name, e.to_string()))?;
         scope_to_scene(&mut entries, &import.scene);
 
@@ -185,7 +185,7 @@ fn type_of(v: &serde_json::Value) -> String {
 fn expand_one(
     source: &str,
     opts: &ImportOptions,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let key_args = serde_json::json!({
         "prefix": opts.name_prefix,
@@ -193,7 +193,7 @@ fn expand_one(
         "emissive_map_strength": opts.emissive_map_strength,
         "emit_camera": opts.emit_camera,
     });
-    let key = crate::cache::expand_key(source, &key_args, assets_dir);
+    let key = crate::cache::expand_key(source, &key_args, root);
 
     if let Some(bytes) = crate::cache::load(EXPANSION, &key)
         && let Ok(entries) = serde_json::from_slice::<Vec<serde_json::Value>>(&bytes)
@@ -201,7 +201,7 @@ fn expand_one(
         return Ok(entries);
     }
 
-    let entries = entries_from_scene(source, opts, assets_dir)?;
+    let entries = entries_from_scene(source, opts, root)?;
     if let Ok(bytes) = serde_json::to_vec(&entries) {
         crate::cache::store(EXPANSION, &key, &bytes);
     }

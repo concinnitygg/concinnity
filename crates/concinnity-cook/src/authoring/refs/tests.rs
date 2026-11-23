@@ -428,7 +428,7 @@ fn a_renamed_world_still_builds() {
         writeln!(text, "{}", serde_json::json!([e["type"], e["args"]])).unwrap();
         text
     });
-    let loaded = crate::build_only::prepare_world(text.as_str(), None)
+    let loaded = crate::build_only::prepare_world(text.as_str())
         .unwrap_or_else(|e| panic!("the renamed world builds: {e:?}"));
     let args = |id: &str| {
         &loaded

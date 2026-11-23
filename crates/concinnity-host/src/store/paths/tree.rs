@@ -7,6 +7,12 @@
 
 use std::path::{Path, PathBuf};
 
+/// The `assets/` directory under the content root `content`: where a preset is
+/// looked up by name.
+pub fn assets_dir_of(content: &Path) -> PathBuf {
+    content.join(ASSETS_DIR)
+}
+
 // The tree's layout, spelled once. Private: a caller asks the tree for a path
 // rather than for a segment's name, so nothing outside this module has to know
 // that a build's cache is `cache/1`.
@@ -129,7 +135,7 @@ impl StateTree {
 
     /// The content root's `assets/` directory, holding authored source files.
     pub fn assets_dir(&self) -> PathBuf {
-        self.content.join(ASSETS_DIR)
+        assets_dir_of(&self.content)
     }
 
     /// The build root's `data/` directory, holding the blobs a build writes

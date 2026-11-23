@@ -25,9 +25,9 @@ use crate::import::glb::{
 pub(crate) fn import_skinned_glb(
     source: &str,
     skin_index: u32,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<ImportedSkinnedMesh, String> {
-    let doc = parse_glb(source, assets_dir)?;
+    let doc = parse_glb(source, root)?;
     import_skinned_from_doc(&doc, source, skin_index)
 }
 
@@ -56,9 +56,9 @@ pub(crate) fn primitive_vertex_count(
 pub(crate) fn import_glb_animations(
     source: &str,
     skin_index: u32,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<Vec<ImportedAnimation>, String> {
-    let doc = parse_glb(source, assets_dir)?;
+    let doc = parse_glb(source, root)?;
     import_glb_animations_from_doc(&doc, source, skin_index)
 }
 
@@ -68,9 +68,9 @@ pub(crate) fn import_glb_animation(
     source: &str,
     index: usize,
     skin_index: u32,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<ImportedAnimation, String> {
-    let mut anims = import_glb_animations(source, skin_index, assets_dir)?;
+    let mut anims = import_glb_animations(source, skin_index, root)?;
     if index >= anims.len() {
         return Err(format!(
             "'{}': animation_index {} out of range (file has {} animation{})",
@@ -88,9 +88,9 @@ pub(crate) fn import_glb_animation(
 // `animation_index` and we need to look up the index.
 pub(crate) fn glb_animation_names(
     source: &str,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<Vec<String>, String> {
-    Ok(parse_glb(source, assets_dir)?
+    Ok(parse_glb(source, root)?
         .doc
         .document
         .animations()

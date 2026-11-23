@@ -30,7 +30,8 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
         e
     })?;
 
-    let source = WorldSource::file(&content, &json_path);
+    let root = crate::project::content_root();
+    let source = WorldSource::file(&content, &json_path, root.as_deref());
     if systems {
         return list_systems(source, &json_path);
     }
@@ -45,7 +46,7 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
         )
     })?;
 
-    let raw = resolve_includes(assets, source.file)
+    let raw = resolve_includes(assets, source.file, source.root)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     if raw.is_empty() {
@@ -134,7 +135,7 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
 // Runs the same front half as `cn cook` (expansion passes, injection,
 // semantic validation), so the listing is exactly what lands in the blob.
 fn list_expanded(source: WorldSource<'_>, json_path: &Path) -> std::io::Result<()> {
-    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
+    let loaded = concinnity_cook::prepare_world(source)
         .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     if loaded.assets.is_empty() {

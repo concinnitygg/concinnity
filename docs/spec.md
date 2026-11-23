@@ -372,11 +372,11 @@ document rewrite.
 `Include` stands for the entries of another world file:
 
 ```json
-["Include",{"path":"lighting.jsonl"}]
+["Include",{"path":"kits/lighting.jsonl"}]
 ```
 
 The included file is written like a world file and may include others. `path`
-resolves relative to the including file, and a cycle is an error. Includes
+is a file path like any other (section 5.3), and a cycle is an error. Includes
 resolve straight after parsing, before labeling, validation, and expansion, so
 an included entry is indistinguishable from an inline one: it counts toward the
 `<Type>#<ordinal>` labels where it lands, and its `$id` must be unique across the
@@ -385,7 +385,27 @@ whole world. `Include` takes no `$id`.
 The editor shows included entries in place and read-only; a save writes only the
 world file itself, `Include` line included.
 
-### 5.3 References
+### 5.3 File paths
+
+Every file path a world names (an `Include`, a shader, a texture, a model) is
+relative to a root, never to the file holding the line. A world file's root is
+the nearest directory at or above it, and no higher than the project root,
+holding a `.concinnity/` directory, and otherwise the project root (the content
+root of section 8, which the CLI takes from the directory it runs in). An
+included file takes its own root the same way, falling back to the root of the
+file that included it.
+
+So a library of world files carries a `.concinnity/` at its top and names its
+files from there (`shaders/toon.hlsl`), and reads the same whether it is
+checked on its own or sits at `assets/` in a project whose world includes
+`assets/shaders/shaders.jsonl`. Once the includes are resolved, the build sees
+every path rebased onto the project root (`assets/shaders/toon.hlsl`), so
+everything after it resolves against that one root. An absolute path names
+itself everywhere. A name with no directory is a file at the root, never
+searched for. Presets are the exception: they are named, not pathed, and are
+looked up under the project root's `assets/`.
+
+### 5.4 References
 
 An asset refers to another by its `$id`, as a plain string. The schema records
 which fields are references and what type they must resolve to, so a dangling,
@@ -394,7 +414,7 @@ resolve against declared ids only; an anonymous asset's label names it to a tool
 never to another entry. No name lookup happens at runtime except through the
 explicit spawn-by-name path.
 
-### 5.4 Programmatic authoring
+### 5.5 Programmatic authoring
 
 Hosts and tools can construct the same entries through a typed builder
 vocabulary instead of writing JSON, and with the cook tier can build and run a
@@ -734,7 +754,7 @@ scatters state beside whatever directory it was launched from.
 
 | Host        | Root                                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Development | The CLI roots the project at the directory it was run from, so `assets/` and the world files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output. With no `-f`, the nearest `world.jsonl` up from that directory is the world. |
+| Development | The CLI roots the project at the directory it was run from, so `assets/` and the world files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output; it also marks the directory as the root a world's file paths resolve against (5.3). With no `-f`, the nearest `world.jsonl` up from that directory is the world. |
 | Shipped     | The player installs the directory beside its own executable (or `Contents/Resources` inside a macOS bundle).                                                                                               |
 | Embedded    | A world loaded from a blob path anchors the tree beside that blob, stepping out of a directory named `data`. A host that names its own directory overrides that.                                          |
 

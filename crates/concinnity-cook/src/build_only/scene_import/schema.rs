@@ -40,7 +40,9 @@ use concinnity_engine::ecs::NameRef;
 )]
 #[serde(default)]
 pub struct SceneImport {
-    /// Path to the scene file, relative to the project root. `.fbx` or `.glb`.
+    /// Path to the scene file, relative to the root of the file holding the
+    /// line. `.fbx` or `.glb`.
+    #[asset(file)]
     pub source: String,
     /// [Scene](#scene) the generated [Prop](#prop)s belong to. Empty leaves
     /// them unbound, which makes them visible in every scene.

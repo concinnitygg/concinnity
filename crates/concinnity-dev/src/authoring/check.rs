@@ -7,19 +7,24 @@
 use concinnity_cook::Diagnostic;
 use std::path::Path;
 
-/// Read `world_path`, run validation, and report results under `label`.
-/// Returns Ok if every asset passes; otherwise an error whose Display contains
-/// a human-readable summary of every failure (one per asset).
-pub(crate) fn check_at_path(world_path: &Path, label: &str) -> std::io::Result<()> {
+/// Read `world_path`, run validation with its includes resolved against the
+/// content root `root`, and report results under `label`. Returns Ok if every
+/// asset passes; otherwise an error whose Display contains a human-readable
+/// summary of every failure (one per asset).
+pub(crate) fn check_at_path(
+    world_path: &Path,
+    root: Option<&Path>,
+    label: &str,
+) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
-    let source = concinnity_cook::WorldSource::file(&content, world_path);
+    let source = concinnity_cook::WorldSource::file(&content, world_path, root);
     check_source(source, label)
 }
 
 /// Run validation against world text. `label` is the origin used in messages
 /// (typically the source path).
 fn check_source(source: concinnity_cook::WorldSource<'_>, label: &str) -> std::io::Result<()> {
-    match concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref()) {
+    match concinnity_cook::prepare_world(source) {
         Ok(loaded) => {
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())
@@ -104,7 +109,7 @@ mod tests {
     fn check_at_path_reports_a_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.jsonl");
-        assert!(check_at_path(&path, "missing.jsonl").is_err());
+        assert!(check_at_path(&path, Some(dir.path()), "missing.jsonl").is_err());
     }
 
     #[test]
@@ -112,6 +117,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
-        check_at_path(&path, "world.jsonl").unwrap();
+        check_at_path(&path, Some(dir.path()), "world.jsonl").unwrap();
     }
 }

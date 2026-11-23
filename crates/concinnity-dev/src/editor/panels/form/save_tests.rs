@@ -64,7 +64,7 @@ fn a_shorthand_with_references_at_none_still_builds() {
         let args = saved_with_no_references(ty, &seed);
         world += &line(ty, &format!("x{i}"), args);
     }
-    if let Err(errors) = concinnity_cook::prepare_world(world.as_str(), None) {
+    if let Err(errors) = concinnity_cook::prepare_world(world.as_str()) {
         panic!("{world}\n{errors:?}");
     }
 }

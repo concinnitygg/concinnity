@@ -72,8 +72,8 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
 /// of the pipeline (load, expand, semantic checks) plus a per-asset type/args
 /// resolution, but stops short of compiling payloads: intended for fast
 /// server-side pre-deploy checks where shader compilation is not needed.
-/// `assets_dir` is the asset search root the expansion passes resolve their
-/// sources and presets against.
+/// `root` is the root every relative path resolves under; presets are looked
+/// up by name under its `assets/`.
 ///
 /// # Errors
 ///
@@ -81,9 +81,11 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
 /// args do not resolve.
 pub fn validate_world_jsonl(
     content: &str,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<(), WorldValidationError> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir)?;
+    let loaded = crate::build_only::prepare_world(crate::authoring::world::WorldSource::text(
+        content, root,
+    ))?;
 
     let mut errors: Vec<Diagnostic> = Vec::new();
     for asset in &loaded.assets {

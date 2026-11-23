@@ -354,9 +354,9 @@ fn dirty_tracks_the_saved_list_across_history_jumps() {
     assert!(!h.dirty, "redo back to the saved list clears the chip");
 }
 
-// A world whose middle line includes `lights.jsonl` beside it, opened the way
-// the editor opens any world: the included entries sit in place of the line
-// that brings them in, after it.
+// A world whose middle line includes `lights.jsonl` from the tree's root,
+// opened the way the editor opens any world: the included entries sit in place
+// of the line that brings them in, after it.
 fn hook_with_an_include(tree: &concinnity_testing::TempTree) -> EditorHook {
     tree.write(
         "lights.jsonl",
@@ -366,8 +366,11 @@ fn hook_with_an_include(tree: &concinnity_testing::TempTree) -> EditorHook {
         "world.jsonl",
         "[\"PointLight\"]\n[\"Include\",{\"path\":\"lights.jsonl\"}]\n[\"Camera3D\",{\"$id\":\"mine\"}]\n",
     );
-    let entries = crate::editor::worlds::files::read_entries(&world).expect("the world reads");
-    EditorHook::new(world.to_str().unwrap().to_string(), entries)
+    let entries =
+        crate::editor::worlds::files::read_entries(&world, tree.path()).expect("the world reads");
+    let mut hook = EditorHook::new(world.to_str().unwrap().to_string(), entries);
+    hook.content_root = tree.path().to_path_buf();
+    hook
 }
 
 // Labels count the included entries where they land, as the build does.
@@ -469,7 +472,8 @@ fn an_entry_added_to_a_new_file_saves_into_it_and_reads_back() {
         world.ends_with("[\"Include\",{\"path\":\"assets/ground/a.jsonl\"}]\n"),
         "{world}"
     );
-    let reread = crate::editor::worlds::files::read_entries(&tree.join("world.jsonl")).unwrap();
+    let reread =
+        crate::editor::worlds::files::read_entries(&tree.join("world.jsonl"), tree.path()).unwrap();
     assert_eq!(
         reread, h.entries,
         "the files read back as the session held them"
@@ -530,6 +534,43 @@ fn a_duplicate_stays_in_its_originals_file() {
     assert_eq!(h.entries.len(), 6);
     assert_eq!(h.entries[4]["args"]["$id"], "lamp_1");
     assert_eq!(h.entries.included_from(4), h.entries.included_from(2));
+}
+
+// A duplicate of an entry from a file included twice lands in the world file,
+// with its paths rebased from the library it came from onto the world's root.
+#[test]
+fn a_duplicate_moved_to_the_world_file_keeps_naming_its_files() {
+    let tree = concinnity_testing::TempTree::new();
+    std::fs::create_dir_all(
+        tree.path()
+            .join("lib")
+            .join(concinnity_host::store::source::LIBRARY_MARKER),
+    )
+    .unwrap();
+    tree.write(
+        "lib/kit.jsonl",
+        "[\"Texture\",{\"$id\":\"bark\",\"source\":\"tex/bark.png\"}]\n",
+    );
+    let world = tree.write(
+        "world.jsonl",
+        "[\"Include\",{\"path\":\"lib/kit.jsonl\"}]\n[\"Include\",{\"path\":\"lib/kit.jsonl\"}]\n",
+    );
+    let entries = crate::editor::worlds::files::read_entries(&world, tree.path()).unwrap();
+    let mut h = EditorHook::new(world.to_str().unwrap().to_string(), entries);
+    h.content_root = tree.path().to_path_buf();
+    let bark = h.entries.key_at(1).unwrap();
+    assert!(
+        h.entries.is_read_only(1),
+        "a file included twice is read-only"
+    );
+    assert_eq!(h.duplicate(vec![AssetHandle::Entry(bark)]), 1);
+    let copy = h.entries.len() - 1;
+    assert_eq!(
+        h.entries.included_from(copy),
+        None,
+        "the copy is the world's own"
+    );
+    assert_eq!(h.entries[copy]["args"]["source"], "lib/tex/bark.png");
 }
 
 // The form on an included entry names the file it lives in.

@@ -144,10 +144,22 @@ fn a_read_only_volume_keeps_the_file() {
     let blob = dir.path().join("blob.hlsl");
     std::fs::write(&blob, "blob").unwrap();
     let mut h = hook(Vec::new());
-    let own = |entry| SourcedEntry { entry, file: None };
+    h.content_root = dir.path().to_path_buf();
+    h.world_path = dir
+        .path()
+        .join("world.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    let own = |entry| SourcedEntry {
+        entry,
+        file: None,
+        root: None,
+    };
+    let lib = h.content_root.join("lib.jsonl");
     let shared = || SourcedEntry {
         entry: volume("shared", &blob),
-        file: Some("lib.jsonl".into()),
+        file: Some(lib.clone()),
+        root: None,
     };
     let include = serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}});
     h.entries = EntryList::with_includes(
@@ -158,7 +170,7 @@ fn a_read_only_volume_keeps_the_file() {
             own(include),
             shared(),
         ],
-        Path::new(&h.world_path),
+        h.world_origin(),
     );
     h.baseline = h.entries.clone();
     let mut world = World::new();

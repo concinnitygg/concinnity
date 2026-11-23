@@ -154,11 +154,13 @@ impl GraphicsSystem {
         }
     }
 
-    // The `assets/` a bare source filename is searched under: the running
-    // world's own, or nothing for a world with no state tree (which leaves a
-    // bare filename unresolved rather than searched from the cwd).
-    pub(crate) fn assets_dir(&self) -> Option<std::path::PathBuf> {
-        self.state.as_ref().map(StateTree::assets_dir)
+    // The root a source path resolves under: the running world's content
+    // root, or nothing for a world with no state tree (which leaves a path as
+    // written).
+    pub(crate) fn content_root(&self) -> Option<std::path::PathBuf> {
+        self.state
+            .as_ref()
+            .map(|tree| tree.content_root().to_path_buf())
     }
 
     // Detect the GPU performance profile for quality auto-config and what the

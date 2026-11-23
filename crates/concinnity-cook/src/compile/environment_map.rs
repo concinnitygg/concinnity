@@ -146,7 +146,7 @@ fn load_equirect_source(resolved: &Path) -> Result<HdrImage, CompileError> {
 
 pub(crate) fn compile_environment_map_payload(
     args: &serde_json::Value,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<Vec<u8>, CompileError> {
     let map = resolve_args(args)?;
     let params = BakeInputs::of(&map);
@@ -162,12 +162,7 @@ pub(crate) fn compile_environment_map_payload(
             }
         }
     } else {
-        // A bare filename (no directory component) is resolved via the same
-        // asset-search the build pipeline uses for shader sources: search the
-        // asset root recursively, falling back to the raw path so an absolute
-        // or relative path also works.
-        let resolved =
-            concinnity_host::store::source::resolve_source_path(params.source, assets_dir);
+        let resolved = concinnity_host::store::source::resolve(params.source, root);
         load_equirect_source(&resolved)?
     };
     // A build-scoped pool, so a build never sizes the process-wide one before
@@ -309,7 +304,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: &[],
         };
         crate::cache::payload_key(

@@ -148,14 +148,17 @@ fn a_refused_commit_keeps_the_form_and_writes_nothing() {
     let include = || SourcedEntry {
         entry: serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}}),
         file: None,
+        root: None,
     };
+    let lib = h.content_root.join("lib.jsonl");
     let other = || SourcedEntry {
         entry: entry("other", "PointLight"),
-        file: Some("lib.jsonl".into()),
+        file: Some(lib.clone()),
+        root: None,
     };
     h.entries = EntryList::with_includes(
         vec![include(), other(), include(), other()],
-        std::path::Path::new(&h.world_path),
+        h.world_origin(),
     );
     h.baseline = h.entries.clone();
     let world = world_with_fields();

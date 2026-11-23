@@ -99,7 +99,8 @@ pub(super) fn spawn_watcher(
     // Build the unique-dir set across textures + the optional LUT + the
     // optional EnvironmentMap so the watcher subscribes to each path at most
     // once.
-    let mut dirs: BTreeSet<PathBuf> = map.watch_dirs().into_iter().collect();
+    let root = crate::project::content_root().unwrap_or_else(|| PathBuf::from("."));
+    let mut dirs: BTreeSet<PathBuf> = map.watch_dirs(&root).into_iter().collect();
     if let Some(lut) = color_lut
         && let Some(parent) = Path::new(&lut.resolved_path).parent()
         && !parent.as_os_str().is_empty()
@@ -112,16 +113,16 @@ pub(super) fn spawn_watcher(
     {
         dirs.insert(parent.to_path_buf());
     }
-    for dir in meshes.watch_dirs() {
+    for dir in meshes.watch_dirs(&root) {
         dirs.insert(dir);
     }
-    for dir in skinned_meshes.watch_dirs() {
+    for dir in skinned_meshes.watch_dirs(&root) {
         dirs.insert(dir);
     }
-    for dir in shaders.watch_dirs() {
+    for dir in shaders.watch_dirs(&root) {
         dirs.insert(dir);
     }
-    for dir in sdf_fields.watch_dirs() {
+    for dir in sdf_fields.watch_dirs(&root) {
         dirs.insert(dir);
     }
     if let Some(path) = world_jsonl_path {
@@ -239,7 +240,8 @@ pub(super) fn story_source_dirs(world_jsonl_path: &Path) -> BTreeSet<PathBuf> {
         .filter_map(|line| parse_entry(line.trim()).ok())
         .collect();
     let world_file = Some(world_jsonl_path);
-    let entries = resolve_includes(lines.clone(), world_file).unwrap_or(lines);
+    let root = crate::project::content_root();
+    let entries = resolve_includes(lines.clone(), world_file, root.as_deref()).unwrap_or(lines);
     for entry in entries {
         if entry.get("type").and_then(|t| t.as_str()) != Some("StoryImport") {
             continue;
@@ -251,7 +253,8 @@ pub(super) fn story_source_dirs(world_jsonl_path: &Path) -> BTreeSet<PathBuf> {
         else {
             continue;
         };
-        let parent = Path::new(source).parent().unwrap_or_else(|| Path::new(""));
+        let path = concinnity_host::store::source::resolve(source, root.as_deref());
+        let parent = path.parent().unwrap_or_else(|| Path::new(""));
         dirs.insert(if parent.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {

@@ -9,8 +9,10 @@
 //! derives `AssetFields` itself, whose fields then appear under dotted paths
 //! (`collider.shape`). Every other field is plain data.
 //!
-//! A path field marked `#[asset(owned_file)]` is also recorded as a file the
-//! asset owns: its authored source, as opposed to content other assets share.
+//! A field marked `#[asset(file)]` holds a path to a file, which a reader of the
+//! world resolves the way it resolves every path. `#[asset(owned_file)]` marks
+//! one the asset also owns: its authored source, as opposed to content other
+//! assets share.
 //! A field declaring `#[asset(min = ..., max = ..., apply = ...)]` is recorded
 //! as a parameter ([`ParamField`]): its range, and when a change to it takes
 //! effect.
@@ -70,6 +72,9 @@ pub struct FieldTable {
     pub enums: Vec<EnumField>,
     /// Every field holding an action, in declaration order.
     pub actions: Vec<ActionField>,
+    /// The dotted path of every field holding a path to a file, owned or not,
+    /// in declaration order.
+    pub files: Vec<String>,
     /// The dotted path of every field holding a file the asset owns, in
     /// declaration order.
     pub owned_files: Vec<String>,
@@ -259,6 +264,11 @@ pub mod probe {
         }
     }
 
+    /// Record the field at `key` as holding a path to a file.
+    pub fn file(prefix: &str, key: Option<&str>, out: &mut FieldTable) {
+        out.files.push(join(prefix, key));
+    }
+
     /// Record the field at `key` as a file the asset owns.
     pub fn owned_file(prefix: &str, key: Option<&str>, out: &mut FieldTable) {
         out.owned_files.push(join(prefix, key));
@@ -334,6 +344,8 @@ mod tests {
         #[asset(owned_file)]
         #[serde(rename = "src")]
         source: Option<String>,
+        #[asset(file)]
+        art: String,
     }
 
     fn paths<F>(fields: &[F], path: impl Fn(&F) -> &str) -> Vec<&str> {
@@ -377,6 +389,22 @@ mod tests {
         );
         assert_eq!(enums[0].variants, SpriteFit::NAMES);
         assert_eq!(enums[1].variants, PropColliderShape::NAMES);
+    }
+
+    // An owned file is a file too.
+    #[test]
+    fn files_are_found_by_mark_under_their_authored_keys() {
+        assert_eq!(
+            Top::field_table().files,
+            [
+                "inner.leaf.script",
+                "inner.many.script",
+                "inner.maybe.script",
+                "script",
+                "src",
+                "art",
+            ]
+        );
     }
 
     #[test]

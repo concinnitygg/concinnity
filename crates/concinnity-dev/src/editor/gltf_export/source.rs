@@ -18,8 +18,12 @@ use super::ExportMesh;
 // as GLB bytes. With `bake`, the current CharacterShape targeting the mesh is
 // folded into the vertices and bind pose instead of exporting morph targets.
 pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result<Vec<u8>, String> {
-    let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| {
+    let root = crate::project::content_root();
+    let loaded = concinnity_cook::prepare_world(concinnity_cook::WorldSource::text(
+        content,
+        root.as_deref(),
+    ))
+    .map_err(|errs| {
         errs.diagnostics()
             .iter()
             .map(ToString::to_string)
@@ -51,7 +55,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     }
     let result = concinnity_cook::build_compiled(
         assets,
-        crate::project::assets_dir().as_deref(),
+        crate::project::content_root().as_deref(),
         crate::cook_platform().into(),
     )
     .map_err(|e| e.to_string())?;

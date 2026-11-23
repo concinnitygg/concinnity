@@ -167,7 +167,7 @@ fn mime_from_uri(uri: &str) -> Option<String> {
 // missing or fails to parse contributes nothing (the compile will surface the
 // real error). Memoized by `FileStamp` like `cache::file_content_hash`, since
 // cache-key computation calls this once per asset sharing the file.
-pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<PathBuf> {
+pub(crate) fn referenced_files(source: &str, root: Option<&Path>) -> Vec<PathBuf> {
     use crate::file_stamp::FileStamp;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -175,7 +175,7 @@ pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<P
     type Memo = Mutex<HashMap<PathBuf, (FileStamp, Vec<PathBuf>)>>;
     static MEMO: OnceLock<Memo> = OnceLock::new();
 
-    let path = crate::import::glb::resolve_source(source, assets_dir);
+    let path = crate::import::glb::resolve_source(source, root);
     let Some(stamp) = FileStamp::read(&path) else {
         return Vec::new();
     };

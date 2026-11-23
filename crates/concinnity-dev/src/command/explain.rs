@@ -13,9 +13,10 @@ use crate::command::{provenance, resolve_world_path};
 pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
     let content = std::fs::read_to_string(&json_path)?;
-    let source = concinnity_cook::WorldSource::file(&content, &json_path);
+    let root = crate::project::content_root();
+    let source = concinnity_cook::WorldSource::file(&content, &json_path, root.as_deref());
 
-    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
+    let loaded = concinnity_cook::prepare_world(source)
         .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     let Some(asset) = loaded.assets.iter().find(|a| a.id == name) else {

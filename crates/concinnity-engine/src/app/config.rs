@@ -57,8 +57,8 @@ impl FramePriority {
 /// title, so a running game shows its own name in the title bar.
 ///
 /// `icon` is a path to a source image (a square PNG, 512x512 or larger)
-/// relative to the world; it is read by the packaging step and is not compiled
-/// into the world's data. `id` is a reverse-DNS bundle identifier
+/// relative to the root of the file holding the line; it is read by the
+/// packaging step and is not compiled into the world's data. `id` is a reverse-DNS bundle identifier
 /// (e.g. `gg.studio.mygame`); when left empty the export derives one from
 /// `name`. Empty string fields mean "unset".
 ///
@@ -102,8 +102,9 @@ pub struct AppConfigArgs {
     /// Author or studio name, recorded in the exported bundle's metadata.
     pub author: String,
     /// Path to a source icon image (a square PNG, 512x512 or larger) relative
-    /// to the world, used to build the platform icon at export time. Empty for
+    /// to the root of the file holding the line, used to build the platform icon at export time. Empty for
     /// no custom icon.
+    #[asset(file)]
     pub icon: String,
     /// Where the running application writes its settings, saves, crash reports,
     /// and shader caches. Empty means beside the application's data; a relative

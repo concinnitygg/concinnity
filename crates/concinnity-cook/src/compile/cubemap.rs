@@ -57,7 +57,10 @@ pub(crate) fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), Stri
 }
 
 // Compile a CubemapTexture component's JSON args into a packed binary payload.
-pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, CompileError> {
+pub(crate) fn compile_cubemap_payload(
+    args: &serde_json::Value,
+    root: Option<&std::path::Path>,
+) -> Result<Vec<u8>, CompileError> {
     validate_cubemap_args(args)?;
     let source = cubemap_source(args)?;
     let face_size = u32::saturating_from(
@@ -66,7 +69,7 @@ pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8
             .unwrap_or(256),
     );
 
-    let hdr = crate::codec::hdr::load_file(std::path::Path::new(source))?;
+    let hdr = crate::codec::hdr::load_file(&concinnity_host::store::source::resolve(source, root))?;
     let faces = equirect_to_cube(&hdr, face_size);
     Ok(serialize_faces(face_size, &faces))
 }
@@ -154,7 +157,7 @@ mod tests {
     fn compile_cubemap_payload_surfaces_a_missing_hdr() {
         // A directory-qualified path resolves verbatim; opening it fails.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr", "face_size": 8 });
-        let err = compile_cubemap_payload(&args).unwrap_err();
+        let err = compile_cubemap_payload(&args, None).unwrap_err();
         assert!(err.to_string().contains("failed to open HDR"), "got: {err}");
     }
 
@@ -172,7 +175,7 @@ mod tests {
             &crate::codec::hdr::test_fixtures::solid_hdr_blob(16, 8, rgb),
         );
         let args = serde_json::json!({ "source": src, "face_size": 8 });
-        let payload = compile_cubemap_payload(&args).expect("compile");
+        let payload = compile_cubemap_payload(&args, None).expect("compile");
 
         let (face_size, face_bytes) = deserialize(&payload).expect("deserialize");
         assert_eq!(face_size, 8);
@@ -190,7 +193,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_hdr(&dir, "broken.hdr", b"not a radiance file\n");
         let args = serde_json::json!({ "source": src, "face_size": 8 });
-        let err = compile_cubemap_payload(&args).unwrap_err();
+        let err = compile_cubemap_payload(&args, None).unwrap_err();
         assert!(
             err.to_string().contains("failed to decode HDR"),
             "got: {err}"

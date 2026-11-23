@@ -76,9 +76,8 @@ pub type SkinnedMeshSourceMap = SourceMap<SkinnedMeshSourceEntry>;
 /// source file and are absent from the map.
 #[derive(Debug, Clone)]
 pub struct TextureSourceEntry {
-    /// The `source` field from the original `Texture` asset, identical to the
-    /// path the build pipeline read at compile time, relative to the working
-    /// directory.
+    /// The `source` field from the original `Texture` asset, as the build
+    /// read it, relative to the build's root.
     pub source: String,
     /// `image_index` for `.glb`-image sources; 0 (ignored) for plain PNGs.
     pub image_index: u32,
@@ -90,13 +89,13 @@ pub struct TextureSourceEntry {
 /// Singleton `ColorLut` reload entry. The 3D grading LUT has no slot (the
 /// composite pass binds `self.color_lut` directly), so we only need the
 /// resolved source path (the raw asset source string is resolved once at init
-/// via `concinnity_host::store::source::resolve_source_path` so the watcher knows
-/// where to subscribe and the per-frame reload knows what to re-read).
+/// via `concinnity_host::store::source::resolve` so the watcher knows where to
+/// subscribe and the per-frame reload knows what to re-read).
 #[derive(Debug, Clone)]
 pub struct ColorLutSource {
     /// Resolved on-disk path the build pipeline read at compile time. Stored
-    /// resolved rather than raw so the watcher can subscribe to a real parent
-    /// directory even when the asset declaration used a bare filename.
+    /// resolved rather than raw so the watcher can subscribe to its real
+    /// parent directory.
     pub resolved_path: String,
 }
 
@@ -107,10 +106,10 @@ pub struct ColorLutSource {
 /// carries this Mesh's geometry; the reload helper walks them all per entry.
 #[derive(Debug, Clone)]
 pub struct MeshSourceEntry {
-    /// Path string from the asset declaration. Used as-is by
-    /// the glTF parser in concinnity-cook, which resolves
-    /// bare filenames internally. For the watcher's directory subscription a separate
-    /// resolved path is held on the [`MeshSourceMap`].
+    /// Path string from the asset declaration, which the glTF parser in
+    /// concinnity-cook resolves under the build's root. For the watcher's
+    /// directory subscription a separate resolved path is held on the
+    /// [`MeshSourceMap`].
     pub source: String,
     /// Which primitive (flattened across glTF meshes) to import; mirrors the
     /// asset declaration so the runtime decode matches the build pass.
@@ -157,9 +156,8 @@ pub struct ProceduralMeshSourceEntry {
 /// skinned pipeline rebuilt.
 #[derive(Debug, Clone)]
 pub struct SkinnedMeshSourceEntry {
-    /// Path string from the asset declaration. Used as-is by
-    /// the glTF parser in concinnity-cook, which resolves
-    /// bare filenames internally.
+    /// Path string from the asset declaration, which the glTF parser in
+    /// concinnity-cook resolves under the build's root.
     pub source: String,
     /// Mirrors `SkinnedMesh::skin_index`: which skinned mesh of `source` the
     /// reload re-imports.
@@ -194,8 +192,7 @@ pub struct SkinnedMeshSourceEntry {
 #[derive(Debug, Clone)]
 pub struct EnvironmentMapSource {
     /// Resolved on-disk path to the `.hdr` equirectangular. Stored resolved
-    /// (not raw) so the watcher can subscribe to a real parent directory even
-    /// when the asset declaration used a bare filename.
+    /// (not raw) so the watcher can subscribe to its real parent directory.
     pub resolved_path: String,
     /// Mip-0 face size of the prefiltered radiance cubemap.
     pub prefilter_face_size: u32,

@@ -63,8 +63,8 @@ pub fn load_world(source: WorldSource<'_>) -> Result<Vec<serde_json::Value>, Vec
             .map(|l| format!("syntax error: {l}"))
             .collect::<Vec<_>>()
     })?;
-    let mut raw =
-        crate::build_only::include::resolve_includes(parsed, source.file).map_err(|e| vec![e])?;
+    let mut raw = crate::build_only::include::resolve_includes(parsed, source.file, source.root)
+        .map_err(|e| vec![e])?;
 
     let mut errors: Vec<String> = Vec::new();
     let mut seen_ids: HashMap<&str, usize> = HashMap::default();
@@ -149,10 +149,10 @@ mod tests {
     #[test]
     fn load_world_labels_after_resolving_includes() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("world.jsonl");
+        let world = dir.path().join("world.jsonl");
         std::fs::write(dir.path().join("props.jsonl"), "[\"Prop\"]\n[\"Prop\"]\n").unwrap();
         let text = "[\"Prop\",{\"mesh\":\"first\"}]\n[\"Include\",{\"path\":\"props.jsonl\"}]\n[\"Prop\",{\"mesh\":\"last\"}]\n";
-        let raw = load_world(WorldSource::file(text, &root)).unwrap();
+        let raw = load_world(WorldSource::file(text, &world, Some(dir.path()))).unwrap();
         let ids: Vec<Option<&str>> = raw.iter().map(entry_id).collect();
         assert_eq!(
             ids,
@@ -169,10 +169,11 @@ mod tests {
     #[test]
     fn load_world_reports_an_include_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("world.jsonl");
+        let world = dir.path().join("world.jsonl");
         let errs = load_world(WorldSource::file(
             "[\"Include\",{\"path\":\"missing.jsonl\"}]\n",
-            &root,
+            &world,
+            Some(dir.path()),
         ))
         .unwrap_err();
         assert!(errs[0].contains("missing.jsonl"), "{errs:?}");

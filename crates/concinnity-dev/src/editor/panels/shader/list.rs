@@ -43,11 +43,11 @@ impl ShaderDecl {
 }
 
 // Every Shader the entries declare, in order, each file's on-disk path from
-// `resolve` (`source::resolve_path`, which can walk the assets tree, so
-// the caller keeps its answers).
+// `resolve`, given the declaring entry's position (its file decides the root
+// the path resolves against).
 pub(crate) fn declared(
     entries: &[serde_json::Value],
-    mut resolve: impl FnMut(&str) -> String,
+    mut resolve: impl FnMut(usize, &str) -> String,
 ) -> Vec<ShaderDecl> {
     let names = entry_handles(entries);
     entries
@@ -63,7 +63,7 @@ pub(crate) fn declared(
                 Some(DeclaredFile {
                     stage,
                     declared: declared.to_string(),
-                    path: resolve(declared),
+                    path: resolve(i, declared),
                 })
             };
             let files = [ShaderStage::Fragment, ShaderStage::Vertex]
@@ -372,7 +372,7 @@ mod tests {
     // when declared, and the Materials naming each Shader (and nothing else).
     #[test]
     fn shaders_are_listed_in_declaration_order() {
-        let shaders = declared(&entries(), str::to_string);
+        let shaders = declared(&entries(), |_, d| d.to_string());
         let names: Vec<&str> = shaders.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["lit", "reeds"]);
         assert!(shaders[0].default && !shaders[1].default);
@@ -390,14 +390,14 @@ mod tests {
     #[test]
     fn an_anonymous_shader_is_listed_under_its_label() {
         let entries = vec![json!({"type": "Shader", "args": {"fragment": "/cn-none/a.hlsl"}})];
-        assert_eq!(declared(&entries, str::to_string)[0].name, "Shader#0");
+        assert_eq!(declared(&entries, |_, d| d.to_string())[0].name, "Shader#0");
     }
 
     // The rows: each Shader's header (the default badged), its Materials, its
     // files, then the new-Shader row; the open file is selected.
     #[test]
     fn rows_list_each_shader_then_the_new_row() {
-        let shaders = declared(&entries(), str::to_string);
+        let shaders = declared(&entries(), |_, d| d.to_string());
         let open = SourceKey::shader("reeds", ShaderStage::Vertex);
         let rows = rows(&shaders, &[], &ReportBoard::default(), Some(&open));
         let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
@@ -431,7 +431,7 @@ mod tests {
     // file's menu removes the file, since the fragment is required.
     #[test]
     fn menus_edit_duplicate_delete_or_remove_the_vertex_file() {
-        let shaders = declared(&entries(), str::to_string);
+        let shaders = declared(&entries(), |_, d| d.to_string());
         let rows = rows(&shaders, &[], &ReportBoard::default(), None);
         let menu = |i: usize| rows[i].menu().to_vec();
         assert_eq!(rows[4].kind, RowKind::Header(1));
@@ -456,7 +456,7 @@ mod tests {
             .collect();
         assert!(!can_add_shader(shader_count(&full)));
         assert!(can_add_shader(shader_count(&full[1..])));
-        let shaders = declared(&full, str::to_string);
+        let shaders = declared(&full, |_, d| d.to_string());
         let rows = rows(&shaders, &[], &ReportBoard::default(), None);
         let last = rows.last().unwrap();
         assert_eq!(last.kind, RowKind::New);
@@ -488,7 +488,7 @@ mod tests {
     }
 
     fn statuses(board: &ReportBoard) -> Vec<FileStatus> {
-        let shaders = declared(&entries(), str::to_string);
+        let shaders = declared(&entries(), |_, d| d.to_string());
         shaders[1]
             .files
             .iter()

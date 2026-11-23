@@ -127,8 +127,8 @@ impl Project {
             .expect("spawn concinnity binary")
     }
 
-    // Write a source file into the project's asset root, where a bare `source`
-    // filename in the world resolves.
+    // Write a source file into the project's `assets/`, which a world names as
+    // `assets/<name>`.
     fn write_asset(&self, name: &str, bytes: &[u8]) {
         let dir = self.path().join("assets");
         std::fs::create_dir_all(&dir).expect("create assets dir");
@@ -641,9 +641,9 @@ fn skinned_morph_glb() -> Vec<u8> {
 const SKINNED_WORLD: &str = concat!(
     r#"["Material",{"$id":"skin_mat","roughness":0.55,"tint":[0.85,0.62,0.5]}]"#,
     "\n",
-    r#"["SkinnedMesh",{"$id":"body","source":"body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}]"#,
+    r#"["SkinnedMesh",{"$id":"body","source":"assets/body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}]"#,
     "\n",
-    r#"["SkinnedMesh",{"$id":"npc","source":"body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}]"#,
+    r#"["SkinnedMesh",{"$id":"npc","source":"assets/body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}]"#,
     "\n",
     r#"["CharacterShape",{"$id":"npc_shape","target":"npc","bake":true,"sliders":[{"name":"wide","value":0.5}],"proportions":[{"joint":"root","scale":1.2},{"joint":"tip","length":0.25}]}]"#,
     "\n",

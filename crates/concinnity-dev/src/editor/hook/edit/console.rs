@@ -14,7 +14,6 @@ use concinnity_engine::ecs::asset_id::AssetId;
 use std::sync::atomic::Ordering;
 
 use crate::editor::build_failure;
-use crate::editor::entry_list::build_text;
 use crate::editor::hook::{EditorHook, declared_id, entry_type_name};
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleView};
@@ -288,7 +287,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match build_text(&self.entries) {
+        let content = match self.entries.build_text(self.world_origin()) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);

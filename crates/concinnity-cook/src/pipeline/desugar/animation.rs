@@ -32,7 +32,7 @@ fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap
 // silently by the importers.
 pub(in crate::pipeline) fn desugar_animation_imports(
     assets: &mut [WorldJsonlAsset],
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     let skin_by_target = skin_index_by_target(assets);
@@ -79,7 +79,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                 .and_then(serde_json::Value::as_f64)
                 .map_or(30.0, narrow_f32);
             crate::import::fbx::import_fbx_animation(
-                &source,
+                &concinnity_host::store::source::resolve(&source, root).to_string_lossy(),
                 u32::saturating_from(animation_index),
                 &animation_name,
                 sample_rate,
@@ -97,7 +97,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                 animation_index
             } else {
                 let names =
-                    crate::import::gltf::glb_animation_names(&source, assets_dir).map_err(|e| {
+                    crate::import::gltf::glb_animation_names(&source, root).map_err(|e| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             format!("Asset '{}': glTF import failed: {}", asset.id, e),
@@ -118,18 +118,13 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                     })?
             };
 
-            crate::import::gltf::import_glb_animation(
-                &source,
-                resolved_index,
-                skin_index,
-                assets_dir,
-            )
-            .map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': glTF import failed: {}", asset.id, e),
-                )
-            })?
+            crate::import::gltf::import_glb_animation(&source, resolved_index, skin_index, root)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Asset '{}': glTF import failed: {}", asset.id, e),
+                    )
+                })?
         };
 
         // Convert ImportedAnimation -> the asset's serialized track shape.

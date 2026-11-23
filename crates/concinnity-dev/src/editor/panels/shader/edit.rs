@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn decls(entries: &[serde_json::Value]) -> Vec<ShaderDecl> {
-        declared(entries, str::to_string)
+        declared(entries, |_, d| d.to_string())
     }
 
     #[test]

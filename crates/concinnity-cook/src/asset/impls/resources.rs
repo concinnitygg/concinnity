@@ -9,69 +9,72 @@ use concinnity_engine::components::{
 
 use crate::asset::{BuildAsset, BuildCtx, SourceFiles};
 
-// The files a resource keyed by `source` reads: the source itself, the files a
-// text `.gltf` names beside it, and a character model's own source.
-pub(super) fn source_files(args: &serde_json::Value, assets_dir: Option<&Path>) -> SourceFiles {
+// The files a resource keyed by `source` reads under `root`: the source itself,
+// the files a text `.gltf` names beside it, and a character model's own source.
+pub(super) fn source_files(args: &serde_json::Value, root: Option<&Path>) -> SourceFiles {
     let source = args
         .get("source")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    let mut files: Vec<PathBuf> = source.map(PathBuf::from).into_iter().collect();
+    let mut files: Vec<PathBuf> = source
+        .map(|s| concinnity_host::store::source::resolve(s, root))
+        .into_iter()
+        .collect();
     if let Some(src) = source
         && src.to_lowercase().ends_with(".gltf")
     {
-        files.extend(crate::import::gltf_source::referenced_files(
-            src, assets_dir,
-        ));
+        files.extend(crate::import::gltf_source::referenced_files(src, root));
     }
     if let Some(arg) = args.get("character_model").and_then(|v| {
         serde_json::from_value::<crate::compile::character::import::CharacterModelArg>(v.clone())
             .ok()
     }) {
-        files.extend(arg.source_files());
+        files.extend(arg.source_files(root));
     }
     SourceFiles::Extra(files)
 }
 
 impl BuildAsset for AudioClip {
-    fn compile_payload(args: &serde_json::Value, _: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
-        crate::compile::audio_clip::compile_audio_clip_payload(args).map_err(std::io::Error::from)
+    fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
+        crate::compile::audio_clip::compile_audio_clip_payload(args, ctx.root)
+            .map_err(std::io::Error::from)
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        source_files(args, ctx.assets_dir)
+        source_files(args, ctx.root)
     }
 }
 
 impl BuildAsset for Texture {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
-        crate::compile::texture::compile_texture_payload(args, ctx.assets_dir)
+        crate::compile::texture::compile_texture_payload(args, ctx.root)
             .map_err(std::io::Error::from)
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        source_files(args, ctx.assets_dir)
+        source_files(args, ctx.root)
     }
 }
 
 impl BuildAsset for CubemapTexture {
-    fn compile_payload(args: &serde_json::Value, _: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
-        crate::compile::cubemap::compile_cubemap_payload(args).map_err(std::io::Error::from)
+    fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
+        crate::compile::cubemap::compile_cubemap_payload(args, ctx.root)
+            .map_err(std::io::Error::from)
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        source_files(args, ctx.assets_dir)
+        source_files(args, ctx.root)
     }
 }
 
 impl BuildAsset for EnvironmentMap {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
-        crate::compile::environment_map::compile_environment_map_payload(args, ctx.assets_dir)
+        crate::compile::environment_map::compile_environment_map_payload(args, ctx.root)
             .map_err(std::io::Error::from)
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        source_files(args, ctx.assets_dir)
+        source_files(args, ctx.root)
     }
 
     // The display fields (`background`) never reach the convolution, so the
@@ -90,27 +93,27 @@ impl BuildAsset for EnvironmentMap {
 
 impl BuildAsset for ColorLut {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
-        crate::compile::color_lut::compile_color_lut_payload(args, ctx.assets_dir)
+        crate::compile::color_lut::compile_color_lut_payload(args, ctx.root)
             .map_err(std::io::Error::from)
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        source_files(args, ctx.assets_dir)
+        source_files(args, ctx.root)
     }
 }
 
 impl BuildAsset for Font {
-    fn compile_payload(args: &serde_json::Value, _: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
-        crate::compile::font::compile_font_payload(args).map_err(std::io::Error::from)
+    fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
+        crate::compile::font::compile_font_payload(args, ctx.root).map_err(std::io::Error::from)
     }
 
     // A Font keys its TTF source under `path`, not `source`.
-    fn source_files(args: &serde_json::Value, _: &BuildCtx<'_>) -> SourceFiles {
+    fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
         SourceFiles::Extra(
             args.get("path")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
+                .map(|s| concinnity_host::store::source::resolve(s, ctx.root))
                 .into_iter()
                 .collect(),
         )
@@ -124,6 +127,6 @@ impl BuildAsset for Mesh {
     }
 
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> SourceFiles {
-        source_files(args, ctx.assets_dir)
+        source_files(args, ctx.root)
     }
 }

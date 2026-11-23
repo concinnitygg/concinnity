@@ -110,7 +110,8 @@
 )]
 #[serde(default)]
 pub struct StoryImport {
-    /// Path to the Markdown story file, relative to the project root.
+    /// Path to the Markdown story file, relative to the root of the file
+    /// holding the line.
     #[asset(owned_file)]
     pub source: String,
     /// Whether to generate a title screen (story title, Start and Quit

@@ -159,15 +159,23 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     let (entries, previewing) = if pick_a_world {
         (entry_list::EntryList::default(), start_screen_pick())
     } else {
-        let entries = worlds::files::read_entries(std::path::Path::new(&world_path))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let entries = worlds::files::read_entries(
+            std::path::Path::new(&world_path),
+            &worlds::files::content_root(),
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         (entries, None)
     };
 
     // Bring up a renderable world by compiling those entries, seeding a render
     // marker when they alone would not render.
     let mut runtime = crate::project::runtime().with_launch(launch);
-    boot_world(&mut runtime, &entries)?;
+    let root = worlds::files::content_root();
+    let origin = entry_list::Origin {
+        world: std::path::Path::new(&world_path),
+        root: &root,
+    };
+    boot_world(&mut runtime, &entries, origin)?;
 
     // Set the editor up in the world before start (this also drops the world's
     // DebugHud, whose F1 role the editor takes over); the editor's FrameHook
@@ -230,8 +238,12 @@ pub(crate) fn unsaved_world_path() -> String {
 // authored entries in memory. Nothing under the build root is read: the blobs
 // there are refreshed only by an explicit build, so they may lag the world file
 // the editor is opening.
-fn boot_world(runtime: &mut Runtime, entries: &[serde_json::Value]) -> std::io::Result<()> {
-    let jsonl = entry_list::build_text(entries)?;
+fn boot_world(
+    runtime: &mut Runtime,
+    entries: &entry_list::EntryList,
+    origin: entry_list::Origin<'_>,
+) -> std::io::Result<()> {
+    let jsonl = entries.build_text(origin)?;
     let (world, _) = build_renderable(&jsonl)?;
     runtime.load_world(world);
     Ok(())
@@ -342,6 +354,17 @@ mod tests {
 
     // A renderable authored world, plus a label whose content identifies which
     // compile a booted world came from.
+    // Boot `entries` as the open project's world file.
+    fn boot(runtime: &mut Runtime, entries: Vec<serde_json::Value>) -> std::io::Result<()> {
+        let root = worlds::files::content_root();
+        let world = root.join("world.jsonl");
+        let origin = entry_list::Origin {
+            world: &world,
+            root: &root,
+        };
+        boot_world(runtime, &entry_list::EntryList::new(entries), origin)
+    }
+
     fn renderable_entries(label: &str) -> Vec<serde_json::Value> {
         vec![
             entry("cam", "Camera3D", serde_json::json!({})),
@@ -370,7 +393,7 @@ mod tests {
         let build_root = open_project(dir.path());
 
         let mut runtime = crate::project::runtime();
-        boot_world(&mut runtime, &renderable_entries("authored")).expect("the world builds");
+        boot(&mut runtime, renderable_entries("authored")).expect("the world builds");
 
         assert!(runtime.world().renders());
         assert_eq!(booted_label(&runtime), "authored");
@@ -404,7 +427,7 @@ mod tests {
         let before = std::fs::read(&blob).expect("the build wrote a primary blob");
 
         let mut runtime = crate::project::runtime();
-        boot_world(&mut runtime, &renderable_entries("edited")).expect("the world builds");
+        boot(&mut runtime, renderable_entries("edited")).expect("the world builds");
 
         assert_eq!(
             booted_label(&runtime),
@@ -428,7 +451,7 @@ mod tests {
         crate::test_support::isolate_state_dir();
 
         let mut runtime = crate::project::runtime();
-        boot_world(&mut runtime, &[]).expect("an empty world seeds");
+        boot(&mut runtime, Vec::new()).expect("an empty world seeds");
         assert!(runtime.world().renders());
     }
 

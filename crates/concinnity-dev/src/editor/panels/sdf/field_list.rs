@@ -45,12 +45,12 @@ impl FieldDecl {
 }
 
 // Every field file the entries' SdfVolumes declare, in the order a volume
-// first reads it, grouped by on-disk path from `resolve`
-// (`shader::source::resolve_field_path`) as the hot-reload catalog groups them.
+// first reads it, grouped by on-disk path from `resolve`, given the declaring
+// entry's position, as the hot-reload catalog groups them.
 // A volume declaring no file reads no field.
 pub(crate) fn declared_fields(
     entries: &[serde_json::Value],
-    mut resolve: impl FnMut(&str) -> String,
+    mut resolve: impl FnMut(usize, &str) -> String,
 ) -> Vec<FieldDecl> {
     let names = entry_handles(entries);
     let mut out: Vec<FieldDecl> = Vec::new();
@@ -76,7 +76,7 @@ pub(crate) fn declared_fields(
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         };
-        let path = resolve(declared);
+        let path = resolve(i, declared);
         match out.iter_mut().find(|f| f.path == path) {
             Some(field) => field.volumes.push(volume),
             None => out.push(FieldDecl {

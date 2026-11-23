@@ -9,12 +9,9 @@ use crate::asset::BuildCtx;
 use crate::authoring::source_args::sdf_volume_source_path;
 use crate::compile::sdf_field::compile_sdf_field;
 
-// Resolve a raw `fragment_shader` arg to the first on-disk path that exists
-// among the build's asset root, the checkout's `assets/` and the working
-// directory. `None` when nothing exists; `compile_payload`
-// falls back to the raw path then, so the read error names it.
-pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<std::path::PathBuf> {
-    concinnity_host::store::source::find_existing(raw, ctx.assets_dir)
+// The on-disk path of a raw `fragment_shader` arg, under the build's root.
+pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> std::path::PathBuf {
+    concinnity_host::store::source::resolve(raw, ctx.root)
 }
 
 // A volume's compiled field, or an error naming what this host is missing.
@@ -49,8 +46,7 @@ impl crate::asset::BuildAsset for SdfVolume {
             )
         })?;
 
-        let source_path =
-            resolve_source_path(&raw, ctx).unwrap_or_else(|| std::path::PathBuf::from(&raw));
+        let source_path = resolve_source_path(&raw, ctx);
         let field = std::fs::read_to_string(&source_path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
@@ -95,16 +91,14 @@ impl crate::asset::BuildAsset for SdfVolume {
     // payloads and the target belongs in the cache key.
     const TARGET_DEPENDENT: bool = true;
 
-    // Only the declared field is read. Reporting it covers the resolution the
-    // cache's generic walk misses: `fragment_shader` is typically a path with a
-    // directory component under the source-tree `assets/` dir, and without this
-    // an edit to it would replay stale bytes forever.
+    // Only the declared field is read, when it is there.
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
         let Some(raw) = sdf_volume_source_path(args) else {
             return SourceFiles::Only(Vec::new());
         };
-        SourceFiles::Only(resolve_source_path(&raw, ctx).into_iter().collect())
+        let path = resolve_source_path(&raw, ctx);
+        SourceFiles::Only(path.exists().then_some(path).into_iter().collect())
     }
 }
 
@@ -117,11 +111,11 @@ mod tests {
         serde_json::json!({ "fragment_shader": source })
     }
 
-    fn ctx(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
+    fn ctx(root: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "blob",
             targets: PlatformSet::single(Platform::Metal),
-            assets_dir,
+            root,
             all_assets: &[],
         }
     }
@@ -161,55 +155,41 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
         );
     }
 
+    // A relative path names a file under the root, whether or not it is there
+    // yet; an absolute one names itself; nothing is searched for by name.
     #[test]
-    fn an_absolute_path_resolves_only_when_it_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("chrome.hlsl");
-        std::fs::write(&path, FIELD).unwrap();
-        let raw = path.to_string_lossy().into_owned();
-        assert_eq!(resolve_source_path(&raw, &ctx(None)), Some(path));
-
-        let missing = dir
-            .path()
-            .join("absent.hlsl")
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(resolve_source_path(&missing, &ctx(None)), None);
-    }
-
-    #[test]
-    fn a_relative_path_resolves_under_the_assets_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("shaders")).unwrap();
-        std::fs::write(dir.path().join("shaders/chrome.hlsl"), FIELD).unwrap();
+    fn a_field_path_resolves_under_the_root() {
+        let root = std::path::Path::new("/p");
         assert_eq!(
-            resolve_source_path("shaders/chrome.hlsl", &ctx(Some(dir.path()))),
-            Some(dir.path().join("shaders/chrome.hlsl"))
+            resolve_source_path("fields/chrome.hlsl", &ctx(Some(root))),
+            root.join("fields/chrome.hlsl")
+        );
+        assert_eq!(
+            resolve_source_path("chrome.hlsl", &ctx(Some(root))),
+            root.join("chrome.hlsl")
+        );
+        assert_eq!(
+            resolve_source_path("/abs/chrome.hlsl", &ctx(Some(root))),
+            std::path::Path::new("/abs/chrome.hlsl")
         );
     }
 
+    // The cache keys on the field only once it exists.
     #[test]
-    fn a_bare_filename_is_found_anywhere_under_the_assets_dir() {
+    fn only_an_existing_field_is_a_source_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("fields")).unwrap();
         std::fs::write(dir.path().join("fields/chrome.hlsl"), FIELD).unwrap();
+        let files =
+            |field: &str| match SdfVolume::source_files(&args(field), &ctx(Some(dir.path()))) {
+                SourceFiles::Only(files) => files,
+                SourceFiles::Extra(_) => panic!("a volume names its only input"),
+            };
         assert_eq!(
-            resolve_source_path("chrome.hlsl", &ctx(Some(dir.path()))),
-            Some(dir.path().join("fields").join("chrome.hlsl"))
+            files("fields/chrome.hlsl"),
+            [dir.path().join("fields/chrome.hlsl")]
         );
-    }
-
-    #[test]
-    fn an_unresolvable_relative_path_returns_none() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(
-            resolve_source_path("cn_no_such_field.hlsl", &ctx(Some(dir.path()))),
-            None
-        );
-        assert_eq!(
-            resolve_source_path("cn_no_such_field.hlsl", &ctx(None)),
-            None
-        );
+        assert!(files("fields/absent.hlsl").is_empty());
     }
 
     #[test]

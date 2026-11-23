@@ -18,14 +18,16 @@ pub(crate) fn check(json_path: Option<&str>) -> std::io::Result<()> {
     match json_path {
         Some(_) => {
             let path = resolve_world_path(json_path)?;
-            check_at_path(&path, &path.display().to_string())
+            let root = crate::project::content_root();
+            check_at_path(&path, root.as_deref(), &path.display().to_string())
         }
         None => check_tree(Path::new(".")),
     }
 }
 
-// Check every world file under `root`, each on its own, and fail when any of
-// them does or a directory could not be read.
+// Check every world file under `root`, each on its own with its includes
+// resolved against `root`, and fail when any of them does or a directory could
+// not be read.
 fn check_tree(root: &Path) -> std::io::Result<()> {
     let found = world_files(root);
     let total = found.files.len() + found.unreadable.len();
@@ -47,7 +49,7 @@ fn check_tree(root: &Path) -> std::io::Result<()> {
     let mut failed = found.unreadable.len();
     for file in &found.files {
         let label = label(file);
-        if let Err(e) = check_at_path(file, &label) {
+        if let Err(e) = check_at_path(file, Some(root), &label) {
             if ValidationFailed::of(&e).is_none() {
                 eprintln!("failed: {label}\nerror:   {e}");
             }
@@ -275,13 +277,13 @@ mod tests {
     }
 
     #[test]
-    fn check_tree_resolves_includes_from_each_file() {
+    fn check_tree_resolves_includes_against_the_root() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "kits/physics.jsonl", VALID);
         write(
             dir.path(),
             "worlds/world.jsonl",
-            "[\"Include\",{\"path\":\"../kits/physics.jsonl\"}]\n",
+            "[\"Include\",{\"path\":\"kits/physics.jsonl\"}]\n",
         );
         check_tree(dir.path()).unwrap();
     }

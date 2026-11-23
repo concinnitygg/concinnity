@@ -809,3 +809,33 @@ fn deleting_the_boot_pick_before_it_compiles_drops_the_pick() {
     assert_eq!(selected_row(&h), Some(0));
     crate::test_support::isolate_state_dir();
 }
+
+// A previewed world builds from its own file's root, not from the placeholder
+// the session holds: a world in a marked library names its files from there.
+#[test]
+fn a_previewed_world_builds_from_its_own_root() {
+    let _guard = crate::test_support::lock();
+    let dir = tempfile::tempdir().unwrap();
+    open_project(dir.path());
+    let library = dir.path().join("lib");
+    std::fs::create_dir_all(library.join(concinnity_host::store::source::LIBRARY_MARKER)).unwrap();
+    let texture =
+        serde_json::json!({"type": "Texture", "args": {"$id": "t", "source": "tex/a.png"}});
+    write_world(&library, "gallery", &[texture], 1_000);
+
+    let mut h = EditorHook::new(
+        dir.path()
+            .join("world.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        Vec::new(),
+    )
+    .with_start_screen(Some(
+        library.join("gallery.jsonl").to_string_lossy().into_owned(),
+    ));
+    h.start_drawn = EditorHook::START_PREVIEW_DELAY;
+    h.drive_start_preview();
+
+    let text = h.entries.build_text(h.world_origin()).unwrap();
+    assert!(text.contains("\"source\":\"lib/tex/a.png\""), "{text}");
+}

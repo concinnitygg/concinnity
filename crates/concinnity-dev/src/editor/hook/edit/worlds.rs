@@ -200,7 +200,7 @@ impl EditorHook {
     // the status line and nothing is retargeted, so the session keeps the world
     // it has.
     fn open_world(&mut self, path: String) {
-        match worlds::files::read_entries(Path::new(&path)) {
+        match worlds::files::read_entries(Path::new(&path), &self.content_root) {
             Ok(entries) => self.retarget(path, entries, Adopt::No),
             Err(e) => self.worlds.status = Some(e),
         }
@@ -324,6 +324,7 @@ impl EditorHook {
             })
             .unwrap_or_default();
         self.world_path = path;
+        self.entries_from = None;
         self.history = History::default();
         self.baseline = entries.clone();
         self.saved = entries.clone();

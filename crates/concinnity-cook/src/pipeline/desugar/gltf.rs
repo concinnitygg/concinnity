@@ -21,7 +21,7 @@ use crate::pipeline::progress::StageProgress;
 pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
@@ -68,16 +68,14 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
                     &asset.id,
                     &arg.schema,
                     &arg.model,
-                    assets_dir,
+                    root,
                 )
                 .map_err(invalid)?
             }
-            None => {
-                crate::import::gltf::import_skinned_glb(&source, skin_index_arg(asset), assets_dir)
-                    .map_err(|e| {
-                        invalid(format!("Asset '{}': glTF import failed: {}", asset.id, e))
-                    })?
-            }
+            None => crate::import::gltf::import_skinned_glb(&source, skin_index_arg(asset), root)
+                .map_err(|e| {
+                invalid(format!("Asset '{}': glTF import failed: {}", asset.id, e))
+            })?,
         };
 
         let name = asset.id.clone();
@@ -147,7 +145,7 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
 pub(in crate::pipeline) fn desugar_gltf_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     use concinnity_engine::components::VertexData;
@@ -210,7 +208,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
 
         progress.begin(&source);
         if !parsed_cache.contains_key(&source) {
-            let doc = crate::import::glb::parse_glb(&source, assets_dir).map_err(|e| {
+            let doc = crate::import::glb::parse_glb(&source, root).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("Asset '{}': glTF import failed: {}", asset.id, e),

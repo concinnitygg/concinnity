@@ -705,7 +705,7 @@ mod tests {
         };
         concinnity_cook::build_pipeline_from_str(
             &world,
-            crate::project::assets_dir().as_deref(),
+            crate::project::content_root().as_deref(),
             crate::cook_platform().into(),
         )?;
         Ok(())

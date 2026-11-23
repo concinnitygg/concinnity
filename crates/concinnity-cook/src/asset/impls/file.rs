@@ -13,7 +13,11 @@ impl crate::asset::BuildAsset for File {
                 format!("Asset '{}': unsupported File kind '{}'", ctx.name, kind_str),
             )
         })?;
-        crate::compile::file::compile_file_payload(path, &kind).map_err(std::io::Error::from)
+        crate::compile::file::compile_file_payload(
+            &concinnity_host::store::source::resolve(path, ctx.root),
+            &kind,
+        )
+        .map_err(std::io::Error::from)
     }
 }
 
@@ -28,7 +32,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: &[],
         }
     }

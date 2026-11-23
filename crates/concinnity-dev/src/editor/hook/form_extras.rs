@@ -12,7 +12,7 @@ use concinnity_engine::ecs::World;
 use super::edit::sdf_form::SdfExtras;
 use super::edit::shader_form::ShaderExtras;
 use super::{EditorHook, FormTarget, declared_id};
-use crate::editor::entry_list::{EntryId, EntryList};
+use crate::editor::entry_list::{EntryId, EntryList, Origin};
 use crate::editor::panels::form_extras::ExtraRow;
 
 // What the extras read about the open form.
@@ -97,16 +97,18 @@ pub(in crate::editor::hook) trait FormExtras:
     fn after(&self, _hook: &mut EditorHook, _c: &Committed) {}
 }
 
-// The extras type `ty`'s form carries, for a form opened on `target`.
+// The extras type `ty`'s form carries, for a form opened on `target` in the
+// world `origin` names.
 pub(in crate::editor::hook) fn for_type(
     ty: &str,
     entries: &EntryList,
     target: &FormTarget,
+    origin: Origin<'_>,
 ) -> Option<Box<dyn FormExtras>> {
     match (ty, target) {
         (_, FormTarget::Promote(_)) => None,
-        ("Shader", _) => Some(Box::new(ShaderExtras::open(entries, target))),
-        ("SdfVolume", _) => Some(Box::new(SdfExtras::open(entries, target))),
+        ("Shader", _) => Some(Box::new(ShaderExtras::open(entries, target, origin))),
+        ("SdfVolume", _) => Some(Box::new(SdfExtras::open(entries, target, origin))),
         _ => None,
     }
 }

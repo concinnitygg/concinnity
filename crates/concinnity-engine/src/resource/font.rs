@@ -31,7 +31,8 @@ use alloc::string::String;
 )]
 #[serde(default)]
 pub struct Font {
-    /// Path to the TTF file, relative to the project root.
+    /// Path to the TTF file, relative to the root of the file holding the line.
+    #[asset(file)]
     pub path: String,
     /// Rasterization size in pixels. Determines the rendered glyph height.
     #[asset(default = 20)]

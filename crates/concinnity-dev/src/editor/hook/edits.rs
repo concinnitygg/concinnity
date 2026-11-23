@@ -2,14 +2,14 @@
 //! write of every changed world file, and the in-memory live-preview world
 //! rebuild).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use concinnity_cook::authoring::refs::{count_references, rename_references};
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
 use concinnity_engine::ecs::World;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
-use crate::editor::entry_list::{Refusal, build_text, paths};
+use crate::editor::entry_list::{Refusal, paths};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::{build_renderable, live, notify};
 
@@ -183,8 +183,7 @@ impl EditorHook {
 
     // Why the edit since `baseline` cannot stand, if it cannot.
     pub(super) fn refusal(&self) -> Option<Refusal> {
-        self.entries
-            .refusal(&self.baseline, Path::new(&self.world_path))
+        self.entries.refusal(&self.baseline, self.world_origin())
     }
 
     // Put the entries back as they were before a refused edit, and say why. The
@@ -317,7 +316,7 @@ impl EditorHook {
     // Compile the in-memory entries into a world plus template baselines, the
     // same compile boot uses.
     pub(super) fn build_preview_world(&self) -> std::io::Result<(World, live::ShadowBaselines)> {
-        let jsonl = build_text(&self.entries)?;
+        let jsonl = self.entries.build_text(self.world_origin())?;
         let (world, shadowed) = build_renderable(&jsonl)?;
         let baselines = shadowed
             .into_iter()

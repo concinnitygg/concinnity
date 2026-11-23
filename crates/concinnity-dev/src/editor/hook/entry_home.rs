@@ -5,6 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use super::{EditorHook, EntryId};
+use concinnity_cook::build_only::include::rebase_files;
+
+use crate::editor::entry_list::Origin;
 use crate::editor::notify;
 
 // The file an added entry goes into.
@@ -35,16 +38,36 @@ impl EditorHook {
             EntryHome::File(file) => file.to_path_buf(),
             EntryHome::Asset(name) => asset_file(name),
         };
-        match self
-            .entries
-            .push_to(value, &file, Path::new(&self.world_path))
-        {
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        match self.entries.push_to(value, &file, origin) {
             Ok(key) => Some(key),
             Err(reason) => {
                 self.notifier.push(notify::Level::Error, &reason);
                 None
             }
         }
+    }
+
+    // `add_entry` for `value` written in a file whose paths resolve from
+    // `from`: its file paths are rebased onto the root of `home`'s file first,
+    // so they name the same files there.
+    pub(super) fn add_entry_from(
+        &mut self,
+        mut value: serde_json::Value,
+        from: &Path,
+        home: EntryHome<'_>,
+    ) -> Option<EntryId> {
+        let file = match home {
+            EntryHome::World => None,
+            EntryHome::File(file) => Some(file.to_path_buf()),
+            EntryHome::Asset(name) => Some(asset_file(name)),
+        };
+        let to = self.entries.file_root(file.as_deref(), self.world_origin());
+        rebase_files(&mut value, from, &to);
+        self.add_entry(value, home)
     }
 }
 

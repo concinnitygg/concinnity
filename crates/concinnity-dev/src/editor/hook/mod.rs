@@ -44,7 +44,7 @@ use concinnity_runtime::Runtime;
 use concinnity_runtime::live_edit::PendingBackend;
 
 use super::asset_handle::AssetHandle;
-use super::entry_list::{EntryId, EntryList};
+use super::entry_list::{EntryId, EntryList, Origin};
 use super::history::History;
 use super::panels::console::ConsoleSink;
 use super::panels::health::HealthState;
@@ -72,7 +72,7 @@ use edit::templates_state::TemplatesState;
 use edit::variables_state::VariablesState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -83,6 +83,11 @@ pub(crate) struct EditorHook {
     world_path: String,
     // The same path, shared with the hot-reload driver that watches it.
     world_path_handle: WorldPathHandle,
+    // The root every `Include` path is read and written against.
+    content_root: PathBuf,
+    // The file the entries were read from when it is not `world_path`: a world
+    // the start screen previews without opening it.
+    entries_from: Option<String>,
     // The authored entry list (names live here, unlike the compiled blob), each
     // entry beside the session key the editor addresses it by. Edits mutate
     // this; SAVE serializes it back to `world_path`.
@@ -380,6 +385,15 @@ mod worlds_start;
 mod tests;
 
 impl EditorHook {
+    // The world file the entries were read from and the root a build of them
+    // resolves under.
+    pub(super) fn world_origin(&self) -> Origin<'_> {
+        Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        }
+    }
+
     pub(crate) fn new(world_path: String, entries: impl Into<EntryList>) -> Self {
         let bookmarks = session_store::default_path()
             .and_then(|path| {
@@ -395,6 +409,8 @@ impl EditorHook {
         Self {
             world_path_handle: WorldPathHandle::new(world_path.as_str()),
             world_path,
+            content_root: worlds::files::content_root(),
+            entries_from: None,
             history: History::default(),
             baseline: entries.clone(),
             saved: entries.clone(),
@@ -579,8 +595,6 @@ impl FrameHook for EditorHook {
         // The Shader panels take in reload outcomes, on-disk changes, and
         // edits to the declared Shaders before anything draws them.
         self.drive_shader_source();
-        self.shaders
-            .retry_missing(self.clock.elapsed().as_secs_f64());
         if self.open[PanelKey::Shaders] {
             self.shader_rows();
         }
@@ -828,7 +842,7 @@ impl EditorHook {
         if self.world_shadows.is_some() {
             return true;
         }
-        let Ok(loaded) = Self::cook_entries(&self.world_entries) else {
+        let Ok(loaded) = Self::cook_entries(&self.world_entries, self.world_origin()) else {
             return false;
         };
         self.world_shadows = Some(

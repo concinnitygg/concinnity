@@ -40,7 +40,6 @@ pub(super) mod map_state;
 pub(super) mod overrides;
 pub(super) mod palette;
 pub(super) mod palette_state;
-pub(super) mod path_cache;
 pub(super) mod planet;
 pub(super) mod planet_state;
 pub(super) mod planet_tool;
