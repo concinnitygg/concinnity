@@ -356,9 +356,10 @@ fn explain_of_an_unknown_name_fails() {
     assert!(stderr(&out).contains("no_such_asset"), "{}", stderr(&out));
 }
 
-// `cn check` validates without cooking; the world comes from discovery.
+// `cn check` validates without cooking; with no `-f` it checks every world file
+// under the directory it ran in.
 #[test]
-fn check_validates_the_discovered_world() {
+fn check_validates_the_worlds_under_the_directory() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["check"]);
     expect_ok(&out, "concinnity check");

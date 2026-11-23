@@ -2838,7 +2838,7 @@ reproducible across hosts.
 | `init`    | Create a new app in the current directory.                         |
 | `new`     | Create a new app in a new directory.                               |
 | `cook`    | Cook a world into blobs.                                           |
-| `check`   | Validate a world without cooking it.                               |
+| `check`   | Validate every world file under the directory, or `-f` one world.  |
 | `run`     | Cook the discovered world first, then run it, or `-f` in memory.   |
 | `bench`   | Benchmark a world, found the way `run` finds it (section 25.3).    |
 | `edit`    | Cook in memory and run with the editor overlay.                    |

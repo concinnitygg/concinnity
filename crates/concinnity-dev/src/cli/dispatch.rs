@@ -30,7 +30,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                 command::Verbosity::Normal
             },
         ),
-        Commands::Check(args) => command::check(args.world.file()),
+        Commands::Check(args) => command::check(args.file.as_deref()),
         Commands::Run(args) => crate::run_world(args.world.file(), launch(&args.launch.args), tree),
         Commands::Bench(args) => {
             crate::run_world(args.world.file(), launch(&args.launch.args), tree)

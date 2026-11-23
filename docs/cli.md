@@ -56,7 +56,12 @@ Usage: `concinnity cook [OPTIONS]`
 
 ## `concinnity check`
 
-Validate an app without cooking it
+Validate world files without cooking them
+
+Without `-f`, checks every `.jsonl` file under the current directory,
+each on its own, skipping hidden files and directories such as `.git`.
+A fragment that relies on what its includer declares fails on its own;
+check the world that includes it with `-f` instead.
 
 ```sh
 concinnity check
@@ -65,7 +70,7 @@ concinnity check -f arena.jsonl
 
 Usage: `concinnity check [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to every `.jsonl` file under the current directory.
 
 ## `concinnity run`
 

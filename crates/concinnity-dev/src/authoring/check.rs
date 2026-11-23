@@ -7,13 +7,13 @@
 use concinnity_cook::Diagnostic;
 use std::path::Path;
 
-/// Read `world_path`, run validation, and report results. Returns Ok if every
-/// asset passes; otherwise an error whose Display contains a human-readable
-/// summary of every failure (one per asset).
-pub(crate) fn check_at_path(world_path: &Path) -> std::io::Result<()> {
+/// Read `world_path`, run validation, and report results under `label`.
+/// Returns Ok if every asset passes; otherwise an error whose Display contains
+/// a human-readable summary of every failure (one per asset).
+pub(crate) fn check_at_path(world_path: &Path, label: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
     let source = concinnity_cook::WorldSource::file(&content, world_path);
-    check_source(source, &world_path.display().to_string())
+    check_source(source, label)
 }
 
 /// Run validation against world text. `label` is the origin used in messages
@@ -24,7 +24,10 @@ fn check_source(source: concinnity_cook::WorldSource<'_>, label: &str) -> std::i
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())
         }
-        Err(errors) => Err(report_validation_errors(errors.diagnostics())),
+        Err(errors) => {
+            eprintln!("failed: {label}");
+            Err(report_validation_errors(errors.diagnostics()))
+        }
     }
 }
 
@@ -101,7 +104,7 @@ mod tests {
     fn check_at_path_reports_a_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.jsonl");
-        assert!(check_at_path(&path).is_err());
+        assert!(check_at_path(&path, "missing.jsonl").is_err());
     }
 
     #[test]
@@ -109,6 +112,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
-        check_at_path(&path).unwrap();
+        check_at_path(&path, "world.jsonl").unwrap();
     }
 }

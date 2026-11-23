@@ -46,7 +46,12 @@ pub(crate) enum Commands {
     #[command(name = "cook", verbatim_doc_comment)]
     Cook(CookArgs),
 
-    /// Validate an app without cooking it
+    /// Validate world files without cooking them
+    ///
+    /// Without `-f`, checks every `.jsonl` file under the current directory,
+    /// each on its own, skipping hidden files and directories such as `.git`.
+    /// A fragment that relies on what its includer declares fails on its own;
+    /// check the world that includes it with `-f` instead.
     ///
     /// ```sh
     /// concinnity check
@@ -296,8 +301,11 @@ pub(crate) struct RmArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct CheckArgs {
-    #[command(flatten)]
-    pub(crate) world: WorldArg,
+    /// Path to a world JSONL file
+    ///
+    /// Defaults to every `.jsonl` file under the current directory.
+    #[arg(short = 'f', long)]
+    pub(crate) file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -639,15 +647,14 @@ mod tests {
         assert_eq!(a.path, "my-app");
     }
 
-    // `run`, `bench`, `cook`, `check` and `edit` share the same optional
-    // --file, defaulting to discovery.
+    // `run`, `bench`, `cook` and `edit` share the same optional --file,
+    // defaulting to discovery.
     #[test]
     fn the_world_commands_take_an_optional_world_file() {
         let file = |argv: &[&str]| -> Option<String> {
             let cli = Cli::try_parse_from(argv).unwrap();
             let world = match &cli.command {
                 Commands::Cook(a) => &a.world,
-                Commands::Check(a) => &a.world,
                 Commands::Run(a) => &a.world,
                 Commands::Bench(a) => &a.world,
                 Commands::Edit(a) => &a.world,
@@ -655,7 +662,7 @@ mod tests {
             };
             world.file().map(str::to_string)
         };
-        for command in ["cook", "check", "run", "bench", "edit"] {
+        for command in ["cook", "run", "bench", "edit"] {
             assert_eq!(file(&["concinnity", command]), None, "{command}");
             assert_eq!(
                 file(&["concinnity", command, "-f", "w.jsonl"]).as_deref(),
@@ -666,6 +673,22 @@ mod tests {
                 Some("w.jsonl")
             );
         }
+    }
+
+    #[test]
+    fn check_takes_an_optional_world_file() {
+        let file = |argv: &[&str]| -> Option<String> {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Commands::Check(a) = cli.command else {
+                panic!("expected check");
+            };
+            a.file
+        };
+        assert_eq!(file(&["concinnity", "check"]), None);
+        assert_eq!(
+            file(&["concinnity", "check", "-f", "w.jsonl"]).as_deref(),
+            Some("w.jsonl")
+        );
     }
 
     #[test]
