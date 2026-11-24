@@ -292,12 +292,6 @@ fn a_steady_source_sync_allocates_nothing() {
         .cloned()
         .unwrap();
     h.sync_shader_source(&mut world, &panel);
-    let mut min = u64::MAX;
-    for _ in 0..16 {
-        let before = concinnity_core::memory::alloc_count().unwrap();
-        h.sync_shader_source(&mut world, &panel);
-        let after = concinnity_core::memory::alloc_count().unwrap();
-        min = min.min(after - before);
-    }
+    let min = concinnity_testing::quietest_allocs(0, || h.sync_shader_source(&mut world, &panel));
     assert_eq!(min, 0, "a steady sync allocated {min} times");
 }

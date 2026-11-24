@@ -2,7 +2,7 @@
   "mcpServers": {
     "concinnity": {
       "command": "cargo",
-      "args": ["run", "-q", "--features", "editor", "--", "mcp"]
+      "args": ["run", "-q", "--", "mcp"]
     }
   }
 }

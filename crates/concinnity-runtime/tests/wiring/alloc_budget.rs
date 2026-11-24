@@ -4,14 +4,8 @@
 // fails loudly instead of eroding it back. The extraction pass's own pin sits
 // beside the engine's `FrameExtractor`.
 //
-// The allocation counters are process-wide and other
-// test threads allocate concurrently, so a single frame's delta is only an
-// upper bound on the world's own cost. Concurrency can only ADD allocations,
-// never hide them, so each pin keeps stepping until one frame lands at or
-// under its budget: that frame proves the world's own cost is within it. A
-// regression can never produce such a frame, while a run polluted by parallel
-// tests finds its quiet frame as the rest of the suite drains -- only a whole
-// deadline with no quiet frame fails.
+// Each pin steps through `quietest_allocs`, since other test threads allocate
+// against the same process-wide counters.
 
 use concinnity_engine::components::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorNode, BehaviorSource, Binding, Collider,
@@ -22,12 +16,6 @@ use concinnity_runtime::SYSTEMS;
 
 const WARMUP_FRAMES: usize = 64;
 
-// How long a pin keeps looking for a quiet frame before giving up. Generous on
-// purpose: the whole suite runs in about a second, so a real steady state is
-// found in the first few frames once the concurrent noise drains, and only a
-// genuine regression spends the full window.
-const QUIET_FRAME_DEADLINE: core::time::Duration = core::time::Duration::from_secs(10);
-
 // The pinned steady-state heap cost of one `World::step` of the static world
 // below. Zero: every system reserves its working memory at init and reuses it,
 // and the simulation reserves the world's whole body budget the same way, so a
@@ -35,23 +23,6 @@ const QUIET_FRAME_DEADLINE: core::time::Duration = core::time::Duration::from_se
 // explanation) only when a change legitimately moves it; a bump without one is
 // the regression this gate exists to catch.
 const STATIC_WORLD_ALLOCS_PER_FRAME: u64 = 0;
-
-// Step until one frame allocates at most `budget` times, returning the
-// quietest delta seen: at most `budget` when the pin holds, or the closest
-// the deadline's worth of frames ever came when it does not.
-fn quietest_frame(budget: u64, mut step: impl FnMut()) -> u64 {
-    let deadline = std::time::Instant::now() + QUIET_FRAME_DEADLINE;
-    let mut min = u64::MAX;
-    loop {
-        let before = concinnity_core::memory::alloc_count().expect("test binary tracks its heap");
-        step();
-        let after = concinnity_core::memory::alloc_count().expect("allocator stays installed");
-        min = min.min(after - before);
-        if min <= budget || std::time::Instant::now() >= deadline {
-            return min;
-        }
-    }
-}
 
 // A headless static world: nothing moves, nothing spawns, nothing streams.
 // Props give the behavior scope a real population, the colliders give physics
@@ -123,7 +94,7 @@ fn static_world_frame_allocs_stay_pinned() {
         world.step();
     }
 
-    let min = quietest_frame(STATIC_WORLD_ALLOCS_PER_FRAME, || {
+    let min = concinnity_testing::quietest_allocs(STATIC_WORLD_ALLOCS_PER_FRAME, || {
         world.step();
     });
     assert_eq!(

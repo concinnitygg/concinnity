@@ -2099,7 +2099,9 @@ fn spawn_watcher_subscribes_to_an_existing_source_directory() {
 
 #[test]
 fn story_source_dirs_collects_unique_parents_from_story_imports() {
-    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::test_support::lock();
+    let dir = concinnity_testing::TempTree::new();
+    crate::project::open(concinnity_host::store::paths::StateTree::at(dir.path()));
     let world = dir.path().join("world.jsonl");
     let lines = [
         r#"["StoryImport",{"$id":"s1","source":"stories/tale.md"}]"#,
@@ -2111,9 +2113,11 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
     ];
     std::fs::write(&world, lines.join("\n")).unwrap();
     let dirs = story_source_dirs(&world);
-    assert_eq!(dirs.len(), 2);
-    assert!(dirs.contains(&PathBuf::from(".")));
-    assert!(dirs.contains(&PathBuf::from("stories")));
+    crate::test_support::isolate_state_dir();
+    assert_eq!(
+        dirs.into_iter().collect::<Vec<_>>(),
+        [dir.path().to_path_buf(), dir.path().join("stories")]
+    );
 }
 
 #[test]

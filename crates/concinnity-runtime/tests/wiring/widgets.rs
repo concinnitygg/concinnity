@@ -205,14 +205,9 @@ fn a_steady_frame_over_widgets_allocates_nothing() {
     for _ in 0..64 {
         world.step();
     }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let mut min = u64::MAX;
-    while min > 0 && std::time::Instant::now() < deadline {
-        let before = concinnity_core::memory::alloc_count().expect("the binary tracks its heap");
+    let min = concinnity_testing::quietest_allocs(0, || {
         world.step();
-        let after = concinnity_core::memory::alloc_count().expect("the allocator stays installed");
-        min = min.min(after - before);
-    }
+    });
     assert_eq!(
         min,
         0,

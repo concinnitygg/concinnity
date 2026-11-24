@@ -7,7 +7,7 @@
 //! names its own files the same whether it is run on its own or sits inside a
 //! project. Once a file is read, every path in it is [`rebase`]d onto the one
 //! root the build was given, and everything after that [`resolve`]s against
-//! that root. An absolute path names itself everywhere.
+//! that root. An [`is_anchored`] path names itself everywhere.
 //!
 //! The root is the caller's: nothing here picks one, so two builds may resolve
 //! against different trees in one process.
@@ -30,14 +30,21 @@ pub fn marked_root(file: &Path, within: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// The file `path` names under `root`: an absolute path verbatim, a relative
-/// one joined onto `root`. With no root a relative path is returned as is.
+/// Whether `path` carries its own root or drive (`/x`, `C:\x`, or `\x` and
+/// `C:x` on Windows), so it is never read relative to another root.
+pub fn is_anchored(path: &Path) -> bool {
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(_) | Component::RootDir)
+    )
+}
+
+/// The file `path` names under `root`: a relative path joined onto `root`, an
+/// [`is_anchored`] one kept whole, or on Windows given `root`'s drive when it
+/// has none. With no root the path is returned as is.
 pub fn resolve(path: &str, root: Option<&Path>) -> PathBuf {
     let path = Path::new(path);
-    match root {
-        Some(root) if path.is_relative() => root.join(path),
-        _ => path.to_path_buf(),
-    }
+    root.map_or_else(|| path.to_path_buf(), |root| root.join(path))
 }
 
 /// [`resolve`], when the file is there. `None` otherwise, so the caller's read
@@ -47,10 +54,10 @@ pub fn find_existing(path: &str, root: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// `path`, written relative to `from`, rewritten to name the same file relative
-/// to `to`, with `/` separators. An absolute or empty path, or one whose roots
-/// are the same, is returned unchanged.
+/// to `to`, with `/` separators. An [`is_anchored`] or empty path, or one whose
+/// roots are the same, is returned unchanged.
 pub fn rebase(path: &str, from: &Path, to: &Path) -> String {
-    if path.is_empty() || Path::new(path).is_absolute() {
+    if path.is_empty() || is_anchored(Path::new(path)) {
         return path.to_string();
     }
     let (from, to) = (normalized(from), normalized(to));
@@ -135,6 +142,25 @@ mod tests {
         assert_eq!(resolve("a.hlsl", Some(root)), root.join("a.hlsl"));
         assert_eq!(resolve("/abs/a.hlsl", Some(root)), Path::new("/abs/a.hlsl"));
         assert_eq!(resolve("a.hlsl", None), Path::new("a.hlsl"));
+        if cfg!(windows) {
+            assert_eq!(
+                resolve(r"\abs\a.hlsl", Some(Path::new(r"C:\p"))),
+                Path::new(r"C:\abs\a.hlsl")
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_with_a_root_or_drive_is_anchored() {
+        assert!(is_anchored(Path::new("/abs/a.hlsl")));
+        assert!(!is_anchored(Path::new("a.hlsl")));
+        assert!(!is_anchored(Path::new("./a.hlsl")));
+        assert!(!is_anchored(Path::new("../a.hlsl")));
+        if cfg!(windows) {
+            assert!(is_anchored(Path::new(r"\abs\a.hlsl")));
+            assert!(is_anchored(Path::new(r"C:\abs\a.hlsl")));
+            assert!(is_anchored(Path::new("C:a.hlsl")));
+        }
     }
 
     #[test]

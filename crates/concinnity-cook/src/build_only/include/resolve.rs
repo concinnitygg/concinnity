@@ -231,7 +231,7 @@ fn target_path(
     if include.path.is_empty() {
         return Err(at("`path` is empty".to_string()));
     }
-    if file_root.is_none() && Path::new(&include.path).is_relative() {
+    if file_root.is_none() && !source::is_anchored(Path::new(&include.path)) {
         return Err(at(format!(
             "'{}' is relative, and there is no root to resolve it against",
             include.path

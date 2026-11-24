@@ -201,8 +201,8 @@ mod tests {
         );
         assert_eq!(map.len(), 1);
         assert_eq!(
-            map.get("blob").unwrap().resolved_path,
-            fields.join("blob.hlsl").to_string_lossy()
+            Path::new(&map.get("blob").unwrap().resolved_path),
+            fields.join("blob.hlsl")
         );
     }
 }

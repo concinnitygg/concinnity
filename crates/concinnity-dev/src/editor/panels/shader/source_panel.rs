@@ -428,13 +428,9 @@ mod tests {
             ..view(Some(3))
         };
         sync(&v, || reference.rows(ENTRIES), &mut world, &panel);
-        let mut min = u64::MAX;
-        for _ in 0..16 {
-            let before = concinnity_core::memory::alloc_count().unwrap();
+        let min = concinnity_testing::quietest_allocs(0, || {
             sync(&v, || reference.rows(ENTRIES), &mut world, &panel);
-            let after = concinnity_core::memory::alloc_count().unwrap();
-            min = min.min(after - before);
-        }
+        });
         assert_eq!(min, 0, "a steady sync allocated {min} times");
     }
 }

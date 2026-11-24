@@ -61,8 +61,12 @@ mod tests {
         TextureSourceMap,
     };
 
+    // Each directory with `/` separators, so one expectation holds on every host.
     fn dirs(paths: &[PathBuf]) -> Vec<String> {
-        paths.iter().map(|p| p.display().to_string()).collect()
+        paths
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect()
     }
 
     fn mesh_entry(source: &str) -> MeshSourceEntry {
