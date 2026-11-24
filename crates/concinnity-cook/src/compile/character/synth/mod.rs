@@ -49,7 +49,7 @@ impl SynthInput<'_> {
 // the payload compile does so a zero displacement gives a zero normal delta.
 pub(crate) fn vertex_normals(positions: &[[f32; 3]], indices: &[u16]) -> Vec<[f32; 3]> {
     let mut normals = vec![[0.0_f32; 3]; positions.len()];
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
         if a >= positions.len() || b >= positions.len() || c >= positions.len() {
             continue;

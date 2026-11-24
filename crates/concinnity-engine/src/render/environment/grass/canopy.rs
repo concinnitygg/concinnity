@@ -196,7 +196,11 @@ pub fn projection_axes(bend: f32) -> [f32; 2] {
             high = high.max(r);
         }
     }
-    let scale = if high > 0.0 { 0.5 * (low + high) } else { 1.0 };
+    let scale = if high > 0.0 {
+        f32::midpoint(low, high)
+    } else {
+        1.0
+    };
     axes.map(|a| a * scale)
 }
 

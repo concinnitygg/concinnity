@@ -47,9 +47,9 @@ pub(crate) fn pad_point(p: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 // Center and bounding-sphere radius of an AABB.
 pub(crate) fn bounding_sphere(mn: [f32; 3], mx: [f32; 3]) -> ([f32; 3], f32) {
     let center = [
-        (mn[0] + mx[0]) * 0.5,
-        (mn[1] + mx[1]) * 0.5,
-        (mn[2] + mx[2]) * 0.5,
+        f32::midpoint(mn[0], mx[0]),
+        f32::midpoint(mn[1], mx[1]),
+        f32::midpoint(mn[2], mx[2]),
     ];
     let half = [
         (mx[0] - mn[0]) * 0.5,

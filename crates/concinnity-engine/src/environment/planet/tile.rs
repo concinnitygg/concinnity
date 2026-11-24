@@ -222,7 +222,10 @@ pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
 
     let center = dvec3::add(
         shape.center,
-        dvec3::scale(tile.direction(0.5, 0.5), shape.radius + (lo + hi) * 0.5),
+        dvec3::scale(
+            tile.direction(0.5, 0.5),
+            shape.radius + f64::midpoint(lo, hi),
+        ),
     );
     let mut radius: f64 = 0.0;
     for &d in &dirs {
@@ -283,7 +286,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let (s0, t0, span) = tile.span();
     // Meters across the face from its -s/-t corner, less a whole number of
     // periods so the tile's own stay small.
-    let face_m = |c: f64| (c + 1.0) * 0.5 * shape.radius * core::f64::consts::FRAC_PI_2;
+    let face_m = |c: f64| f64::midpoint(c, 1.0) * shape.radius * core::f64::consts::FRAC_PI_2;
     let base = [s0, t0].map(|c| libm::floor(face_m(c) / UV_PERIOD_M) * UV_PERIOD_M);
     let uv = |i: usize, j: usize| {
         [
@@ -575,7 +578,7 @@ mod tests {
         for level in [0u8, 4, 8, 11, 14] {
             let n = 1u32 << level;
             let cell = |c: f64| {
-                u32::saturating_from(libm::floor((c + 1.0) * 0.5 * f64::from(n))).min(n - 1)
+                u32::saturating_from(libm::floor(f64::midpoint(c, 1.0) * f64::from(n))).min(n - 1)
             };
             let t = TileId {
                 face,
@@ -696,7 +699,7 @@ mod tests {
         let side = TILE_CELLS as usize + 1;
         let surface_tris = (side - 1) * (side - 1) * 2;
         let up = dvec3::to_f32(s.up_at(mesh.origin));
-        for tri in mesh.indices[..surface_tris * 3].chunks_exact(3) {
+        for tri in mesh.indices[..surface_tris * 3].as_chunks::<3>().0 {
             let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.vertices[i as usize].pos);
             assert!(dot(cross(sub(b, a), sub(c, a)), up) > 0.0);
         }

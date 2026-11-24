@@ -119,10 +119,7 @@ impl ConsoleSink {
 
     #[cfg(test)]
     pub(crate) fn window(&self, first: usize, count: usize) -> Vec<ConsoleLine> {
-        self.0
-            .lock()
-            .map(|log| log.window(first, count))
-            .unwrap_or_default()
+        self.0.lock().map_or_default(|log| log.window(first, count))
     }
 
     // Lines pushed in all: a reader shows the log again only when this moves.

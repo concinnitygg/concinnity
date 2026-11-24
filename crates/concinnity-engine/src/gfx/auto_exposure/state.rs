@@ -61,7 +61,7 @@ impl AutoExposureState {
     /// range: a neutral starting point before the first GPU measurement
     /// arrives. The first `update` call snaps it toward the real scene EV.
     pub fn new(settings: &AutoExposureSettings) -> Self {
-        let current_ev = (settings.min_ev + settings.max_ev) * 0.5;
+        let current_ev = f32::midpoint(settings.min_ev, settings.max_ev);
         Self {
             current_ev,
             adapted_log_lum: settings.target_log_lum - current_ev,
@@ -143,8 +143,8 @@ impl ExposureAdaptation {
             settings,
             bias_ev,
             state: AutoExposureState::new(&settings),
-            eye_ev: (settings.min_ev + settings.max_ev) * 0.5,
-            lit_log_lum: settings.target_log_lum - (settings.min_ev + settings.max_ev) * 0.5,
+            eye_ev: f32::midpoint(settings.min_ev, settings.max_ev),
+            lit_log_lum: settings.target_log_lum - f32::midpoint(settings.min_ev, settings.max_ev),
         }
     }
 
@@ -714,7 +714,7 @@ mod tests {
         histogram[space] = 0;
         histogram[shadow] = 200_000;
         let avg = average_log_luminance(&histogram);
-        let want = 0.5 * (center(lit) + center(shadow));
+        let want = f32::midpoint(center(lit), center(shadow));
         assert!((avg - want).abs() < 1.0e-3, "{avg}");
     }
 
@@ -739,7 +739,7 @@ mod tests {
         histogram[lit] = 500_000;
         histogram[edge] = 500_000;
         let avg = average_log_luminance(&histogram);
-        let want = 0.5 * (center(lit) + center(edge));
+        let want = f32::midpoint(center(lit), center(edge));
         assert!((avg - want).abs() < 1.0e-3, "{avg}");
     }
 
@@ -762,7 +762,7 @@ mod tests {
         assert!((range(WIDE_SUBJECT_SHARE + 0.01) - METERED_RANGE_EV).abs() < 1.0e-3);
         assert!((range(SMALL_SUBJECT_SHARE - 0.01) - SMALL_SUBJECT_RANGE_EV).abs() < 1.0e-3);
         assert!((range(0.05) - SMALL_SUBJECT_RANGE_EV).abs() < 1.0e-3);
-        let middle = range(0.5 * (SMALL_SUBJECT_SHARE + WIDE_SUBJECT_SHARE));
+        let middle = range(f32::midpoint(SMALL_SUBJECT_SHARE, WIDE_SUBJECT_SHARE));
         assert!(
             middle > SMALL_SUBJECT_RANGE_EV && middle < METERED_RANGE_EV,
             "{middle}"

@@ -662,7 +662,7 @@ fn offshore_where(coast: &CoastProfile, depth: f64) -> f64 {
         hi *= 2.0;
     }
     for _ in 0..60 {
-        let mid = 0.5 * (lo + hi);
+        let mid = f64::midpoint(lo, hi);
         if coast.depth(coast.waterline - mid) < depth {
             lo = mid;
         } else {

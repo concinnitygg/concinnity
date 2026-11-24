@@ -82,7 +82,7 @@ mod tests {
     // The directional albedo is an energy fraction; above 1 it would create light.
     #[test]
     fn the_generated_albedo_conserves_energy() {
-        for (i, chunk) in magnitude_texels().chunks_exact(2).enumerate() {
+        for (i, chunk) in magnitude_texels().as_chunks::<2>().0.iter().enumerate() {
             assert!(
                 (0.0..=1.05).contains(&chunk[0]),
                 "cell {i} albedo {}",

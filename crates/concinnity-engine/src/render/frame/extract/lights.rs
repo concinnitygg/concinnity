@@ -186,8 +186,8 @@ mod tests {
             ..Default::default()
         };
         let same = lights_under_sky(std::iter::once(&authored), &SkyOrientation::default());
-        for k in 0..3 {
-            assert!((same.as_slice()[0].direction[k] - authored.direction[k]).abs() < 1e-6);
+        for (got, want) in same.as_slice()[0].direction.iter().zip(authored.direction) {
+            assert!((got - want).abs() < 1e-6);
         }
     }
 }

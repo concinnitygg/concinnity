@@ -174,8 +174,7 @@ impl UiInputSystem {
         if changed {
             self.disabled_rows_cache = ctx
                 .resource::<crate::settings::DisabledSettingRows>()
-                .map(|d| d.0.clone())
-                .unwrap_or_default();
+                .map_or_default(|d| d.0.clone());
         }
     }
 

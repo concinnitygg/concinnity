@@ -350,8 +350,7 @@ pub(crate) fn write_lock(
             name: name.to_string(),
             id: def.name.map(|n| n.0),
             kind: crate::authoring::registry::RegisteredType::from_discriminant(def.discriminant)
-                .map(|ty| ty.as_str().to_string())
-                .unwrap_or_default(),
+                .map_or_default(|ty| ty.as_str().to_string()),
             discriminant: def.discriminant,
             args_hash: checksum(&def.args_bytes),
             payload_blob: def.payload.as_ref().map(|p| p.blob_index),

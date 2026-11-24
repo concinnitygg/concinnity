@@ -13,8 +13,7 @@ pub fn retained_blobs(ctx: &PipelineContext<'_>) -> BTreeSet<u32> {
     // Audio reads clip payloads from the table after graphics init.
     let mut retained = ctx
         .resource::<AudioClipTable>()
-        .map(AudioClipTable::blob_indices)
-        .unwrap_or_default();
+        .map_or_default(AudioClipTable::blob_indices);
     // SdfVolume payloads are drained later in this same init.
     retained.extend(sdf_volume::sdf_volume_blob_indices(ctx));
     // Physics reads each terrain's grid after graphics init.

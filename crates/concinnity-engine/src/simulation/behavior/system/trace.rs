@@ -63,8 +63,7 @@ impl BehaviorSystem {
         let locals = request
             .entity
             .and_then(Entity::from_bits)
-            .map(|entity| self.locals_of(entity))
-            .unwrap_or_default();
+            .map_or_default(|entity| self.locals_of(entity));
 
         self.trace_frame += 1;
         ctx.insert_resource(ExecutionTrace {

@@ -1578,8 +1578,7 @@ mod tests {
         assert_eq!(snapshot.regions[1].len(), 6 + 4);
         assert_eq!(snapshot.regions[2].len(), 8 + 4);
         for record in 30..34 {
-            for b in 1..3 {
-                let r = &snapshot.regions[b];
+            for r in &snapshot.regions[1..3] {
                 let slot = r
                     .command(record)
                     .expect("the snapshot holds its runtime records");

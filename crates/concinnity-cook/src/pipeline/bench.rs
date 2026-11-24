@@ -85,11 +85,7 @@ fn run(pace: Pace) {
             mesh_bounds: result.mesh_bounds,
             physics_budget: result.physics_budget,
         };
-        let payload = result
-            .payloads
-            .first()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        let payload = result.payloads.first().map_or_default(Vec::as_slice);
         let image =
             encode_cnb(concinnity_engine::SCHEMA_VERSION, &meta, payload).expect("blob encodes");
 

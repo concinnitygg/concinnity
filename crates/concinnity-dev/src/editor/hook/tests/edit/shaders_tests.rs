@@ -50,8 +50,7 @@ fn open_shader(h: &EditorHook) -> Option<String> {
 fn modal_actions(h: &EditorHook) -> Vec<modal::Action> {
     h.modal
         .as_ref()
-        .map(|m| m.buttons.iter().map(|b| b.action.clone()).collect())
-        .unwrap_or_default()
+        .map_or_default(|m| m.buttons.iter().map(|b| b.action.clone()).collect())
 }
 
 // A file row opens the source panel on that file, frontmost and ready to type.

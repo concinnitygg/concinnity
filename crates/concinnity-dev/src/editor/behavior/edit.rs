@@ -206,15 +206,11 @@ pub(crate) fn shift(args: &mut Value, row: &Row, delta: isize) -> Option<path::P
 
 // `base`, `base_2`, ... until it does not collide with a sibling declaration.
 fn unique_decl_name(args: &Value, key: &str, base: &str) -> String {
-    let taken: Vec<&str> = args
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|d| d.get("name").and_then(Value::as_str))
-                .collect()
-        })
-        .unwrap_or_default();
+    let taken: Vec<&str> = args.get(key).and_then(Value::as_array).map_or_default(|a| {
+        a.iter()
+            .filter_map(|d| d.get("name").and_then(Value::as_str))
+            .collect()
+    });
     if !taken.contains(&base) {
         return base.to_string();
     }

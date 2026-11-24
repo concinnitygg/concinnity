@@ -188,7 +188,7 @@ impl ShoreWaves {
             // The front climbs `reach 4 s (1 - s)` over the cycle's period;
             // above its top the thin tip touches the sand at the turn.
             let q = libm::sqrt((1.0 - height / reach).max(0.0));
-            let (wetted, left) = (0.5 * (1.0 - q) * period, 0.5 * (1.0 + q) * period);
+            let (wetted, left) = (0.5 * (1.0 - q) * period, f64::midpoint(1.0, q) * period);
             if ago < wetted {
                 continue;
             }
@@ -470,7 +470,7 @@ mod tests {
                 continue;
             }
             let q = (1.0 - height / reach).max(0.0).sqrt();
-            let (wetted, left) = (0.5 * (1.0 - q) * period, 0.5 * (1.0 + q) * period);
+            let (wetted, left) = (0.5 * (1.0 - q) * period, f32::midpoint(1.0, q) * period);
             if ago < wetted {
                 continue;
             }

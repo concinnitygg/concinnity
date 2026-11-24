@@ -326,8 +326,7 @@ impl VkContext {
             // views. The merged pre-pass was rebuilt above, so they are current.
             let (nd_views, rough_views) = self
                 .gbuffer_targets()
-                .map(|gb| (gb.normal_depth_views(), gb.roughness_views()))
-                .unwrap_or_default();
+                .map_or_default(|gb| (gb.normal_depth_views(), gb.roughness_views()));
             rt.rebuild(
                 &self.hw.alloc,
                 &self.hw.device,
@@ -488,8 +487,7 @@ impl VkContext {
         let planar_target_views: Vec<vk::ImageView> = self
             .planar_reflection
             .as_ref()
-            .map(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect())
-            .unwrap_or_default();
+            .map_or_default(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect());
         let mask_views: Vec<vk::ImageView> = self
             .targets
             .reactive_mask_images

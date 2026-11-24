@@ -454,7 +454,7 @@ fn min_face_rate() -> f64 {
 // The smaller singular value of the 3x2 matrix of columns `a` and `b`.
 fn smallest_singular([a, b]: [DVec3; 2]) -> f64 {
     let (aa, ab, bb) = (dvec3::dot(a, a), dvec3::dot(a, b), dvec3::dot(b, b));
-    let (half, apart) = ((aa + bb) * 0.5, (aa - bb) * 0.5);
+    let (half, apart) = (f64::midpoint(aa, bb), (aa - bb) * 0.5);
     let gap = libm::sqrt(apart * apart + ab * ab);
     libm::sqrt((half - gap).max(0.0))
 }
@@ -1070,7 +1070,7 @@ mod tests {
                 / 200.0
         };
         let on = mean(0.0);
-        let off = (mean(37.0) + mean(-61.0)) * 0.5;
+        let off = f64::midpoint(mean(37.0), mean(-61.0));
         assert!(
             on > off * 0.5,
             "slope across the meridian {on}, beside it {off}"

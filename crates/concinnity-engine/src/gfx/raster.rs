@@ -105,9 +105,9 @@ pub fn shade_parts(parts: &[MeshPart<'_>], size: u32) -> RasterImage {
         }
     }
     let center = [
-        (min[0] + max[0]) * 0.5,
-        (min[1] + max[1]) * 0.5,
-        (min[2] + max[2]) * 0.5,
+        f32::midpoint(min[0], max[0]),
+        f32::midpoint(min[1], max[1]),
+        f32::midpoint(min[2], max[2]),
     ];
     let project = |v: &Vertex| {
         let p = [
@@ -142,7 +142,7 @@ pub fn shade_parts(parts: &[MeshPart<'_>], size: u32) -> RasterImage {
                 [half + p[0] * scale, half - p[1] * scale, p[2]]
             })
             .collect();
-        for tri in part.indices.chunks_exact(3) {
+        for tri in part.indices.as_chunks::<3>().0 {
             let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
             if i0 >= screen.len() || i1 >= screen.len() || i2 >= screen.len() {
                 continue;
@@ -298,7 +298,12 @@ mod tests {
     }
 
     fn coverage(img: &RasterImage) -> usize {
-        img.rgba.chunks_exact(4).filter(|p| p[3] > 0).count()
+        img.rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count()
     }
 
     #[test]
@@ -399,7 +404,9 @@ mod tests {
         let img = shade_parts(&parts(true), 64);
         let count = |channel: usize| {
             img.rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[3] > 0 && p[channel] > p[(channel + 1) % 3].max(p[(channel + 2) % 3]))
                 .count()
         };

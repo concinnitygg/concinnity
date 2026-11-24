@@ -346,7 +346,7 @@ pub struct GrassBendParams {
 #[cfg(test)]
 fn initial_grass_args() -> [u32; GRASS_ARGS_BYTES / 4] {
     let mut args = [0u32; GRASS_ARGS_BYTES / 4];
-    for (i, record) in args.chunks_exact_mut(4).enumerate() {
+    for (i, record) in args.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let region = i % (GRASS_REGION_COUNT + 1);
         if region < GRASS_REGION_COUNT {
             record[0] = GRASS_LOD_VERTICES[region_level(region)];

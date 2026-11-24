@@ -409,7 +409,7 @@ impl CharacterSchema {
             if seen.contains(&key.name) {
                 errors.push(std::format!("key '{}' is declared twice", key.name));
             }
-            seen.push(key.name.clone());
+            seen.push(key.name);
         }
         for group in &self.proportion_groups {
             if !group.region.is_empty() && !region_known(&group.region) {

@@ -88,13 +88,12 @@ fn mesh_source(asset: &WorldJsonlAsset) -> MeshSourceInfo {
         lod_distances: args
             .get("lod_distances")
             .and_then(|v| v.as_array())
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .filter_map(serde_json::Value::as_f64)
                     .map(narrow_f32)
                     .collect()
-            })
-            .unwrap_or_default(),
+            }),
     }
 }
 

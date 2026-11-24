@@ -208,8 +208,7 @@ impl Fixture {
         self.world
             .context()
             .events::<ControlsCommand>()
-            .map(|e| e.read(&mut EventCursor::default()).copied().collect())
-            .unwrap_or_default()
+            .map_or_default(|e| e.read(&mut EventCursor::default()).copied().collect())
     }
 }
 
@@ -554,8 +553,7 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
         .world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut EventCursor::default()).copied().collect());
     assert_eq!(sent.len(), 1);
     assert!(sent[0].mouse_sensitivity.is_some());
     assert!(sent[0].fov_y_degrees.is_none());
@@ -592,8 +590,7 @@ fn fov_slider_sends_a_controls_command() {
         .world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut EventCursor::default()).copied().collect());
     assert_eq!(sent.len(), 1);
     assert!(sent[0].fov_y_degrees.is_some());
     assert!(sent[0].mouse_sensitivity.is_none());
@@ -722,8 +719,7 @@ fn volume_rows_send_targeted_audio_commands() {
         .world
         .context()
         .events::<AudioCommand>()
-        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut EventCursor::default()).copied().collect());
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0].target, AudioTarget::Master);
     assert_eq!(f.persisted().audio.master_volume, Some(sent[0].gain));
@@ -1261,7 +1257,7 @@ fn every_other_row_changes_only_itself_live_and_at_the_next_launch() {
             let first = launch.state();
             let mut f = Fixture::new();
             f.state = launch.state();
-            f.world.insert_resource(launch.stored.clone());
+            f.world.insert_resource(launch.stored);
             f.apply(vec![cmd]);
             assert_eq!(
                 f.state.quality_preset == QualityPreset::Custom,
@@ -1761,8 +1757,7 @@ fn init_sends_the_stored_input_controls() {
     let sent: Vec<ControlsCommand> = world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut EventCursor::default()).copied().collect());
     assert_eq!(
         sent,
         [ControlsCommand {

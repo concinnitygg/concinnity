@@ -136,8 +136,7 @@ impl EditorHook {
             .map(|row| {
                 row.field()
                     .filter(|f| f.kind.has_text_field())
-                    .map(|f| f.initial.clone())
-                    .unwrap_or_default()
+                    .map_or_default(|f| f.initial.clone())
             })
             .collect();
     }

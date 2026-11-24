@@ -584,8 +584,10 @@ mod tests {
         assert!(
             image.mips[0]
                 .data
-                .chunks_exact(4)
-                .all(|c| c == [255, 255, 255, 200])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|c| *c == [255, 255, 255, 200])
         );
     }
 
@@ -695,14 +697,14 @@ mod tests {
         let (w, h, px) = decode_ktx2_rgba8(&ktx).expect("decode");
         assert_eq!((w, h), (4, 4));
         assert_eq!(px.len(), 4 * 4 * 4);
-        assert!(px.chunks_exact(4).all(|c| c == [255, 0, 0, 255]));
+        assert!(px.as_chunks::<4>().0.iter().all(|c| *c == [255, 0, 0, 255]));
     }
 
     #[test]
     fn decode_rgba8_expands_a_bc1_mip_chain_base_level() {
         let (w, h, px) = decode_ktx2_rgba8(&bc1_mip_chain_ktx2()).expect("decode");
         assert_eq!((w, h), (4, 4));
-        assert!(px.chunks_exact(4).all(|c| c == [255, 0, 0, 255]));
+        assert!(px.as_chunks::<4>().0.iter().all(|c| *c == [255, 0, 0, 255]));
     }
 
     #[test]
@@ -716,7 +718,12 @@ mod tests {
         let levels = vec![(4, 4, block), (2, 2, vec![0u8; 16])];
         let ktx = build_ktx2(VK_BC3_UNORM, 0, 4, 4, &levels);
         let (_, _, px) = decode_ktx2_rgba8(&ktx).expect("decode");
-        assert!(px.chunks_exact(4).all(|c| c == [255, 255, 255, 200]));
+        assert!(
+            px.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|c| *c == [255, 255, 255, 200])
+        );
     }
 
     #[test]
@@ -899,7 +906,12 @@ mod tests {
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (4, 4));
         assert!(
-            image.mips[0].data.chunks_exact(4).all(|c| c == color),
+            image.mips[0]
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|c| *c == color),
             "solid UASTC block should transcode to a solid RGBA8 image"
         );
     }

@@ -247,7 +247,7 @@ mod tests {
         let faces = equirect_to_cube(&hdr, 16);
         for (idx, face) in faces.iter().enumerate() {
             assert_eq!(face.len(), 16 * 16 * 4);
-            for px in face.chunks_exact(4) {
+            for px in face.as_chunks::<4>().0 {
                 assert!((px[0] - pixel[0]).abs() < 1e-4, "face {idx} R");
                 assert!((px[1] - pixel[1]).abs() < 1e-4, "face {idx} G");
                 assert!((px[2] - pixel[2]).abs() < 1e-4, "face {idx} B");
@@ -276,7 +276,7 @@ mod tests {
         let faces = equirect_to_cube(&hdr, 16);
         let mean_red = |face: &[f32]| -> f32 {
             let n = face.len() / 4;
-            face.chunks_exact(4).map(|p| p[0]).sum::<f32>() / n as f32
+            face.as_chunks::<4>().0.iter().map(|p| p[0]).sum::<f32>() / n as f32
         };
         let plus_x = mean_red(&faces[0]);
         let minus_x = mean_red(&faces[1]);

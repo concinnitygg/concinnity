@@ -56,8 +56,7 @@ fn produced_setting_commands(world: &World) -> Vec<SettingCommand> {
     let mut cursor = EventCursor::default();
     world
         .events::<SettingCommand>()
-        .map(|e| e.read(&mut cursor).cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|e| e.read(&mut cursor).cloned().collect())
 }
 
 // A screen-owned TextLabel used as a scroll-panel element.

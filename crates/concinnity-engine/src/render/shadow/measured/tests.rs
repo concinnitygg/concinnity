@@ -149,9 +149,8 @@ fn a_measurement_stands_for_the_view_it_was_taken_through() {
     bounds.bands[3] = ReceiverBand::EMPTY;
     measure.accept(&bounds);
     let bands = measure.camera_bands(&view, [100.0; NUM_SHADOW_CASCADES], MovedSince::Nothing);
-    for c in 0..3 {
+    for (c, raw) in bounds.bands.iter().copied().enumerate().take(3) {
         let band = bands.band(c).unwrap();
-        let raw = bounds.bands[c];
         for k in 0..3 {
             assert!((band.ranges[k][0] - raw.lo[k]).abs() < 1e-3, "{c} {k}");
             assert!((band.ranges[k][1] - raw.hi[k]).abs() < 1e-3, "{c} {k}");

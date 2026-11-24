@@ -65,8 +65,7 @@ impl EditorHook {
         world
             .resource::<TracePaths>()
             .and_then(|t| t.0.iter().find(|(b, _)| *b == id))
-            .map(|(_, paths)| paths.iter().map(|p| trace::to_path(p)).collect())
-            .unwrap_or_default()
+            .map_or_default(|(_, paths)| paths.iter().map(|p| trace::to_path(p)).collect())
     }
 
     fn publish_trace_request(&self, world: &mut World) {

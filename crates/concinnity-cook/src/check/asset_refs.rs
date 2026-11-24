@@ -125,8 +125,7 @@ impl CrossReferenced for AnimationGraph {
         let states = args
             .get("states")
             .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         for (i, state) in states.iter().enumerate() {
             let state_name = state.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let label = if state_name.is_empty() {
@@ -145,7 +144,7 @@ impl CrossReferenced for AnimationGraph {
                     ),
                 )));
             }
-            for clip in state.get("blend").map(blend_clip_names).unwrap_or_default() {
+            for clip in state.get("blend").map_or_default(blend_clip_names) {
                 refs.push(CrossRef::Resolve {
                     error: Diagnostic::asset(
                         "AnimationGraph",
@@ -307,8 +306,7 @@ impl CrossReferenced for VoxelChunk {
         let palette = args
             .get("palette")
             .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         // Each named entry resolves generically; an entry that names nothing
         // is caught here.
         for (i, entry) in palette.iter().enumerate() {
@@ -332,8 +330,7 @@ impl CrossReferenced for VoxelWorld {
         let palette = args
             .get("palette")
             .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         // Each named entry resolves generically; an entry that names nothing
         // is caught here.
         for (i, entry) in palette.iter().enumerate() {

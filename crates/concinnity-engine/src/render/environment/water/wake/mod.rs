@@ -309,7 +309,7 @@ impl WakeHistory {
 
     /// The lane this frame's water draw reads, zeroed when there is no wake.
     pub fn draw(&self) -> WaterWakeGpu {
-        self.frame.map(|f| f.draw).unwrap_or_default()
+        self.frame.map_or_default(|f| f.draw)
     }
 
     /// Mark the frame last advanced to as run: its kernels were encoded.

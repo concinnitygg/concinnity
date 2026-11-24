@@ -195,7 +195,7 @@ fn the_rates_follow_the_waves() {
     let mut spread = [0.0f32; 2];
     for p in points() {
         let (a, b) = (band.sample(t0, p), band.sample(t1, p));
-        let rate = |x: f32, y: f32| 0.5 * (x + y);
+        let rate = |x: f32, y: f32| f32::midpoint(x, y);
         let pairs = [
             (rate(a.rise_rate, b.rise_rate), b.height - a.height),
             (

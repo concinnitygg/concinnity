@@ -979,8 +979,8 @@ mod tests {
             let mut f = sample(n as f32, Some(0), 30_000);
             f.gpu_frame_us = 20_000 + n * 10;
             f.gpu_overlap_us = 4_000;
-            for slot in 0..passes {
-                f.pass_us[slot] = 2_000 - u32::saturating_from(slot) * 100;
+            for (slot, us) in f.pass_us[..passes].iter_mut().enumerate() {
+                *us = 2_000 - u32::saturating_from(slot) * 100;
             }
             // One async pass that overlaps the frame.
             f.pass_us[passes] = 5_000;
@@ -1700,8 +1700,8 @@ mod tests {
     fn a_slow_frame_lists_only_its_largest_costs() {
         let mut busy = sample(0.0, Some(0), 20_000);
         let mut run_names = Vec::new();
-        for slot in 0..6 {
-            busy.system_us[slot] = 100 * (u32::saturating_from(slot) + 1);
+        for (slot, us) in busy.system_us.iter_mut().take(6).enumerate() {
+            *us = 100 * (u32::saturating_from(slot) + 1);
             run_names.push(format!("System{slot}"));
         }
         let mut run = run_of(vec![busy]);

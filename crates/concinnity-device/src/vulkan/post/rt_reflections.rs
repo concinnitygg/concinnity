@@ -856,8 +856,7 @@ impl VkContext {
             .skinned
             .joint_buffers
             .get(frame_idx)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         let skinned = skinned_inputs
             .zip(self.rt.skin.as_mut())
             .map(|((vb, ib), skin)| super::super::raytrace::SkinnedRtInputs {
@@ -1185,8 +1184,10 @@ mod tests {
         const QUADS: u32 = 5288;
         const LINEAR: u32 = 5350;
         let words: Vec<u32> = spv
-            .chunks_exact(4)
-            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| u32::from_le_bytes(*w))
             .collect();
         words
             .windows(2)

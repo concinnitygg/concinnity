@@ -1833,8 +1833,7 @@ impl super::context::DxContext {
             .skinned
             .joint_buffers
             .get(frame_idx)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
 
         // Read before `rt.accel` is borrowed mutably below.
         let exclude_seethrough = self.seethrough_meshes_enabled();

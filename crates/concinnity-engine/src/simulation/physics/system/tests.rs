@@ -401,7 +401,7 @@ fn zero_tick_frames_blend_between_the_last_two_ticks() {
     world.insert_resource(tick(0, 0.5));
     physics.step(&mut world.context());
     let y_mid = world.get::<Transform>(entity).unwrap().position[1];
-    let expected = (y_prev + y_curr) * 0.5;
+    let expected = f32::midpoint(y_prev, y_curr);
     assert!(
         (y_mid - expected).abs() < 1e-6,
         "alpha 0.5 blends the tick poses (y={y_mid}, expected {expected})"

@@ -74,7 +74,7 @@ fn ground_y(
     z: f64,
 ) -> Option<f64> {
     let (dx, dz) = (x - center[0], z - center[2]);
-    let mut radius = shape.radius + (shape.lowest_height() + shape.highest_height()) * 0.5;
+    let mut radius = shape.radius + f64::midpoint(shape.lowest_height(), shape.highest_height());
     let mut y = 0.0;
     for _ in 0..REFINEMENTS {
         let under = radius * radius - dx * dx - dz * dz;

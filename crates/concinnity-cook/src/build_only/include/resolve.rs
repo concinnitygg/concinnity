@@ -241,8 +241,7 @@ fn target_path(
 }
 
 fn in_file(file: Option<&Path>) -> String {
-    file.map(|f| format!(" in {}", f.display()))
-        .unwrap_or_default()
+    file.map_or_default(|f| format!(" in {}", f.display()))
 }
 
 #[cfg(test)]

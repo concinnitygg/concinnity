@@ -22,9 +22,9 @@ pub fn draw_object_position(obj: &render_types::DrawObject) -> [f32; 3] {
         .all(|v| v.is_finite());
     if finite {
         [
-            0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-            0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-            0.5 * (obj.bb_min[2] + obj.bb_max[2]),
+            f32::midpoint(obj.bb_min[0], obj.bb_max[0]),
+            f32::midpoint(obj.bb_min[1], obj.bb_max[1]),
+            f32::midpoint(obj.bb_min[2], obj.bb_max[2]),
         ]
     } else {
         [obj.model[3][0], obj.model[3][1], obj.model[3][2]]
@@ -65,7 +65,7 @@ fn gather_auto_seed_triangles(
         if iend > all_indices.len() {
             continue;
         }
-        for t in all_indices[o.index_offset..iend].chunks_exact(3) {
+        for t in all_indices[o.index_offset..iend].as_chunks::<3>().0 {
             let vi = |k: usize| {
                 usize::try_from(i64::from(t[k]) + i64::from(o.base_vertex)).unwrap_or(usize::MAX)
             };

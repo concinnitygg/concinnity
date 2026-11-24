@@ -100,7 +100,7 @@ impl PlanetShape {
             if hi - lo <= HIT_TOLERANCE {
                 break;
             }
-            let mid = 0.5 * (lo + hi);
+            let mid = f64::midpoint(lo, hi);
             if self.clearance(dvec3::add(rel, dvec3::scale(dir, mid))) > 0.0 {
                 lo = mid;
             } else {

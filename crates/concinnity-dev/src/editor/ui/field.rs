@@ -8,8 +8,7 @@ use concinnity_engine::ecs::asset_id::AssetId;
 pub(crate) fn text(world: &World, field: Option<AssetId>) -> String {
     field
         .and_then(|id| world.get_by_id::<TextField>(id))
-        .map(|f| f.content.clone())
-        .unwrap_or_default()
+        .map_or_default(|f| f.content.clone())
 }
 
 // Replace the field's text, the caret at its end.

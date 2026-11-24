@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn ranges_follow_the_view_s_points_per_radian() {
         let cells = f64::from(TILE_CELLS) * RANGE_CELL_POINTS;
-        let mid = (MIN_RANGE_WIDTHS + MAX_RANGE_WIDTHS) * 0.5;
+        let mid = f64::midpoint(MIN_RANGE_WIDTHS, MAX_RANGE_WIDTHS);
         let widths = |ppr: f64| TileView::new(STANDING, ppr).range_widths;
         assert_eq!(widths(mid * cells), mid);
         assert!(widths(5.2 * cells) < widths(5.8 * cells));
@@ -484,7 +484,7 @@ mod tests {
         let r = l.range(7, &v);
         assert_eq!(l.morph(7, 0.0, &v), 0.0);
         assert_eq!(l.morph(7, MORPH_START * r, &v), 0.0);
-        assert!((l.morph(7, (1.0 + MORPH_START) * 0.5 * r, &v) - 0.5).abs() < 1e-12);
+        assert!((l.morph(7, f64::midpoint(1.0, MORPH_START) * r, &v) - 0.5).abs() < 1e-12);
         assert!(l.morph(7, r, &v) > 1.0 - 1e-12);
         assert_eq!(l.morph(7, 2.0 * r, &v), 1.0);
     }

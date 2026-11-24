@@ -74,8 +74,8 @@ const FACES: [Face; 6] = [
 pub(crate) fn mark_on_box(half_extent: f32, span: f32, lift: f32) -> Mesh {
     let scale = span * 2.0 * half_extent / (MARK_MAX[0] - MARK_MIN[0]);
     let center = [
-        (MARK_MIN[0] + MARK_MAX[0]) * 0.5,
-        (MARK_MIN[1] + MARK_MAX[1]) * 0.5,
+        f32::midpoint(MARK_MIN[0], MARK_MAX[0]),
+        f32::midpoint(MARK_MIN[1], MARK_MAX[1]),
     ];
     // The icon's y runs down the page; the face's runs up it.
     let on_face = |p: [f32; 2]| [(p[0] - center[0]) * scale, (center[1] - p[1]) * scale];

@@ -44,10 +44,7 @@ pub(crate) fn declared_files(entry: &serde_json::Value) -> Vec<String> {
 // Where the copy of `path` goes: `<stem>_copy.<ext>` beside it, then
 // `<stem>_copy_1.<ext>` and on, past every name `taken` reports.
 pub(crate) fn copy_path(path: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy())
-        .unwrap_or_default();
+    let stem = path.file_stem().map_or_default(|s| s.to_string_lossy());
     let ext = path
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()));

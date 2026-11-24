@@ -213,8 +213,7 @@ fn view_set(call: &Call<'_>, args: Args) -> Reply {
     call.on_world(move |world, _| {
         let show = world
             .resource::<ViewOverrides>()
-            .map(|view| view.show)
-            .unwrap_or_default();
+            .map_or_default(|view| view.show);
         world.insert_resource(ViewOverrides { mode, show });
         Ok(())
     })?;
@@ -277,8 +276,7 @@ mod tests {
         engine
             .world
             .events::<SettingCommand>()
-            .map(|events| events.read(&mut EventCursor::default()).cloned().collect())
-            .unwrap_or_default()
+            .map_or_default(|events| events.read(&mut EventCursor::default()).cloned().collect())
     }
 
     #[test]

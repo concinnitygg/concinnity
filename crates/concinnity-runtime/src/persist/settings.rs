@@ -39,8 +39,7 @@ impl SettingsStore for FileStore {
 // Load from `tree`'s `settings` file. Returns defaults when nothing is stored or
 // the file is unreadable.
 pub(crate) fn load(tree: Option<&StateTree>) -> StoredSettings {
-    tree.map(|tree| load_from(&tree.settings_path()))
-        .unwrap_or_default()
+    tree.map_or_default(|tree| load_from(&tree.settings_path()))
 }
 
 // Persist to `tree`'s `settings` file, creating the directory as needed. An app

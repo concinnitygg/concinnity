@@ -390,7 +390,7 @@ fn an_upright_capsule_floats_at_its_draft() {
     let solve = |f: &dyn Fn(f32) -> f32, share: f32| {
         let (mut lo, mut hi) = (-hh - r, hh + r);
         for _ in 0..60 {
-            let mid = 0.5 * (lo + hi);
+            let mid = f32::midpoint(lo, hi);
             if f(mid) < share * total {
                 lo = mid;
             } else {

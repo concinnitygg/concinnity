@@ -57,14 +57,13 @@ impl SdfForm {
         let others = declared_fields(entries, resolve)
             .into_iter()
             .find(|f| f.volumes.iter().any(|v| Some(&v.name) == name.as_ref()))
-            .map(|f| {
+            .map_or_default(|f| {
                 f.volumes
                     .into_iter()
                     .map(|v| v.name)
                     .filter(|n| Some(n) != name.as_ref())
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         Self {
             mode: SdfMode::Edit { declared, others },
         }

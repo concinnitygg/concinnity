@@ -401,7 +401,7 @@ fn project_box(
     onto: &[[f32; 3]; 3],
 ) -> [[f32; 2]; 3] {
     let center = (0..3).fold([0.0; 3], |c, k| {
-        add(c, scale(axes[k], (ranges[k][0] + ranges[k][1]) * 0.5))
+        add(c, scale(axes[k], f32::midpoint(ranges[k][0], ranges[k][1])))
     });
     onto.map(|b| {
         let mid = dot(b, center);

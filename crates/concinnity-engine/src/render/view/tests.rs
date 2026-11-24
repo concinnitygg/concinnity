@@ -21,7 +21,7 @@ const UP: [f32; 3] = [0.0, 1.0, 0.0];
 fn rectangle(eye: [f32; 3], height: f32, x_range: [f32; 2]) -> LevelLayerGpu {
     let [x0, x1] = x_range;
     LevelLayerGpu {
-        shape: [(x0 + x1) * 0.5, eye[1] - height, eye[2], 0.0],
+        shape: [f32::midpoint(x0, x1), eye[1] - height, eye[2], 0.0],
         extent: [(x1 - x0) * 0.5, 100.0, height, 1.0],
         ..NO_LEVEL_SURFACES.layers[0]
     }

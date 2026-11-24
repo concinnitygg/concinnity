@@ -44,8 +44,7 @@ fn command_section(root: &str, command: &Command) -> String {
     let doc = command
         .get_long_about()
         .or_else(|| command.get_about())
-        .map(ToString::to_string)
-        .unwrap_or_default();
+        .map_or_default(ToString::to_string);
     out.push_str(doc.trim());
     out.push_str("\n\n");
     let usage = command.clone().render_usage().to_string();
@@ -85,8 +84,7 @@ fn arg_line(arg: &Arg, command: &Command) -> String {
     let help = arg
         .get_long_help()
         .or_else(|| arg.get_help())
-        .map(ToString::to_string)
-        .unwrap_or_default();
+        .map_or_default(ToString::to_string);
     if !help.is_empty() {
         line.push_str(": ");
         line.push_str(&prose(&help));
@@ -167,8 +165,7 @@ fn prose(help: &str) -> String {
             let mut chars = p.chars();
             let mut out: String = chars
                 .next()
-                .map(|c| c.to_uppercase().chain(chars).collect())
-                .unwrap_or_default();
+                .map_or_default(|c| c.to_uppercase().chain(chars).collect());
             if !out.ends_with(['.', '!', '?']) {
                 out.push('.');
             }
@@ -277,10 +274,7 @@ mod tests {
         let mut root = Cli::command();
         root.build();
         for command in commands(&root) {
-            let doc = command
-                .get_long_about()
-                .map(ToString::to_string)
-                .unwrap_or_default();
+            let doc = command.get_long_about().map_or_default(ToString::to_string);
             let examples = example_lines(&doc);
             assert!(
                 !examples.is_empty(),

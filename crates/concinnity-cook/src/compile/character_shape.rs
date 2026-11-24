@@ -19,7 +19,7 @@ pub(crate) fn unresolved_names(
         mesh_args
             .get(field)
             .and_then(|v| v.as_array())
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .filter_map(|v| match key {
                         Some(k) => v.get(k).and_then(|n| n.as_str()),
@@ -28,7 +28,6 @@ pub(crate) fn unresolved_names(
                     .map(String::from)
                     .collect()
             })
-            .unwrap_or_default()
     };
     let targets = strings("morph_target_names", None);
     let joints = strings("skeleton", Some("name"));

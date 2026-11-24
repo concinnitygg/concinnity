@@ -119,9 +119,10 @@ mod tests {
             assert_eq!(rod_share(l), 1.0, "{l}");
         }
         assert_eq!(rod_share(f32::NAN), 0.0);
-        let mid = rod_share(exp2(
-            0.5 * (log2(SCOTOPIC_LUMINANCE) + log2(PHOTOPIC_LUMINANCE)),
-        ));
+        let mid = rod_share(exp2(f32::midpoint(
+            log2(SCOTOPIC_LUMINANCE),
+            log2(PHOTOPIC_LUMINANCE),
+        )));
         assert!((mid - 0.5).abs() < 1e-5, "{mid}");
         let mut last = 0.0;
         for i in 0..=60 {

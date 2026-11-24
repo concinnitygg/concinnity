@@ -279,7 +279,7 @@ fn prefab_refs(def: &Value) -> Vec<String> {
     def.get("args")
         .and_then(|a| a.get("props"))
         .and_then(|v| v.as_array())
-        .map(|props| {
+        .map_or_default(|props| {
             props
                 .iter()
                 .filter(|p| p.get("kind").and_then(|k| k.as_str()) == Some("prefab"))
@@ -287,7 +287,6 @@ fn prefab_refs(def: &Value) -> Vec<String> {
                 .map(str::to_string)
                 .collect()
         })
-        .unwrap_or_default()
 }
 fn entry_name(v: &Value) -> String {
     concinnity_cook::authoring::world::entry_id(v)

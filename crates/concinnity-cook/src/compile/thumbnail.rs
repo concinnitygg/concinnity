@@ -347,7 +347,7 @@ fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     // (+X) is representative enough for a preview.
     let face_bytes = bytes.get(0..face_px * 16)?;
     let mut rgba = Vec::with_capacity(face_px * 4);
-    for texel in face_bytes.chunks_exact(16) {
+    for texel in face_bytes.as_chunks::<16>().0 {
         for c in 0..3 {
             let v = f32::from_le_bytes(texel[c * 4..c * 4 + 4].try_into().ok()?);
             // Reinhard + gamma, clamped: an HDR sky stays readable.
@@ -363,7 +363,7 @@ fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 fn average_color(rgba: &[u8]) -> [f32; 3] {
     let mut acc = [0.0f64; 3];
     let mut n = 0u64;
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         if p[3] == 0 {
             continue;
         }

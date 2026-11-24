@@ -897,8 +897,7 @@ impl GrassField {
             layers: [GrassLayerGpu::default(); MAX_GRASS_LAYERS],
             tile_morph: planet
                 .and_then(|p| p.tile_morph)
-                .map(TileMorphFrame::view)
-                .unwrap_or_default(),
+                .map_or_default(TileMorphFrame::view),
         }
     }
 

@@ -223,13 +223,17 @@ impl TextureImage {
         if count == 0 {
             return None;
         }
-        let sum = texels.chunks_exact(4).fold([0.0_f32; 3], |acc, p| {
-            [
-                acc[0] + f32::from(p[0]),
-                acc[1] + f32::from(p[1]),
-                acc[2] + f32::from(p[2]),
-            ]
-        });
+        let sum = texels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .fold([0.0_f32; 3], |acc, p| {
+                [
+                    acc[0] + f32::from(p[0]),
+                    acc[1] + f32::from(p[1]),
+                    acc[2] + f32::from(p[2]),
+                ]
+            });
         Some(sum.map(|c| c / (count as f32 * 255.0)))
     }
 

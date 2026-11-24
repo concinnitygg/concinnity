@@ -219,7 +219,7 @@ impl ViewCullInputs<'_> {
                 .collect();
             let sets = alloc_descriptor_sets(device, self.pool, &layouts)?;
             let mut frame_views = Vec::with_capacity(views);
-            for pair in sets.chunks_exact(2) {
+            for pair in sets.as_chunks::<2>().0 {
                 let lists = alloc.create_buffer(
                     crate::vulkan::compact::indirect_buffer_bytes(n),
                     INDIRECT_USAGE,

@@ -411,14 +411,11 @@ fn ctrl_key_input(key: InputKey) -> FrameInput {
 }
 
 fn body_verbs(h: &EditorHook) -> Vec<String> {
-    open_args(h)["do"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|n| n.as_object()?.keys().next().cloned())
-                .collect()
-        })
-        .unwrap_or_default()
+    open_args(h)["do"].as_array().map_or_default(|a| {
+        a.iter()
+            .filter_map(|n| n.as_object()?.keys().next().cloned())
+            .collect()
+    })
 }
 
 // Duplicating puts the copy beside the original, carrying its whole subtree, and

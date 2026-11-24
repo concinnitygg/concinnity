@@ -54,21 +54,21 @@ pub(crate) fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     // the bottom-left (the TGA default) so callers always get top-row-first.
     let mut rgba = vec![0u8; checked_product("TGA output", &[pixel_count, 4])?];
     let src = raw.chunks_exact(channels);
-    let dst = rgba.chunks_exact_mut(4);
+    let dst = rgba.as_chunks_mut::<4>().0.iter_mut();
     match channels {
         4 => {
             for (s, d) in src.zip(dst) {
-                d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
+                *d = [s[2], s[1], s[0], s[3]];
             }
         }
         3 => {
             for (s, d) in src.zip(dst) {
-                d.copy_from_slice(&[s[2], s[1], s[0], 255]);
+                *d = [s[2], s[1], s[0], 255];
             }
         }
         _ => {
             for (s, d) in src.zip(dst) {
-                d.copy_from_slice(&[s[0], s[0], s[0], 255]);
+                *d = [s[0], s[0], s[0], 255];
             }
         }
     }

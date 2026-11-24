@@ -558,8 +558,7 @@ pub(in crate::editor::hook) const VP: [f32; 2] = [1280.0, 720.0];
 pub(in crate::editor::hook) fn marks(world: &World) -> Vec<UiShape> {
     world
         .resource::<UiState>()
-        .map(|s| s.shapes(crate::editor::viewport::marks::SHAPES).to_vec())
-        .unwrap_or_default()
+        .map_or_default(|s| s.shapes(crate::editor::viewport::marks::SHAPES).to_vec())
 }
 
 // The selection rings among them: the only marks drawn as a bare border.

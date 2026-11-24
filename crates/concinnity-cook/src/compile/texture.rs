@@ -320,7 +320,7 @@ fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let pixels = match info.pixel_format {
         PixelFormat::RGB24 => {
             let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-            for chunk in raw.chunks_exact(3) {
+            for chunk in raw.as_chunks::<3>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
             }
             out
@@ -337,7 +337,7 @@ fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
             // upload path stays unchanged. Two bytes per source pixel,
             // little-endian.
             let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-            for chunk in raw.chunks_exact(2) {
+            for chunk in raw.as_chunks::<2>().0 {
                 let v = u16::from_le_bytes([chunk[0], chunk[1]]);
                 let v8 = (v >> 8) as u8;
                 out.extend_from_slice(&[v8, v8, v8, 255]);
@@ -348,7 +348,7 @@ fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
             // Approximate CMYK->RGB via the standard `R = (1-C)*(1-K)` etc.
             // Good enough for the rare PolyHaven asset that ships CMYK.
             let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-            for chunk in raw.chunks_exact(4) {
+            for chunk in raw.as_chunks::<4>().0 {
                 let c = f32::from(chunk[0]) / 255.0;
                 let m = f32::from(chunk[1]) / 255.0;
                 let y = f32::from(chunk[2]) / 255.0;
@@ -397,14 +397,14 @@ fn decode_png_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         ColorType::Rgba => raw.to_vec(),
         ColorType::Rgb => {
             let mut out = Vec::with_capacity(width as usize * height as usize * 4);
-            for chunk in raw.chunks_exact(3) {
+            for chunk in raw.as_chunks::<3>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
             }
             out
         }
         ColorType::GrayscaleAlpha => {
             let mut out = Vec::with_capacity(width as usize * height as usize * 4);
-            for chunk in raw.chunks_exact(2) {
+            for chunk in raw.as_chunks::<2>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
             }
             out
@@ -444,7 +444,7 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let pixels = match info.pixel_format {
         PixelFormat::RGB24 => {
             let mut out = Vec::with_capacity(width as usize * height as usize * 4);
-            for chunk in raw.chunks_exact(3) {
+            for chunk in raw.as_chunks::<3>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
             }
             out
@@ -1492,7 +1492,7 @@ mod tests {
         );
         let (w, h, px) = decode_source(&src, 0, None).expect("decode");
         assert_eq!((w, h), (4, 4));
-        assert!(px.chunks_exact(4).all(|c| c == [255, 0, 0, 255]));
+        assert!(px.as_chunks::<4>().0.iter().all(|c| *c == [255, 0, 0, 255]));
     }
 
     #[test]
@@ -1579,8 +1579,10 @@ mod tests {
         assert!(
             image.mips[0]
                 .data
-                .chunks_exact(4)
-                .all(|c| c == [255, 0, 0, 255])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|c| *c == [255, 0, 0, 255])
         );
     }
 

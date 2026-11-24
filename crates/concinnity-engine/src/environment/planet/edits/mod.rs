@@ -249,7 +249,8 @@ fn child_at(tile: TileId, s: f64, t: f64) -> TileId {
     let level = tile.level + 1;
     let n = f64::from(1u32 << level);
     let index = |c: f64, first: u32| {
-        u32::saturating_from(libm::floor((c + 1.0) * 0.5 * n).max(0.0)).clamp(first, first + 1)
+        u32::saturating_from(libm::floor(f64::midpoint(c, 1.0) * n).max(0.0))
+            .clamp(first, first + 1)
     };
     TileId {
         face: tile.face,

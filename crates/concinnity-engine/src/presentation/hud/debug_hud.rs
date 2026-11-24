@@ -515,8 +515,7 @@ mod tests {
     fn chip(world: &World, id: u32) -> String {
         world
             .get_by_id::<TextLabel>(AssetId(id))
-            .map(|l| l.content.clone())
-            .unwrap_or_default()
+            .map_or_default(|l| l.content.clone())
     }
 
     // Hidden by default: a step with no FrameInput blanks every chip (the

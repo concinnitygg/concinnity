@@ -76,7 +76,7 @@ fn run(pace: Pace) {
             acc
         });
 
-        let mut handles = entities.clone();
+        let mut handles = entities;
         Rng::new(11).shuffle(&mut handles);
         handles.truncate(LOOKUPS);
         bench(

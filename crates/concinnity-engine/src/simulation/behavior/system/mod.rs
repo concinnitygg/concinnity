@@ -548,8 +548,7 @@ impl BehaviorSystem {
         let mut save_requested = false;
         for bucket in &mut buckets[..used] {
             let mut recorded = bucket.effects.drain(..);
-            for k in 0..bucket.produced.len() {
-                let (i, entity, count) = bucket.produced[k];
+            for &(i, entity, count) in &bucket.produced {
                 save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
             }
             if tracing {

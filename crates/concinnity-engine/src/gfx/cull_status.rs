@@ -127,7 +127,9 @@ pub fn decode(bytes: &[u8], count: usize) -> Result<Vec<u32>, &'static str> {
         return Err("cull-status readback is shorter than the live object count");
     }
     Ok(bytes[..count * size_of::<u32>()]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         .collect())
 }

@@ -54,7 +54,9 @@ pub fn decode_page(bytes: &[u8]) -> Result<EditPage, PagePayloadError> {
     }
     let float = |at: usize| f32::from_le_bytes([raw[at], raw[at + 1], raw[at + 2], raw[at + 3]]);
     let e = raw[9..E_LEN]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect();
     let w = has_w.then(|| raw[E_LEN..].to_vec());

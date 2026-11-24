@@ -95,8 +95,10 @@ fn buffer(alloc: &DeviceAllocator, bytes: &[u8], usage: vk::BufferUsageFlags) ->
 
 fn module(gpu: &TestGpu, spirv: &[u8]) -> vk::ShaderModule {
     let words: Vec<u32> = spirv
-        .chunks_exact(4)
-        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
         .collect();
     // SAFETY: `words` is a whole SPIR-V module, live for the call.
     unsafe {
@@ -376,8 +378,10 @@ fn pack_and_check(records: u32) {
         // SAFETY: the queue idled, so the GPU no longer writes the `4 * len` bytes from `start`.
         let bytes = unsafe { std::slice::from_raw_parts(start, 4 * len) };
         bytes
-            .chunks_exact(4)
-            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| u32::from_le_bytes(*w))
             .collect()
     };
     let words = |offset, len| read(&lists_buf, offset, len);
@@ -401,14 +405,14 @@ fn pack_and_check(records: u32) {
         let slots = layout.slots(stream);
         let first = u64::from(slots.region + slots.first) * 20;
         let held = words(first, 5 * slots.capacity as usize);
-        for (k, command) in held.chunks_exact(5).enumerate() {
+        for (k, command) in held.as_chunks::<5>().0.iter().enumerate() {
             match list.get(k) {
                 Some(&record) => assert_eq!(
-                    command,
+                    *command,
                     [3 + record, 1, 2 * record, 0, record],
                     "stream {stream} place {k}"
                 ),
-                None => assert_eq!(command, [0; 5], "stream {stream} past its count"),
+                None => assert_eq!(*command, [0; 5], "stream {stream} past its count"),
             }
         }
         drawn += list.len();
@@ -663,8 +667,10 @@ fn the_shadow_cull_counts_what_it_keeps_as_the_spec_does() {
         // which holds at least `4 * len` bytes.
         let bytes = unsafe { std::slice::from_raw_parts(buffer.mapped_ptr(), 4 * len) };
         bytes
-            .chunks_exact(4)
-            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| u32::from_le_bytes(*w))
             .collect()
     };
     let status = read(&status_buf, records as usize);

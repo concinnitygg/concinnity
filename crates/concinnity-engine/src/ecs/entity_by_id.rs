@@ -94,9 +94,8 @@ pub(crate) fn drain<C: ComponentSlot>(
     components: &mut ComponentStorage,
     resources: &mut Resources,
 ) -> Vec<C> {
-    let owners: Vec<Entity> = C::column(components)
-        .map(|column| column.entities().to_vec())
-        .unwrap_or_default();
+    let owners: Vec<Entity> =
+        C::column(components).map_or_default(|column| column.entities().to_vec());
     let drained = components.drain::<C>();
     let identity_only =
         ComponentMask::with(ComponentId::new(<Identity as ComponentSlot>::DISCRIMINANT));

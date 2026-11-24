@@ -33,10 +33,7 @@ impl EditorHook {
                     return None;
                 }
                 let name = handles[i].as_deref().unwrap_or("?");
-                let source = e
-                    .get("args")
-                    .map(import_panel::source_of)
-                    .unwrap_or_default();
+                let source = e.get("args").map_or_default(import_panel::source_of);
                 Some(ImportRow {
                     entry: i,
                     caption: format!("{name}  ({ty})  {source}"),

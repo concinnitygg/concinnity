@@ -435,7 +435,9 @@ impl CloudState {
             pool.handle(),
             &vec![march_set_layout.handle(); 3 * frames],
         )?
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|three| [three[0], three[1], three[2]])
         .collect();
         let reflect_kernel = map_kernel(device, march_layout.handle(), &CLOUD_REFLECT, hot_reload)?;
@@ -980,7 +982,11 @@ impl CloudState {
 
 // Consecutive sets in pairs.
 fn pairs(sets: &[vk::DescriptorSet]) -> Vec<[vk::DescriptorSet; 2]> {
-    sets.chunks_exact(2).map(|p| [p[0], p[1]]).collect()
+    sets.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| [p[0], p[1]])
+        .collect()
 }
 
 fn map_kernel(

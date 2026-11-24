@@ -183,7 +183,7 @@ pub(super) fn setup(
     // Tearing support allows truly uncapped flip-model presentation; without it,
     // or with vsync, the swapchain is created without the flag.
     let allow_tearing = !vsync
-        && factory.cast::<IDXGIFactory5>().ok().is_some_and(|f5| {
+        && factory.cast::<IDXGIFactory5>().is_ok_and(|f5| {
             // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
             // its layout without pulling in the BOOL type.
             let mut data: i32 = 0;

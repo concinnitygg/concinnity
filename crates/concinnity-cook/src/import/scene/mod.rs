@@ -78,8 +78,7 @@ pub(crate) fn entries_from_scene(
     let ext = Path::new(source)
         .extension()
         .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+        .map_or_default(str::to_ascii_lowercase);
     match ext.as_str() {
         "fbx" => entries_from_fbx(
             &concinnity_host::store::source::resolve(source, root).to_string_lossy(),
@@ -753,9 +752,9 @@ fn framed_camera_entry(
 ) -> Option<serde_json::Value> {
     let (min, max) = aabb?;
     let center = [
-        0.5 * (min[0] + max[0]),
-        0.5 * (min[1] + max[1]),
-        0.5 * (min[2] + max[2]),
+        f32::midpoint(min[0], max[0]),
+        f32::midpoint(min[1], max[1]),
+        f32::midpoint(min[2], max[2]),
     ];
     let size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
     let radius = 0.5 * (size[0] * size[0] + size[1] * size[1] + size[2] * size[2]).sqrt();

@@ -512,8 +512,7 @@ pub(super) fn build_world_effects(
     };
     let planar_target_views: Vec<vk::ImageView> = planar_reflection
         .as_ref()
-        .map(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect())
-        .unwrap_or_default();
+        .map_or_default(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect());
 
     // The simulated oceans, built before the transparent pass that binds them.
     let water_sim = crate::vulkan::water_sim::OceanSim::for_world(

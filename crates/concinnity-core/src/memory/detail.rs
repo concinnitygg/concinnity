@@ -64,7 +64,7 @@ impl SizeClasses {
 // The class an allocation of `size` falls in.
 #[cfg(any(feature = "detail", test))]
 const fn class_of(size: usize) -> usize {
-    let bits = (usize::BITS - size.leading_zeros()) as usize;
+    let bits = size.bit_width() as usize;
     if bits >= CLASS_COUNT {
         CLASS_COUNT - 1
     } else {
@@ -133,13 +133,9 @@ mod imp {
             class.live.fetch_add(1, Relaxed);
         }
 
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "the update never declines, so it cannot fail"
-        )]
         pub(crate) fn record_free(&self, size: usize) {
             let live = &self.classes[class_of(size)].live;
-            let _ = live.fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_sub(1)));
+            live.update(Relaxed, Relaxed, |n| n.saturating_sub(1));
         }
 
         // A resize moves a block between classes without being an allocation of

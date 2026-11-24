@@ -182,11 +182,7 @@ fn the_name_prompt_reopens_on_a_name_it_cannot_use() {
         h.save();
         set_world_name(&mut h, typed);
         press_modal(&mut h, &mut world, "Save");
-        let message = h
-            .modal
-            .as_ref()
-            .map(|m| m.message.clone())
-            .unwrap_or_default();
+        let message = h.modal.as_ref().map_or_default(|m| m.message.clone());
         assert!(
             h.prompting() && message.contains(expect),
             "'{typed}' was rejected as: {message}"

@@ -160,8 +160,7 @@ pub(crate) fn apply_id_override(entries: &mut [serde_json::Value], id: &str) {
     for entry in entries {
         let suffix = entry_id(entry)
             .and_then(|existing| existing.rsplit_once('_'))
-            .map(|(_, s)| format!("_{s}"))
-            .unwrap_or_default();
+            .map_or_default(|(_, s)| format!("_{s}"));
         set_entry_id(entry, &format!("{id}{suffix}"));
     }
 }
@@ -530,8 +529,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(str::to_lowercase)
-        .unwrap_or_default();
+        .map_or_default(str::to_lowercase);
 
     // stem without extension, dots replaced with underscores (shared with
     // companion injection so a generated default asset is named identically)
@@ -973,8 +971,7 @@ mod tests {
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
-            .map(|s| s.replace('.', "_"))
-            .unwrap_or_default();
+            .map_or_default(|s| s.replace('.', "_"));
         // stem should not include the .ttf extension
         assert_eq!(stem, "JetBrainsMono-Regular");
         assert!(!stem.contains("ttf"));

@@ -86,6 +86,10 @@ mod tests {
         let copied = handle;
         // Spelled through the trait: the wrapper is `Copy`, so method-call
         // syntax would take the copy path and never reach this impl.
+        #[expect(
+            clippy::clone_on_copy,
+            reason = "the test exercises the hand-written Clone impl"
+        )]
         let cloned = Clone::clone(&handle);
         assert_eq!(handle.as_ctx().0, 7);
         assert_eq!(copied.as_ctx().0, 7);

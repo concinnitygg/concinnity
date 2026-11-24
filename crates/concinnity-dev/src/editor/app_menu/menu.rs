@@ -81,12 +81,7 @@ pub(crate) fn install(state: PanelMarks) {
 
 /// Take the choices made since the last call, in the order they were made.
 pub(crate) fn take_chosen() -> Vec<MenuCommand> {
-    BAR.with(|bar| {
-        bar.borrow()
-            .as_ref()
-            .map(AppMenu::take_chosen)
-            .unwrap_or_default()
-    })
+    BAR.with(|bar| bar.borrow().as_ref().map_or_default(AppMenu::take_chosen))
 }
 
 /// Bring the checkmarks in line with which panels are open. Cheap to call

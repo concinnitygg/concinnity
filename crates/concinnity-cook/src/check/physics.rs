@@ -67,8 +67,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnost
             .args
             .get("layers")
             .and_then(|v| v.as_array())
-            .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
-            .unwrap_or_default();
+            .map_or_default(|list| list.iter().filter_map(|v| v.as_str()).collect());
         if declared.len() > MAX_USER_LAYERS {
             errors.push(Diagnostic::asset(
                 "PhysicsConfig",

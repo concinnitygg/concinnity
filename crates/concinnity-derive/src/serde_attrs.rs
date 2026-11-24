@@ -134,8 +134,7 @@ pub(crate) fn apply_case(ident: &str, rule: Option<&str>) -> syn::Result<String>
             let mut chars = ident.chars();
             chars
                 .next()
-                .map(|c| c.to_ascii_lowercase().to_string() + chars.as_str())
-                .unwrap_or_default()
+                .map_or_default(|c| c.to_ascii_lowercase().to_string() + chars.as_str())
         }
         Some(other) => {
             return Err(syn::Error::new(

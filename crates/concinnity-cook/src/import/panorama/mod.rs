@@ -34,9 +34,7 @@ use crate::import::gltf_source::GltfDoc;
 /// file that fails to parse is not a panorama; the geometry import path
 /// reports the real parse error.
 pub fn file_is_panorama_sphere(path: &std::path::Path) -> bool {
-    GltfDoc::parse_file(path)
-        .ok()
-        .is_some_and(|doc| detect(&doc).is_ok())
+    GltfDoc::parse_file(path).is_ok_and(|doc| detect(&doc).is_ok())
 }
 
 // Decode the panorama image embedded in the `.glb` / `.gltf` at `path` into a

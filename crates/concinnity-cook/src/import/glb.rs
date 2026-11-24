@@ -69,14 +69,11 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
         .and_then(|v| {
             v.get("targetNames").map(|names| {
-                names
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .map(|n| n.as_str().unwrap_or("").to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                names.as_array().map_or_default(|a| {
+                    a.iter()
+                        .map(|n| n.as_str().unwrap_or("").to_string())
+                        .collect()
+                })
             })
         })
         .unwrap_or_default();
@@ -175,12 +172,10 @@ pub(crate) fn read_primitive_geometry(
         .collect();
     let uvs: Vec<[f32; 2]> = reader
         .read_tex_coords(0)
-        .map(|t| t.into_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|t| t.into_f32().collect());
     let colors: Vec<[f32; 3]> = reader
         .read_colors(0)
-        .map(|c| c.into_rgb_f32().collect())
-        .unwrap_or_default();
+        .map_or_default(|c| c.into_rgb_f32().collect());
 
     let mut vertices: Vec<VertexData> = Vec::with_capacity(positions.len());
     for (i, &pos) in positions.iter().enumerate() {
@@ -231,7 +226,7 @@ pub(crate) fn count_u16_chunks(indices: &[u32]) -> usize {
     let mut chunks = 0usize;
     let mut cur_len = 0usize;
     let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let new_in_tri = tri.iter().filter(|&&v| !seen.contains(&v)).count();
         if cur_len != 0 && cur_len + new_in_tri > limit {
             chunks += 1;
@@ -260,7 +255,7 @@ pub(crate) fn split_into_u16_chunks(
     let mut cur_indices: Vec<u16> = Vec::new();
     let mut remap: HashMap<u32, u16> = HashMap::new();
 
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let new_in_tri = tri.iter().filter(|&&v| !remap.contains_key(&v)).count();
         if !cur_verts.is_empty() && cur_verts.len() + new_in_tri > limit {
             chunks.push((
@@ -442,12 +437,10 @@ fn import_geometry(
             .collect();
         let uvs: Vec<[f32; 2]> = reader
             .read_tex_coords(0)
-            .map(|t| t.into_f32().collect())
-            .unwrap_or_default();
+            .map_or_default(|t| t.into_f32().collect());
         let colors: Vec<[f32; 3]> = reader
             .read_colors(0)
-            .map(|c| c.into_rgb_f32().collect())
-            .unwrap_or_default();
+            .map_or_default(|c| c.into_rgb_f32().collect());
 
         let base = u32::saturating_from(vertices.len());
 
@@ -456,8 +449,8 @@ fn import_geometry(
             .map(|(dp, dn, dt)| {
                 tangent_deltas_seen |= dt.is_some();
                 (
-                    dp.map(Iterator::collect).unwrap_or_default(),
-                    dn.map(Iterator::collect).unwrap_or_default(),
+                    dp.map_or_default(Iterator::collect),
+                    dn.map_or_default(Iterator::collect),
                 )
             })
             .collect();

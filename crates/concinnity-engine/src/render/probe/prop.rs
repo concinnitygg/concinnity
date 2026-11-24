@@ -99,7 +99,7 @@ impl PropProbeTarget {
 
 // The center of the local bounds `[local_min, local_max]` under `model`.
 fn local_center(local_min: [f32; 3], local_max: [f32; 3], model: [[f32; 4]; 4]) -> [f32; 3] {
-    let c: [f32; 3] = core::array::from_fn(|i| 0.5 * (local_min[i] + local_max[i]));
+    let c: [f32; 3] = core::array::from_fn(|i| f32::midpoint(local_min[i], local_max[i]));
     core::array::from_fn(|r| {
         model[0][r] * c[0] + model[1][r] * c[1] + model[2][r] * c[2] + model[3][r]
     })
@@ -170,7 +170,7 @@ pub struct PropProbeFrame {
 /// Where a probe riding a prop of world bounds `(lo, hi)` captures from: their
 /// center.
 pub fn probe_eye((lo, hi): crate::gfx::frustum::Aabb) -> [f32; 3] {
-    core::array::from_fn(|i| 0.5 * (lo[i] + hi[i]))
+    core::array::from_fn(|i| f32::midpoint(lo[i], hi[i]))
 }
 
 impl PropProbeFrame {

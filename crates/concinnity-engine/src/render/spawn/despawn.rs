@@ -54,8 +54,7 @@ fn despawn_collected(
         // Clone the slot list out so the immutable borrow ends before despawn.
         let slots: concinnity_core::memory::InlineVec<DrawIndex> = ctx
             .get::<RenderHandle>(entity)
-            .map(|h| h.draws.clone())
-            .unwrap_or_default();
+            .map_or_default(|h| h.draws.clone());
         for slot in slots {
             retire(RetiredSlot::Draw(slot));
         }

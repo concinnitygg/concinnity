@@ -136,11 +136,7 @@ fn item(row: &Row) -> UiItem {
             .map(|&(_, tone)| tone_color(tone)),
     };
     UiItem {
-        detail: row
-            .badge
-            .as_ref()
-            .map(|(b, _)| b.clone())
-            .unwrap_or_default(),
+        detail: row.badge.as_ref().map_or_default(|(b, _)| b.clone()),
         depth: u16::from(row.indent),
         dimmed: matches!(row.kind, RowKind::Note),
         color,

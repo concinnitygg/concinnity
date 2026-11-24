@@ -140,8 +140,7 @@ impl EditorHook {
                 .declared_fields()
                 .iter()
                 .find(|f| f.path == path)
-                .map(sdf::field_list::subjects)
-                .unwrap_or_default(),
+                .map_or_default(sdf::field_list::subjects),
             None => Vec::new(),
         }
     }

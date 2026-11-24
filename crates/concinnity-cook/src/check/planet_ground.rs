@@ -37,11 +37,7 @@ pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnos
     }
     let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
     for ground in grounds {
-        let tile = ground
-            .args
-            .get("tile")
-            .map(ToString::to_string)
-            .unwrap_or_default();
+        let tile = ground.args.get("tile").map_or_default(ToString::to_string);
         if let Some(first) = seen.insert(tile.clone(), &ground.id) {
             errors.push(Diagnostic::asset(
                 ground.asset_type.as_str(),

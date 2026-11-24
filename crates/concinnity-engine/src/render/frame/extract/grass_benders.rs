@@ -82,7 +82,11 @@ fn of_body(collider: &PropCollider, model: [[f32; 4]; 4], up: [f32; 3]) -> Grass
     };
     let (min, max) = transform_aabb(half.map(|h| -h), half, model);
     GrassBender {
-        base: [0.5 * (min[0] + max[0]), min[1], 0.5 * (min[2] + max[2])],
+        base: [
+            f32::midpoint(min[0], max[0]),
+            min[1],
+            f32::midpoint(min[2], max[2]),
+        ],
         radius: 0.5 * (max[0] - min[0]).max(max[2] - min[2]),
         height: max[1] - min[1],
     }
