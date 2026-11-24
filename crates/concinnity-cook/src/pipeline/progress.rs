@@ -11,7 +11,7 @@ pub enum BuildStage {
     Import,
     /// Asset payloads compiled, or reused from the build cache.
     Compile,
-    /// The blob files and `world-lock.json` written.
+    /// The blob files and `cook-lock.json` written.
     Write,
     /// Preview thumbnails rendered for the asset browser.
     Thumbnails,

@@ -153,6 +153,13 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
     assert_eq!(h.world_path, created.to_string_lossy());
     assert!(!h.untitled && !h.dirty);
     assert!(world_names(&h).contains(&"lobby".to_string()));
+    // The new file is an application, named as it was.
+    let text = std::fs::read_to_string(&created).unwrap();
+    assert_eq!(
+        concinnity_cook::authoring::world::declared_app_name(&text).as_deref(),
+        Some("lobby"),
+        "{text}"
+    );
 
     crate::test_support::isolate_state_dir();
 }

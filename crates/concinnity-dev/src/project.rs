@@ -83,11 +83,17 @@ pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.data_dir())
 }
 
-/// The project root authored content sits directly under: its world files, with
+/// The project root authored content sits directly under: its .jsonl files, with
 /// `assets/` beside them, and what a world's relative `Include` paths resolve
 /// against.
 pub(crate) fn content_root() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.content_root().to_path_buf())
+}
+
+/// The open project's content root, or the working directory for a session
+/// with no project.
+pub(crate) fn root_or_cwd() -> std::path::PathBuf {
+    content_root().unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 #[cfg(test)]

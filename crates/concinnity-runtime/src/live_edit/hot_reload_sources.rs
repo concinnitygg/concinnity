@@ -59,7 +59,7 @@ impl HotReloadSources {
 }
 
 // Snapshot each ProceduralMesh, with its interned name, before the mesh load
-// drains them. A world.jsonl reload diffs a freshly parsed entry against this
+// drains them. A .jsonl file reload diffs a freshly parsed entry against this
 // and regenerates the mesh when they differ, logging it by name.
 pub(crate) fn procedural_mesh_snapshot(
     ctx: &PipelineContext<'_>,

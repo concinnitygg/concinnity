@@ -1,4 +1,4 @@
-//! Validate a world JSONL without producing blob files.
+//! Validate a .jsonl file without producing blob files.
 //!
 //! Runs the validation front half of the build pipeline (load, expand, and
 //! the semantic checks in `crate::check`) and reports the outcome. Used by

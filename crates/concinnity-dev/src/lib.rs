@@ -65,4 +65,4 @@ concinnity_core::install_global_allocator!();
 // app (`cn mcp`).
 pub(crate) use editor::run_editor;
 pub(crate) use mcp::run as run_mcp;
-pub(crate) use run::run_world;
+pub(crate) use run::run_app;

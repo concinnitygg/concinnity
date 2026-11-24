@@ -1,50 +1,52 @@
-//! The `cn run` / `cn bench` paths: a world named with `-f` compiled fully in
-//! memory and hot-reloaded, or the discovered world cooked and its blobs played
-//! back, each with the debug server as its per-frame hook when the launch names
-//! a port.
+//! The `cn run` / `cn bench` paths: a file named with `-f` compiled fully in
+//! memory and hot-reloaded, or the project's application cooked and its blobs
+//! played back, each with the debug server as its per-frame hook when the
+//! launch names a port.
 
 use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
 use concinnity_host::store::paths::StateTree;
 use concinnity_runtime::Runtime;
 
-use crate::command::{Verbosity, discover_world_path, resolve_world_path};
+use crate::command::{Target, Verbosity};
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::frame_hook::FrameHook;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-// Where a run's world comes from.
+// Where a run's assets come from.
 #[derive(Debug, PartialEq, Eq)]
-enum WorldSource<'a> {
-    // The named world.jsonl, compiled in memory.
-    Named(&'a str),
-    // The blobs a cook left in the project's `data/`, with no world to cook.
+enum RunSource {
+    // The named file, compiled in memory.
+    Named(PathBuf),
+    // The blobs a cook left in the project's `data/`, with no application to
+    // cook.
     Cooked,
-    // The discovered world, cooked into `data/` before it plays.
-    CookFirst,
+    // The project's application, cooked into `data/` before it plays.
+    CookFirst(PathBuf),
 }
 
-impl<'a> WorldSource<'a> {
-    // A discovered world always cooks first, so the run plays what it says.
-    // Blobs play as they are only when there is no world to cook them from;
-    // with neither, the cook reports the missing world.
-    fn of(file: Option<&'a str>, discovered: bool, cooked: bool) -> Self {
-        match (file, discovered, cooked) {
-            (Some(file), _, _) => Self::Named(file),
-            (None, false, true) => Self::Cooked,
-            (None, _, _) => Self::CookFirst,
+impl RunSource {
+    // An application always cooks first, so the run plays what it says. Blobs
+    // play as they are only when there is no application to cook them from.
+    fn of(target: Target<'_>, cooked: bool) -> std::io::Result<Self> {
+        match target.find()? {
+            Some(path) if target.file.is_some() => Ok(Self::Named(path)),
+            Some(path) => Ok(Self::CookFirst(path)),
+            None if cooked => Ok(Self::Cooked),
+            None => Err(crate::command::no_application()),
         }
     }
 }
 
-// Whether a run from `source` is a development session: a world compiled from
+// Whether a run from `source` is a development session: a file compiled from
 // its source, or one a debug client drives.
-fn dev_loop(source: &WorldSource<'_>, args: &LaunchArgs) -> bool {
-    matches!(source, WorldSource::Named(_)) || args.debug_port.is_some()
+fn dev_loop(source: &RunSource, args: &LaunchArgs) -> bool {
+    matches!(source, RunSource::Named(_)) || args.debug_port.is_some()
 }
 
 /// Fix the graphics API this process renders with: the launch's, else the
 /// player's settings-menu choice in `tree`. Runs before anything cooks or
-/// probes the device, so a world's shaders are built for the API that draws them.
+/// probes the device, so an application's shaders are built for the API that
+/// draws them.
 pub(crate) fn select_graphics_api(args: &LaunchArgs, tree: &StateTree) {
     match args.graphics_api {
         Some(api) => {
@@ -56,48 +58,50 @@ pub(crate) fn select_graphics_api(args: &LaunchArgs, tree: &StateTree) {
     }
 }
 
-/// `cn run` and `cn bench`: run the world `file` names, compiled in memory,
-/// else cook the discovered world and play its blobs, else play the blobs
+/// `cn run` and `cn bench`: run the file `-f` names, compiled in memory, else
+/// cook the project's application and play its blobs, else play the blobs
 /// already in place.
-pub(crate) fn run_world(
-    file: Option<&str>,
+pub(crate) fn run_app(
+    target: Target<'_>,
     args: LaunchArgs,
     tree: &StateTree,
 ) -> std::io::Result<()> {
     select_graphics_api(&args, tree);
-    let source = WorldSource::of(
-        file,
-        discover_world_path().is_ok(),
+    let source = RunSource::of(
+        target,
         concinnity_host::store::blob::primary_in(&tree.data_dir()).is_file(),
-    );
+    )?;
     let launch = LaunchRequest {
         dev_loop: dev_loop(&source, &args),
         args,
     };
     match source {
-        WorldSource::Named(file) => {
+        RunSource::Named(path) => {
             concinnity_runtime::install_logging(launch.args.quiet);
-            let world_path = resolve_world_path(Some(file))?;
-            let hook = debug_hook(launch.args.debug_port, Some(&world_path))?;
-            run_interpreted(launch, &world_path, hook)
+            let hook = debug_hook(launch.args.debug_port, Some(&path))?;
+            run_interpreted(launch, &path, hook)
         }
-        WorldSource::Cooked => play_cooked(launch, tree),
-        WorldSource::CookFirst => {
-            crate::command::cook(None, Verbosity::Normal)?;
-            play_cooked(launch, tree)
+        RunSource::Cooked => play_cooked(launch, tree, None),
+        RunSource::CookFirst(path) => {
+            crate::command::cook_path(&path, Verbosity::Normal)?;
+            play_cooked(launch, tree, Some(&path))
         }
     }
 }
 
 // Play the blobs in `tree`'s `data/`: the runtime's own player, or with the
-// debug server as its hook when the launch names a port.
-fn play_cooked(launch: LaunchRequest, tree: &StateTree) -> std::io::Result<()> {
+// debug server as its hook, watching `source` for hot reload, when the launch
+// names a port.
+fn play_cooked(
+    launch: LaunchRequest,
+    tree: &StateTree,
+    source: Option<&Path>,
+) -> std::io::Result<()> {
     if launch.args.debug_port.is_none() {
         return concinnity_runtime::run(tree, launch);
     }
     concinnity_runtime::install_logging(launch.args.quiet);
-    let world_path = discover_world_path().ok();
-    let hook = debug_hook(launch.args.debug_port, world_path.as_deref())?;
+    let hook = debug_hook(launch.args.debug_port, source)?;
     let mut runtime = Runtime::new().in_tree(tree.clone()).with_launch(launch);
     runtime.load_blob()?;
     start_app(runtime, hook)
@@ -122,7 +126,7 @@ fn debug_hook(
     Ok(Some(hook))
 }
 
-// Interpreted entry point (`cn run -f`). Compiles world.jsonl fully in memory
+// Interpreted entry point (`cn run -f`). Compiles the file fully in memory
 // -- shaders, meshes, textures, and all -- then runs the app without reading
 // or writing any binary blob files.
 pub(crate) fn run_interpreted(
@@ -132,7 +136,7 @@ pub(crate) fn run_interpreted(
 ) -> std::io::Result<()> {
     let mut runtime = crate::project::runtime().with_launch(launch);
     *runtime.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
-        tracing::error!("Could not build world from {}: {e}", json_path.display());
+        tracing::error!("Could not build {}: {e}", json_path.display());
         e
     })?;
 
@@ -200,34 +204,44 @@ pub(crate) fn start_app(
 mod tests {
     use super::*;
 
-    // A named world compiles in memory; a discovered one cooks before it
-    // plays, even over existing blobs; blobs play as they are only with no
-    // world to cook.
+    // A named file compiles in memory; an application cooks before it plays,
+    // even over existing blobs; blobs play as they are only with no
+    // application to cook, and with neither the run reports the missing one.
     #[test]
-    fn a_runs_world_is_named_cooked_first_or_cooked() {
-        for (discovered, cooked) in [(false, false), (false, true), (true, false), (true, true)] {
-            assert_eq!(
-                WorldSource::of(Some("w.jsonl"), discovered, cooked),
-                WorldSource::Named("w.jsonl")
-            );
-        }
-        assert_eq!(WorldSource::of(None, true, true), WorldSource::CookFirst);
-        assert_eq!(WorldSource::of(None, true, false), WorldSource::CookFirst);
-        assert_eq!(WorldSource::of(None, false, true), WorldSource::Cooked);
-        assert_eq!(WorldSource::of(None, false, false), WorldSource::CookFirst);
+    fn a_run_is_named_cooked_first_or_cooked() {
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
+        crate::project::open(StateTree::at(dir.path()));
+        let file = dir.path().join("scene.jsonl");
+        std::fs::write(&file, "").unwrap();
+        let named = file.to_string_lossy().into_owned();
+        let none = (
+            RunSource::of(Target::default(), true).unwrap(),
+            RunSource::of(Target::default(), false).unwrap_err().kind(),
+        );
+        let app = dir.path().join("app.jsonl");
+        std::fs::write(&app, "[\"AppConfig\"]\n").unwrap();
+        let sources = [
+            RunSource::of(Target::file(&named), false).unwrap(),
+            RunSource::of(Target::default(), true).unwrap(),
+        ];
+        crate::test_support::isolate_state_dir();
+
+        assert_eq!(none, (RunSource::Cooked, std::io::ErrorKind::NotFound));
+        assert_eq!(sources, [RunSource::Named(file), RunSource::CookFirst(app)]);
     }
 
     #[test]
-    fn a_named_world_or_a_debug_port_makes_a_dev_session() {
+    fn a_named_file_or_a_debug_port_makes_a_dev_session() {
         let plain = LaunchArgs::NONE;
         let served = LaunchArgs {
             debug_port: Some(8777),
             ..LaunchArgs::NONE
         };
-        assert!(dev_loop(&WorldSource::Named("w.jsonl"), &plain));
-        assert!(!dev_loop(&WorldSource::Cooked, &plain));
-        assert!(!dev_loop(&WorldSource::CookFirst, &plain));
-        assert!(dev_loop(&WorldSource::Cooked, &served));
+        assert!(dev_loop(&RunSource::Named("w.jsonl".into()), &plain));
+        assert!(!dev_loop(&RunSource::Cooked, &plain));
+        assert!(!dev_loop(&RunSource::CookFirst("w.jsonl".into()), &plain));
+        assert!(dev_loop(&RunSource::Cooked, &served));
     }
 
     #[test]

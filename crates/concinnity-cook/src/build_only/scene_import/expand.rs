@@ -22,7 +22,7 @@ const EXPANSION: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Ex
 // Replace every SceneImport asset with the asset entries its source file
 // expands to. Generated names are prefixed with the import's (unique) asset
 // name, so they only meet a hand-authored asset when the user declared a patch
-// of a generated entry in world.jsonl; the authored fields win and the rest
+// of a generated entry in a .jsonl file; the authored fields win and the rest
 // keep the generated values (`shadow::merge_args`). The same name held by a
 // different type cannot be such a patch, so it stays a hard error. The framed
 // Camera3D is emitted only when the world declares no camera of its own (yours
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(report.generated[0].generated_by, "bistro");
     }
 
-    // The user copied the generated entry into world.jsonl to edit it: their
+    // The user copied the generated entry into a .jsonl file to edit it: their
     // copy wins, the generated one is dropped, and the skip is recorded so the
     // asset is still accounted for.
     #[test]

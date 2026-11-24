@@ -1,7 +1,7 @@
 //! Authored UI: the shorthands a world declares for overlay UI, and the typed
 //! expansion that turns each into the elements it stands for.
 //!
-//! A shorthand is written like any other asset, in world.jsonl or as a typed
+//! A shorthand is written like any other asset, in a .jsonl file or as a typed
 //! value handed to the world builder. Either way the cook replaces it with the
 //! `Screen`, `Sprite`, `TextLabel`, `HitRegion`, and `KeyBinding` entries that
 //! [`Expand::expand`] returns, so the runtime only ever sees those primitives.

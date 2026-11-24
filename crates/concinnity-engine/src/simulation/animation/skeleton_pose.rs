@@ -21,7 +21,7 @@ use crate::transform::Mat4;
 /// sits under every clip's morph track and `proportions` re-shapes every
 /// sampled pose before skinning.
 ///
-/// Not authored in world files: it has no `args`.
+/// Not authored in .jsonl files: it has no `args`.
 #[derive(Debug)]
 pub struct SkeletonPose {
     /// The `SkinnedMesh` resource this pose belongs to. Used by

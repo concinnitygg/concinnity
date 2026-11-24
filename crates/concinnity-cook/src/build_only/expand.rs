@@ -86,8 +86,8 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
 }
 
 /// One asset added to the world by an injection pass rather than authored or
-/// macro-expanded. Recorded in world-lock.json so the user can see every
-/// default and copy its entry into world.jsonl as an override.
+/// macro-expanded. Recorded in cook-lock.json so the user can see every
+/// default and copy its entry into a .jsonl file as an override.
 #[derive(Debug, Clone)]
 pub struct InjectedAsset {
     /// The injected asset's name.
@@ -103,7 +103,7 @@ pub struct InjectedAsset {
 
 /// One asset a macro expansion produced from an authored entry, recorded so
 /// listings can group generated assets by what produced them and offer to copy
-/// one into world.jsonl as an override.
+/// one into a .jsonl file as an override.
 #[derive(Debug, Clone)]
 pub struct GeneratedAsset {
     /// The generated asset's name.
@@ -116,7 +116,7 @@ pub struct GeneratedAsset {
 
 /// One generated asset the world declares itself: the authored entry is a
 /// sparse patch merged over the generated args (see `shadow::merge_args`), so a
-/// line in world.jsonl overrides exactly the fields it names and tracks the
+/// line in a .jsonl file overrides exactly the fields it names and tracks the
 /// expansion for the rest. Recorded so listings can show the override for what
 /// it is rather than leaving the generated asset unaccounted for.
 #[derive(Debug, Clone)]

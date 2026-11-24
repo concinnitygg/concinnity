@@ -88,7 +88,7 @@ fn hdr_extension_matches_case_insensitively() {
 
 #[test]
 fn unrelated_extension_is_not_an_asset_event() {
-    // `.jsonl` (the world file) is now a recognized asset event; pick an
+    // `.jsonl` (the file) is now a recognized asset event; pick an
     // extension nothing in the engine cares about as the negative case.
     let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(PathBuf::from("/tmp/world.txt"));
@@ -261,7 +261,7 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
 #[test]
 fn state_with_only_world_jsonl_still_spawns_a_watcher() {
     // World-only worlds (no Texture/LUT/EnvMap/Mesh/Skinned) still want
-    // their world.jsonl watched so Prop transform edits propagate.
+    // their .jsonl watched so Prop transform edits propagate.
     let world_path = concinnity_host::scratch::path("world_only.jsonl");
     let state = AssetHotReloadState::from_sources(
         HotReloadSources::default(),
@@ -505,7 +505,7 @@ fn procedural_mesh_reload_result_default_is_all_zero() {
 #[test]
 fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     // ProceduralMesh entries on their own (no textures, no LUTs, no meshes)
-    // need to keep the watcher alive: their trigger is the world.jsonl reload
+    // need to keep the watcher alive: their trigger is the .jsonl file reload
     // signal the watcher raises. Without a world_jsonl_path
     // there is nothing to subscribe to, so we declare one here.
     let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl");
@@ -621,7 +621,7 @@ fn creates_and_removes_route_like_modifies() {
 #[test]
 fn state_with_only_shaders_still_spawns_a_watcher() {
     // A world whose only reloadable sources are Shader files (no textures, no
-    // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
+    // meshes, no LUTs, no IBL, no .jsonl) still wants the watcher alive
     // so a shader save triggers the recompile.
     use concinnity_engine::render::world_load::source_maps::{
         ShaderFile, ShaderSourceEntry, ShaderSourceMap,
@@ -2216,7 +2216,7 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
 
 // Drive one `run_frame` over a fresh RecordingBackend with no fog pushed,
 // returning the effects, the backend (so callers can assert which dispatches
-// fired), and the fog the world.jsonl pass may have updated.
+// fired), and the fog the .jsonl file pass may have updated.
 fn drive_run_frame(
     state: &mut AssetHotReloadState,
 ) -> (
@@ -2308,7 +2308,7 @@ fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
         AssetHotReloadState::unwatched(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_world();
     let (_effects, backend, last_fog) = drive_run_frame(&mut state);
-    // The world.jsonl pass applied the enabled fog exactly once and recorded it
+    // The .jsonl pass applied the enabled fog exactly once and recorded it
     // into the caller's dedupe bookkeeping.
     assert_eq!(backend.fog_updates, 1);
     assert!(last_fog.is_some());

@@ -22,7 +22,7 @@ the shared foundation; `concinnity-runtime` is the std host that runs it.
 ## Terminology
 
 - **Component**: one typed entry in a world; both the authored schema (what
-  a `world.jsonl` declares) and the runtime data it bakes into.
+  a `.jsonl` file declares) and the runtime data it bakes into.
 - **Bake**: turning authored data into the runtime form; the decoders and
   shared payload types live here under `bake`.
 - **Blob (`.cnb`)**: the compiled binary container the runtime loads.

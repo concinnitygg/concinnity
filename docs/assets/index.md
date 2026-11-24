@@ -38,7 +38,7 @@
 - [Grass](Grass.md) - The look of a grass cover: individual blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
 - [Grid](Grid.md) - A scrolling grid of the items of a list in the app's [`UiStateValues`](UiStateValues.md), as many columns of cells as its width holds, drawing only the cells in view.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
-- [Include](Include.md) - Inlines the entries of another world file at this line.
+- [Include](Include.md) - Inlines the entries of another file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action.
 - [Layout](Layout.md) - Places overlay elements in a row, a column, or a stack, so a screen does not hand-position every piece.

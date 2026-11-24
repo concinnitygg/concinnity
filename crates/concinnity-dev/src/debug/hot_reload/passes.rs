@@ -1,4 +1,4 @@
-//! The world.jsonl / `ProceduralMesh` / `VolumetricFog` / world-loaded Shader stage
+//! The .jsonl / `ProceduralMesh` / `VolumetricFog` / world-loaded Shader stage
 //! reload passes: re-read the on-disk source, diff against the captured state,
 //! and apply changes through the backend. Each returns a small tally the drive
 //! logs.
@@ -20,7 +20,7 @@ pub(crate) struct FogReloadResult {
     pub updated: bool,
 }
 
-// Re-read `world.jsonl` and push the first declared `VolumetricFog` through
+// Re-read the `.jsonl` file and push the first declared `VolumetricFog` through
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
 // [`concinnity_engine::components::VolumetricFog::from_args`] (asset-side floors) then
@@ -118,7 +118,7 @@ pub(crate) struct ProceduralMeshReloadResult {
     pub failed: usize,
 }
 
-// Re-read `world.jsonl` and, for every captured `ProceduralMesh`, diff its
+// Re-read the `.jsonl` file and, for every captured `ProceduralMesh`, diff its
 // current generator args against the init-time snapshot. When the args
 // differ, re-run `compile_mesh_payload` + `deserialize_with_lods` to get
 // fresh vertices / indices / LOD alternates, then dispatch to

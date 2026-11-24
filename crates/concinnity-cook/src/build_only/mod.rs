@@ -1,6 +1,6 @@
 /// The build-time world surface: the expansion passes, preset loading, and the
 /// build front-half orchestrator (prepare_world = load + expand + validate).
-/// The authored world model it works on -- world.jsonl I/O, `WorldJsonlAsset`,
+/// The authored world model it works on -- .jsonl I/O, `WorldJsonlAsset`,
 /// and structural validation (`load_world`) -- is `crate::authoring::world`.
 pub mod preset;
 
@@ -33,13 +33,13 @@ pub use shadow::merge_args;
 
 pub(crate) use expand::expand_world;
 pub use expand::{GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world_from_str};
-/// A world.jsonl that has been loaded, structurally validated, expanded, and
+/// A .jsonl file that has been loaded, structurally validated, expanded, and
 /// semantically checked: everything the compile stage needs, computed once.
 pub struct LoadedWorld {
     /// The same assets as typed entries, consumed by the build pipeline.
     pub assets: Vec<WorldJsonlAsset>,
     /// Assets added by the injection passes (companions, engine defaults),
-    /// recorded in world-lock.json so the user can see and override them.
+    /// recorded in cook-lock.json so the user can see and override them.
     pub injected: Vec<InjectedAsset>,
     /// Assets a macro expansion produced, paired with the authored asset that
     /// produced them, so listings can group them by source.
@@ -47,7 +47,7 @@ pub struct LoadedWorld {
     /// Generated assets the world declares a patch of; the merged result is in
     /// `assets` and each record carries the pre-merge generated args.
     pub shadowed: Vec<ShadowedAsset>,
-    /// The handles of the entries in the world file itself (pre-expansion),
+    /// The handles of the entries in the file itself (pre-expansion),
     /// for provenance listings: each `$id`, else the entry's label.
     pub authored: Vec<String>,
 }

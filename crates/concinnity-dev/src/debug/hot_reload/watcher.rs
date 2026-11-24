@@ -172,14 +172,14 @@ pub(super) fn spawn_watcher(
 
 // The reload pass a filesystem change kicks. Each save is routed to the
 // narrowest pass that can serve it: the backend asset payloads (textures, IBL,
-// meshes, skinned, animations) do not live in the world JSONL, which carries
+// meshes, skinned, animations) do not live in the .jsonl file, which carries
 // only Prop transforms and the asset-graph topology, and a shader save needs a
 // recompile plus a pipeline rebuild but no texture or mesh decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReloadKind {
     // `.hlsl`: recompile the Shaders and SdfVolumes reading the file.
     Shaders,
-    // `.jsonl`, the world file.
+    // `.jsonl`: the running file or one it includes.
     World,
     // `.md`: re-expand the world's StoryImports and hand the fresh graphs to
     // the running story system.

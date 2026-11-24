@@ -1,13 +1,13 @@
 # concinnity-cook
 
 The build side of the [Concinnity](https://crates.io/crates/concinnity)
-engine: the authored world model, validation, and the asset cook pipeline
-that bakes a world into the binary blobs the runtime reads.
+engine: the authored asset model, validation, and the asset cook pipeline
+that bakes an application into the binary blobs the runtime reads.
 
 The stages read in order: `authoring` is the authored model and the type
 vocabulary it is written in, `build_only` expands the types that never
 reach a blob (with `ui` expanding the UI shorthands among them), `check`
-validates the expanded world, and the compile path turns what is left
+validates the expanded assets, and the compile path turns what is left
 into payloads (`import` reads artist-supplied source files, `codec`
 decodes the container and image formats they carry, `compile` produces
 each asset's payload, and `pipeline`/`blob`/`cache` drive the run).
@@ -24,7 +24,8 @@ each asset's payload, and `pipeline`/`blob`/`cache` drive the run).
 
 ## Terminology
 
-- **World**: the authored `world.jsonl`, a list of typed asset entries.
+- **Asset file**: an authored `.jsonl` file, a list of typed asset entries.
+  One that declares an `AppConfig` is an application.
 - **Expansion**: build-time rewriting that resolves build-only types into
   the runtime vocabulary.
 - **Blob (`.cnb`)**: the compiled binary container the runtime loads.

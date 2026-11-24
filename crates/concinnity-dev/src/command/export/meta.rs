@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use super::AppMeta;
 
-// Read the app metadata a world file declares. The build already validated the
+// Read the app metadata a .jsonl file declares. The build already validated the
 // world, so an error here is mapped plainly rather than reported per asset.
 pub(super) fn world_app_meta(
     source: WorldSource<'_>,

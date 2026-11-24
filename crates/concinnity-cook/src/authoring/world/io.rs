@@ -1,7 +1,7 @@
-// world.jsonl I/O: parsing, serialization, and file-patch utilities. This is
+// .jsonl I/O: parsing, serialization, and file-patch utilities. This is
 // authoring input handling -- the compile pipeline and the editor read and
-// rewrite world.jsonl through here. The shipped runtime plays compiled blobs
-// and never touches world.jsonl, so this lives in the build crate, not core.
+// rewrite .jsonl files through here. The shipped runtime plays compiled blobs
+// and never touches a .jsonl file, so this lives in the build crate, not core.
 
 use super::identity::{ID_KEY, entry_handles, is_label_of};
 use super::line::{parse_world_jsonl, write_world_jsonl};
@@ -107,7 +107,7 @@ where
     })
 }
 
-/// Read every entry's handle from world.jsonl without a full parse, for error
+/// Read every entry's handle from a .jsonl file without a full parse, for error
 /// messages: its `$id`, else its `<Type>#<ordinal>` label, counted over the
 /// world with its includes resolved against the content root `root`.
 ///

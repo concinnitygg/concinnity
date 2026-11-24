@@ -5,7 +5,7 @@ use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::world::{entry_handles, parse_world_jsonl};
 use concinnity_cook::build_only::include::resolve_includes;
 
-use crate::command::resolve_world_path;
+use crate::command::Target;
 
 // Authoring metadata for a type name, whichever group of the registry it is in.
 fn registration_for(type_str: &str) -> Option<concinnity_cook::authoring::registry::Registration> {
@@ -22,8 +22,8 @@ pub(crate) fn provenance(loaded: &concinnity_cook::build_only::LoadedWorld, name
 
 /// Print every declared asset. `expanded` includes the assets the build
 /// injects; `systems` adds the system manifest the world resolves to.
-pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::Result<()> {
-    let json_path = resolve_world_path(json_path)?;
+pub(crate) fn list(target: Target<'_>, expanded: bool, systems: bool) -> std::io::Result<()> {
+    let json_path = target.resolve()?;
 
     let content = std::fs::read_to_string(&json_path).map_err(|e| {
         tracing::error!("Could not read {}: {}", json_path.display(), e);
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn list_with_systems_flag_is_ok() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
-        list(Some(&path), false, true).unwrap();
+        list(Target::file(&path), false, true).unwrap();
     }
 
     fn loaded_world_fixture() -> concinnity_cook::build_only::LoadedWorld {
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn list_of_an_empty_world_is_ok() {
         let (_dir, path) = write_world("");
-        list(Some(&path), false, false).unwrap();
+        list(Target::file(&path), false, false).unwrap();
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
             "[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n",
             "[\"GraphicsConfig\",{}]\n",
         ));
-        list(Some(&path), false, false).unwrap();
+        list(Target::file(&path), false, false).unwrap();
     }
 
     #[test]
@@ -434,27 +434,27 @@ mod tests {
             .join("absent.jsonl")
             .to_string_lossy()
             .into_owned();
-        let err = list(Some(&path), false, false).unwrap_err();
+        let err = list(Target::file(&path), false, false).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
     fn list_with_invalid_json_errors() {
         let (_dir, path) = write_world("{ not json\n");
-        let err = list(Some(&path), false, false).unwrap_err();
+        let err = list(Target::file(&path), false, false).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
     fn list_expanded_runs_the_build_front_half() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
-        list(Some(&path), true, false).unwrap();
+        list(Target::file(&path), true, false).unwrap();
     }
 
     #[test]
     fn list_expanded_rejects_an_unknown_asset_type() {
         let (_dir, path) = write_world("[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n");
-        assert!(list(Some(&path), true, false).is_err());
+        assert!(list(Target::file(&path), true, false).is_err());
     }
 
     // An unreadable world is reported rather than panicking. A directory stands
@@ -464,7 +464,7 @@ mod tests {
     fn list_of_an_unreadable_world_surfaces_the_read_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_string_lossy().into_owned();
-        assert!(list(Some(&path), false, false).is_err());
+        assert!(list(Target::file(&path), false, false).is_err());
     }
 
     // An empty world expands to nothing (injection is conditional on what the
@@ -472,14 +472,14 @@ mod tests {
     #[test]
     fn list_expanded_of_an_empty_world_is_ok() {
         let (_dir, path) = write_world("");
-        list(Some(&path), true, false).unwrap();
+        list(Target::file(&path), true, false).unwrap();
     }
 
     // Likewise the schedule: with nothing declared, no system gates in.
     #[test]
     fn list_systems_of_an_empty_world_is_ok() {
         let (_dir, path) = write_world("");
-        list(Some(&path), false, true).unwrap();
+        list(Target::file(&path), false, true).unwrap();
     }
 
     #[test]

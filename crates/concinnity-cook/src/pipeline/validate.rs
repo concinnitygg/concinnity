@@ -41,7 +41,7 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
     let _build = asset_id::BuildScope::fresh();
     let registered = RegisteredType::parse(asset_type);
 
-    // Build-only types are valid in world.jsonl; they are consumed by expansion
+    // Build-only types are valid in a .jsonl file; they are consumed by expansion
     // functions before the runtime asset registry sees them.
     if registered.is_some_and(|t| t.registration().origin == AssetOrigin::BuildOnly) {
         return Ok(());
@@ -68,7 +68,7 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
     Ok(())
 }
 
-/// Validate world JSONL without running compilation. Runs the full front half
+/// Validate a .jsonl file without running compilation. Runs the full front half
 /// of the pipeline (load, expand, semantic checks) plus a per-asset type/args
 /// resolution, but stops short of compiling payloads: intended for fast
 /// server-side pre-deploy checks where shader compilation is not needed.

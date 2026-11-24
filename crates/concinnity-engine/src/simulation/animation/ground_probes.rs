@@ -23,7 +23,7 @@ pub struct GroundProbe {
 /// rays with raycast hits. The one-frame-stale ray origin is invisible at
 /// animation rates.
 ///
-/// Not authored in world files: it has no `args`.
+/// Not authored in .jsonl files: it has no `args`.
 #[derive(Debug, Clone, Default)]
 pub struct GroundProbes {
     /// The `SkinnedMesh` resource whose IK chains these probes serve.

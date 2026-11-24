@@ -1,4 +1,4 @@
-// Patch-merge shadowing: an authored world.jsonl line with the same name and
+// Patch-merge shadowing: an authored .jsonl line with the same name and
 // type as a generated or injected asset is a sparse patch over it. The
 // authored args win per key; keys the patch omits keep the generated values,
 // so an instance tracks its template except where it overrides.

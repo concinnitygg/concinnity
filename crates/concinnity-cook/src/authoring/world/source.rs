@@ -11,7 +11,7 @@ use std::path::Path;
 /// with neither can only name absolute paths.
 #[derive(Debug, Clone, Copy)]
 pub struct WorldSource<'a> {
-    /// The world file's text.
+    /// The file's text.
     pub text: &'a str,
     /// The file the text was read from.
     pub file: Option<&'a Path>,

@@ -1,10 +1,10 @@
-//! The world.jsonl path a dev session is running, shared between the host that
+//! The .jsonl path a dev session is running, shared between the host that
 //! switches worlds and the hot-reload driver that watches the file.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-// A cloneable handle to the session's world.jsonl path. Every clone sees the
+// A cloneable handle to the session's .jsonl path. Every clone sees the
 // latest `set`, so a driver re-arming after a world switch watches the new file.
 #[derive(Clone, Debug)]
 pub(crate) struct WorldPathHandle(Arc<Mutex<PathBuf>>);

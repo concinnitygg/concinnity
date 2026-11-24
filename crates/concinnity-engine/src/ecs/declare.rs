@@ -28,7 +28,7 @@ pub const EXTENSION_COMPONENT_BASE: u8 = crate::ecs::ComponentTag::COUNT;
 /// operation works on it: `push`, `insert`, `get`, `get_mut`, `remove`,
 /// `query`, `query_mut`, `join2`, `changed_rows`, and the sweep a `despawn`
 /// runs. A type declared here is runtime-only: it has no authoring name and no
-/// blob record, so it cannot be written in a world file or survive a save.
+/// blob record, so it cannot be written in a .jsonl file or survive a save.
 ///
 /// The types are numbered by position, from
 /// [`EXTENSION_COMPONENT_BASE`]. **One invocation covers an application's whole

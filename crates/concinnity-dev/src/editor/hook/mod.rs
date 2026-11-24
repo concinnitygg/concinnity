@@ -409,7 +409,7 @@ impl EditorHook {
         Self {
             world_path_handle: WorldPathHandle::new(world_path.as_str()),
             world_path,
-            content_root: worlds::files::content_root(),
+            content_root: crate::project::root_or_cwd(),
             entries_from: None,
             history: History::default(),
             baseline: entries.clone(),

@@ -1,6 +1,6 @@
 //! concinnity-cook: the build side, kept out of the runtime foundation so that
 //! foundation carries none of the build-only dependencies (fbxcel, sha2,
-//! kira). This crate turns world.jsonl + source files into the binary
+//! kira). This crate turns `.jsonl` files and their sources into the binary
 //! blobs the runtime reads; it depends on concinnity-engine and core has no edge
 //! back into it.
 //!
@@ -39,7 +39,7 @@ pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 pub(crate) mod asset;
 pub use asset::api as asset_api;
-/// The authored world model: world.jsonl parsing and I/O, the type vocabulary,
+/// The authored world model: .jsonl parsing and I/O, the type vocabulary,
 /// the asset cross-reference metadata, the typed spec vocabulary, and the
 /// build-only args schemas. Everything the cook reads before it compiles
 /// anything.

@@ -32,7 +32,7 @@ fn main() -> std::process::ExitCode {
 }
 
 // The unsplit tree rooted at the directory the command was run from: the
-// authored `assets/` and world files, and everything a build or run writes,
+// authored `assets/` and .jsonl files, and everything a build or run writes,
 // side by side. Resolved once so every subcommand addresses the same tree.
 //
 // Falls back to the working directory as a relative path when it cannot be
@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(tree.writable_root(), root);
         assert_eq!(tree.assets_dir(), root.join("assets"));
         assert_eq!(tree.data_dir(), root.join("data"));
-        assert_eq!(tree.world_lock_path(), root.join("world-lock.json"));
+        assert_eq!(tree.cook_lock_path().parent(), Some(root));
         assert_eq!(tree.settings_path(), root.join("settings"));
         assert_eq!(tree.crashes_dir(), root.join("crashes"));
         assert_eq!(tree.editor_session_path(), root.join("editor"));

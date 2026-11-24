@@ -18,7 +18,7 @@ pub const MAX_JOINTS: usize = 64;
 /// reserve room for, past the streamed-chunk window.
 ///
 /// Exhausting it takes 129+ live clones at once, which only runtime spawn or
-/// `world.jsonl` hot-reload churn reaches; the backend's
+/// `.jsonl` hot-reload churn reaches; the backend's
 /// `clone_static_draw_object` errors once the reserve is full (see
 /// [`runtime_reserve_full`]).
 pub const MAX_CLONE_DRAWS: usize = 128;

@@ -8,6 +8,8 @@
 //! store's entry for it. Both switches run behind the confirmation dialog
 //! whenever the open world has unsaved edits.
 
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::entry_type_name;
 use concinnity_engine::components::UiEvent;
 use concinnity_engine::ecs::World;
 use std::path::Path;
@@ -250,8 +252,25 @@ impl EditorHook {
         self.world_path_handle.set(path.as_str());
         self.world_path = path;
         self.untitled = false;
+        self.declare_app(&name);
         self.save();
         self.refresh_worlds();
+    }
+
+    // Make the file the editor is starting an application, named `name`, unless
+    // its entries already hold an AppConfig: the cook takes at most one.
+    fn declare_app(&mut self, name: &str) {
+        let app_config = RegisteredType::AppConfig.as_str();
+        if self
+            .entries
+            .iter()
+            .any(|e| entry_type_name(e) == Some(app_config))
+        {
+            return;
+        }
+        self.entries
+            .push(serde_json::json!({"type": app_config, "args": {"name": name}}));
+        self.entries.move_entry(self.entries.len() - 1, 0);
     }
 
     // Ask before removing a world file: it is the authored source, and nothing

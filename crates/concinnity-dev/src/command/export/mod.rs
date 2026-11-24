@@ -1,6 +1,6 @@
-//! `cn export`: package a built world into a distributable app. Builds the world
-//! (reusing the normal build cache), then assembles a self-contained bundle: the
-//! runtime player executable beside the world's compiled `data/` blobs, in a
+//! `cn export`: package one application for distribution. Builds it (reusing
+//! the normal build cache), then assembles a self-contained bundle: the
+//! runtime player executable beside the application's compiled `data/` blobs, in a
 //! flat layout the shipped runtime resolves relative to its own executable. On
 //! macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
 //! elsewhere it is a folder. The result is archived to a `.zip` by default.
@@ -24,7 +24,7 @@ use concinnity_cook::platform::PlatformSet;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use crate::command::resolve_world_path;
+use crate::command::Target;
 
 use files::{copy_blobs, make_executable, reset_dir, zip_tree};
 use macos::{build_default_icns, build_dmg, build_icns, info_plist};
@@ -42,7 +42,7 @@ struct AppMeta {
     identifier: String,
     // Version string (macOS CFBundle[Short]Version).
     version: String,
-    // Source icon path, resolved under the world's root, if the AppConfig asset
+    // Source icon path, resolved under its file's root, if the AppConfig asset
     // set one.
     icon: Option<PathBuf>,
 }
@@ -59,12 +59,12 @@ pub(crate) enum BundleFormat {
 
 /// What [`export`] packages and where it writes the result.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ExportOptions {
-    /// The world JSONL to build; the discovered `world.jsonl` when `None`.
-    pub world: Option<String>,
-    /// Overrides the application name the world's `AppConfig` declares.
+pub(crate) struct ExportOptions<'a> {
+    /// The file to build: the one `-f` names, else the application.
+    pub target: Target<'a>,
+    /// Overrides the application name the `AppConfig` declares.
     pub name: Option<String>,
-    /// Overrides the application version the world's `AppConfig` declares.
+    /// Overrides the application version the `AppConfig` declares.
     pub version: Option<String>,
     /// The target platform; must name this host when set.
     pub platform: Option<String>,
@@ -76,11 +76,11 @@ pub(crate) struct ExportOptions {
     pub dmg: bool,
 }
 
-/// Package a built world into a distributable bundle: the player binary and the
+/// Package a built application into a distributable bundle: the player binary and the
 /// blob, written to `options.out` as a zip or a directory.
-pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
+pub(crate) fn export(options: &ExportOptions<'_>) -> io::Result<()> {
     let ExportOptions {
-        world,
+        target,
         name,
         version,
         platform,
@@ -106,9 +106,9 @@ pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
     let runtime_platforms = read_runtime_platforms(&runtime)?;
     let targets = verify_runtime_backend(runtime_platforms, crate::cook_targets())?;
 
-    // Build the world like `cn cook` (validates, compiles, writes the blobs +
-    // world-lock.json, reuses the build cache), for the player's backends.
-    let world_path = resolve_world_path(world.as_deref())?;
+    // Build the application like `cn cook` (validates, compiles, writes the
+    // blobs + cook-lock.json, reuses the build cache), for the player's backends.
+    let world_path = target.resolve()?;
     crate::authoring::build_world_file_for(&world_path, targets)?;
 
     let content = fs::read_to_string(&world_path)?;

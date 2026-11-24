@@ -87,7 +87,7 @@ impl WorldBuilder {
         self
     }
 
-    /// Declare every entry of world file text, one `["Type", {args}]` per
+    /// Declare every entry of file text, one `["Type", {args}]` per
     /// line, in file order after the assets already declared. An entry
     /// without a `$id` is listed by its anonymous label, such as `Prop#0`.
     pub fn add_jsonl(&mut self, text: &str) -> &mut Self {
@@ -107,7 +107,7 @@ impl WorldBuilder {
         self
     }
 
-    /// Lay world file text over the assets already declared. An entry with
+    /// Lay file text over the assets already declared. An entry with
     /// the `$id` of a declared asset, or with no `$id` and the type of an
     /// anonymous one, patches the first such asset: objects merge field by
     /// field, and anything else, `null` included, replaces the field. Any

@@ -148,7 +148,7 @@ impl Element {
     /// screen's generated one.
     ///
     /// A field that references another asset holds a resolved handle rather
-    /// than a name, so a value with one is better written in world.jsonl or
+    /// than a name, so a value with one is better written in a .jsonl file or
     /// declared on its own and pointed at the screen by its `screen` field.
     ///
     /// # Errors

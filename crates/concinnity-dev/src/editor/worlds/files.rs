@@ -74,12 +74,6 @@ pub(crate) fn newest(dir: Option<&Path>) -> Option<WorldFile> {
     list(dir).into_iter().next()
 }
 
-// The root the editor resolves and writes `Include` paths against: the open
-// project's, or the working directory when none is open.
-pub(crate) fn content_root() -> PathBuf {
-    crate::project::content_root().unwrap_or_else(|| PathBuf::from("."))
-}
-
 // Read a world file's authored entries with its includes resolved in place
 // against `root`, or the reason it could not be read (shown on the panel's
 // status line). A file

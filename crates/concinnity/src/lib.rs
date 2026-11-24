@@ -284,7 +284,7 @@ pub mod system {
     //! ```
     //!
     //! A declared component is runtime-only: it has no authoring name and no blob
-    //! record, so it cannot be written in a world file or survive a save. Seed it
+    //! record, so it cannot be written in a .jsonl file or survive a save. Seed it
     //! from Rust, with [`World::spawn`](crate::World::spawn) and
     //! [`World::insert`](crate::World::insert) before the run or
     //! [`PipelineContext::push`] during it.

@@ -12,7 +12,7 @@ use crate::ecs::SkinnedMeshHandle;
 /// parameter names are compiled away at build time, so nothing resolves them
 /// at runtime.
 ///
-/// Not authored in world files: it has no `args`.
+/// Not authored in .jsonl files: it has no `args`.
 #[derive(Debug, Clone)]
 pub struct AnimationParams {
     /// The `SkinnedMesh` resource whose graph these parameters drive.

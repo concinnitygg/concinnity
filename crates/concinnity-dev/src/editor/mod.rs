@@ -1,8 +1,8 @@
-//! The `cn edit` run path. Like `cn run -f`, the editor compiles world.jsonl in
+//! The `cn edit` run path. Like `cn run -f`, the editor compiles .jsonl in
 //! memory: the session boots from the authored entries, not from the blobs a
-//! build left under the state tree, so what opens is always what the world file
+//! build left under the state tree, so what opens is always what the file
 //! says. It sets its own UI up in that world and persists edits by writing
-//! world.jsonl. The blobs are refreshed only by an explicit build (`cn cook`,
+//! .jsonl. The blobs are refreshed only by an explicit build (`cn cook`,
 //! or the console's cook command). An optional debug port reuses the existing
 //! debug server so an MCP client can inspect and drive a session.
 //!
@@ -120,7 +120,7 @@ mod visibility;
 // The Worlds panel and the start screen it becomes with no world open.
 mod worlds;
 
-use concinnity_cook::authoring::world::WORLD_JSONL;
+use concinnity_cook::authoring::world::APP_JSONL;
 use concinnity_engine::ecs::World;
 use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
 use concinnity_engine::shutdown::ShutdownToken;
@@ -149,7 +149,7 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     let console_sink = panels::console::ConsoleSink::default();
     panels::console::install_tracing(console_sink.clone(), launch.args.quiet);
 
-    // Resolve the edit target -- the world.jsonl where readable names live and
+    // Resolve the edit target -- the .jsonl file where readable names live and
     // where SAVE writes -- and whether the session opens on the Worlds panel
     // instead of a world.
     let (world_path, pick_a_world) = resolve_edit_target(json_path);
@@ -161,7 +161,7 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     } else {
         let entries = worlds::files::read_entries(
             std::path::Path::new(&world_path),
-            &worlds::files::content_root(),
+            &crate::project::root_or_cwd(),
         )
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         (entries, None)
@@ -170,7 +170,7 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     // Bring up a renderable world by compiling those entries, seeding a render
     // marker when they alone would not render.
     let mut runtime = crate::project::runtime().with_launch(launch);
-    let root = worlds::files::content_root();
+    let root = crate::project::root_or_cwd();
     let origin = entry_list::Origin {
         world: std::path::Path::new(&world_path),
         root: &root,
@@ -229,14 +229,14 @@ fn start_screen_pick() -> Option<String> {
 // Where the editor puts a world nobody has saved yet.
 pub(crate) fn unsaved_world_path() -> String {
     crate::project::content_root().map_or_else(
-        || WORLD_JSONL.to_string(),
-        |dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned(),
+        || APP_JSONL.to_string(),
+        |dir| dir.join(APP_JSONL).to_string_lossy().into_owned(),
     )
 }
 
 // Populate `runtime` with a renderable world for editing, compiled from the
 // authored entries in memory. Nothing under the build root is read: the blobs
-// there are refreshed only by an explicit build, so they may lag the world file
+// there are refreshed only by an explicit build, so they may lag the file
 // the editor is opening.
 fn boot_world(
     runtime: &mut Runtime,
@@ -249,7 +249,7 @@ fn boot_world(
     Ok(())
 }
 
-// Compile world.jsonl content into a world plus template baselines, seeding a
+// Compile .jsonl content into a world plus template baselines, seeding a
 // Window when it would not render. Boot and every rebuild come through here.
 fn build_renderable(
     jsonl: &str,
@@ -354,9 +354,9 @@ mod tests {
 
     // A renderable authored world, plus a label whose content identifies which
     // compile a booted world came from.
-    // Boot `entries` as the open project's world file.
+    // Boot `entries` as the open project's file.
     fn boot(runtime: &mut Runtime, entries: Vec<serde_json::Value>) -> std::io::Result<()> {
-        let root = worlds::files::content_root();
+        let root = crate::project::root_or_cwd();
         let world = root.join("world.jsonl");
         let origin = entry_list::Origin {
             world: &world,
@@ -398,7 +398,11 @@ mod tests {
         assert!(runtime.world().renders());
         assert_eq!(booted_label(&runtime), "authored");
         assert!(
-            !build_root.join("data").exists() && !build_root.join("world-lock.json").exists(),
+            !build_root.join("data").exists()
+                && !crate::project::tree()
+                    .expect("the test opened a project")
+                    .cook_lock_path()
+                    .exists(),
             "boot writes no blobs and no lock"
         );
 
@@ -415,7 +419,7 @@ mod tests {
         let build_root = open_project(dir.path());
 
         // An explicit build, as `cn cook` runs it, over the stale world.
-        let world_path = dir.path().join(WORLD_JSONL);
+        let world_path = dir.path().join(APP_JSONL);
         std::fs::write(
             &world_path,
             write_world_jsonl(&renderable_entries("stale")).unwrap(),
@@ -477,8 +481,8 @@ mod tests {
         assert_eq!(path, unsaved_world_path());
     }
 
-    // With no world to discover, the editor opens an unsaved one at the
-    // project root, so the first save lands where a build looks.
+    // With no file named, the editor's unsaved one sits at the project root,
+    // where the application `init` starts would.
     #[test]
     fn an_unsaved_world_is_named_at_the_project_root() {
         // Reading the session's project; opening one is what the guard covers.
@@ -486,9 +490,6 @@ mod tests {
         crate::test_support::isolate_state_dir();
 
         let root = crate::project::content_root().expect("the harness opened a project");
-        assert_eq!(
-            unsaved_world_path(),
-            root.join(WORLD_JSONL).to_string_lossy()
-        );
+        assert_eq!(unsaved_world_path(), root.join(APP_JSONL).to_string_lossy());
     }
 }

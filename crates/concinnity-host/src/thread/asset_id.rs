@@ -1,5 +1,5 @@
 //! Build-time name -> dense id interner and resource-handle map. Asset names
-//! declared in world.jsonl are interned to an `AssetId` in declaration order;
+//! declared in a .jsonl file are interned to an `AssetId` in declaration order;
 //! the blob and the runtime carry only the integer, so every cross-reference
 //! lookup is an integer compare.
 //!
@@ -203,7 +203,7 @@ pub fn name_of(id: AssetId) -> Option<String> {
 }
 
 /// Snapshot every interned name on the current thread, indexed by `AssetId`.
-/// Because ids are assigned in world.jsonl declaration order, `table[id]` is
+/// Because ids are assigned in a .jsonl file declaration order, `table[id]` is
 /// the declared name for that id. Used by the editor's debug module to remap
 /// runtime `AssetId`s back to their declared names.
 pub fn name_table() -> Vec<String> {
@@ -222,7 +222,7 @@ pub fn prime_name_table(pairs: &[(u32, String)]) -> bool {
 }
 
 /// Pre-intern a batch of names in order so identity ids are dense and follow
-/// world.jsonl declaration order.
+/// .jsonl declaration order.
 pub fn intern_all(names: &[&str]) {
     ASSIGNED.with(|a| a.set(true));
     with_table(|interner| {

@@ -27,7 +27,7 @@ implemented on some rendering backends and not others, that is stated inline.
 4. [Data model](#4-data-model)
 5. [Authoring format](#5-authoring-format)
 6. [Cook pipeline](#6-cook-pipeline)
-7. [Compiled world format](#7-compiled-world-format)
+7. [Compiled format](#7-compiled-format)
 8. [State tree on disk](#8-state-tree-on-disk)
 9. [Start-up sequence](#9-start-up-sequence)
 10. [Runtime execution model](#10-runtime-execution-model)
@@ -57,7 +57,7 @@ implemented on some rendering backends and not others, that is stated inline.
 
 ## 1. Overview
 
-Concinnity is an asset-driven world engine. A world is a declarative list of
+Concinnity is an asset-driven engine. An application is a declarative list of
 assets describing what exists (cameras, lights, geometry, materials, UI,
 behaviors, audio) and the engine runs it. Building an application is mostly a
 matter of saying what is in it.
@@ -66,8 +66,8 @@ The lifecycle has three phases:
 
 ```mermaid
 flowchart LR
-    A["world.jsonl<br/>+ source assets"] -->|build| B["cook pipeline"]
-    B --> C["compiled blobs<br/>+ world-lock.json"]
+    A[".jsonl assets<br/>+ source files"] -->|build| B["cook pipeline"]
+    B --> C["compiled blobs<br/>+ cook-lock.json"]
     C -->|run| D["runtime"]
     C -->|export| E["distributable bundle"]
     E --> F["player"]
@@ -75,16 +75,17 @@ flowchart LR
     F --> G
 ```
 
-1. **Author.** A world is written as line-oriented JSON (section 5), by hand,
-   through the CLI, through the in-engine editor, or programmatically.
-2. **Cook.** The build expands, validates, and compiles the world and every
-   source file it references into binary blobs (sections 6 and 7).
+1. **Author.** Assets are written as line-oriented JSON (section 5), by hand,
+   through the CLI, through the in-engine editor, or programmatically. A file
+   that declares an `AppConfig` is an application.
+2. **Cook.** The build expands, validates, and compiles an application and
+   every source file it references into binary blobs (sections 6 and 7).
 3. **Run.** The runtime loads the blobs, constructs the systems the content
    implies, and steps them in a fixed-timestep loop while a GPU backend renders
    each frame (sections 9 to 21).
 
 A development session can skip the on-disk blobs: `cn run -f` and `cn edit`
-cook the world in memory and run it directly.
+cook a file in memory and run it directly.
 
 ---
 
@@ -173,7 +174,7 @@ The public framework is one library facade over these parts. It is tiered:
 | C library                     | Static and dynamic builds of the embedding layer, with a generated header.                                                                    |
 
 `cn run` and the player drive the same loop; they differ in where the state root
-is anchored and how a missing world is reported. `cn run -f` cooks a world in
+is anchored and how missing content is reported. `cn run -f` cooks a file in
 memory and hot-reloads it, `cn run --debug-port` serves a localhost inspection
 endpoint, and `cn edit` cooks in memory and overlays the in-engine editor. Neither path exists in a shipped player.
 
@@ -207,9 +208,9 @@ declares `AppConfig.headless`, and refuses any other. DirectX 12 can fall back t
 
 | Phase   | Where it runs                       | Inputs                         | Outputs                                     |
 | ------- | ----------------------------------- | ------------------------------ | ------------------------------------------- |
-| Cook    | Developer machine or build host     | `world.jsonl`, source files    | `data/` blobs, `world-lock.json`, caches    |
+| Cook    | Developer machine or build host     | `.jsonl` files, source files   | `data/` blobs, `cook-lock.json`, caches     |
 | Run     | Developer machine or end-user device | Blobs (or an in-memory cook)  | Frames, audio, saves, settings, crash reports |
-| Export  | Developer machine                   | A cooked world, a built player | A platform bundle                           |
+| Export  | Developer machine                   | One application, a built player | A platform bundle                          |
 
 ### 3.6 Implementation notes
 
@@ -234,7 +235,7 @@ declares `AppConfig.headless`, and refuses any other. DirectX 12 can fall back t
 
 Three vocabularies exist and are easy to confuse.
 
-**Asset.** What an author declares in `world.jsonl`: a `["Type", {args}]` entry
+**Asset.** What an author declares in a `.jsonl` file: a `["Type", {args}]` entry
 whose args may carry a `$id` other entries can name it by. This is the public
 schema, documented in the [asset reference](../assets/index.md).
 
@@ -327,10 +328,12 @@ whole subtree.
 
 ## 5. Authoring format
 
-### 5.1 world.jsonl
+### 5.1 Asset files
 
-A world is a JSONL file: one entry per line, each declaring one asset. An entry
-is a JSON array of two columns, the asset's type and its args.
+Assets are written in JSONL files: one entry per line, each declaring one
+asset. An entry is a JSON array of two columns, the asset's type and its args.
+Any `.jsonl` file holds assets, and any one of them can be checked, cooked, or
+run on its own (`cn check`, `cn cook -f`, `cn run -f`).
 
 ```json
 ["GraphicsConfig",{"background":{"color":[0.5,0.75,1.0,1.0]},"shadows":{"map_size":2048}}]
@@ -350,7 +353,7 @@ compact entry per line. A line that is a JSON object, or any other shape, is an
 error naming the line. Blank lines and lines starting with `//` are skipped.
 
 **Identity.** `"$id"` inside `args` declares an entry's identity: a non-empty
-string, unique within the world, and not shaped like an anonymous handle
+string, unique across everything a build loads, and not shaped like an anonymous handle
 (`<Type>#<digits>`). It is the only `$` key an `args` object accepts, and it is
 checked before any schema reads the args, so a misspelled key is an error rather
 than an asset that silently has no identity.
@@ -367,37 +370,48 @@ Line-oriented JSON is deliberate: it diffs cleanly, appends cheaply, and makes
 tooling (`cn add`, `cn rm`, the editor's save-back) a line edit rather than a
 document rewrite.
 
+**Applications.** A file that declares an `AppConfig` line of its own is an
+application: the unit `cn run`, `cn bench`, `cn cook` and `cn export` work on
+when no file is named. The CLI finds every application under the directory it
+runs in. With exactly one it uses it, with several it lists them and asks for
+`--app <name>`, matched against `AppConfig.name`, and with none it says so
+(except `cn run`, which plays the blobs already cooked in place, and `cn add`,
+which starts an application in `app.jsonl`). Only the file's own lines count,
+so a file that includes an application is not one itself. An application and
+everything it includes declare at most one `AppConfig`. `cn init` and `cn new`
+write a starter application to `app.jsonl`, named after its directory.
+
 ### 5.2 Includes
 
-`Include` stands for the entries of another world file:
+`Include` stands for the entries of another file:
 
 ```json
 ["Include",{"path":"kits/lighting.jsonl"}]
 ```
 
-The included file is written like a world file and may include others. `path`
+The included file is written like any other and may include others. `path`
 is a file path like any other (section 5.3), and a cycle is an error. Includes
 resolve straight after parsing, before labeling, validation, and expansion, so
 an included entry is indistinguishable from an inline one: it counts toward the
-`<Type>#<ordinal>` labels where it lands, and its `$id` must be unique across the
-whole world. `Include` takes no `$id`.
+`<Type>#<ordinal>` labels where it lands, and its `$id` must be unique across
+everything the build loads. `Include` takes no `$id`.
 
 The editor shows included entries in place and read-only; a save writes only the
-world file itself, `Include` line included.
+open file itself, `Include` line included.
 
 ### 5.3 File paths
 
-Every file path a world names (an `Include`, a shader, a texture, a model) is
-relative to a root, never to the file holding the line. A world file's root is
+Every file path a line names (an `Include`, a shader, a texture, a model) is
+relative to a root, never to the file holding the line. A file's root is
 the nearest directory at or above it, and no higher than the project root,
 holding a `.concinnity/` directory, and otherwise the project root (the content
 root of section 8, which the CLI takes from the directory it runs in). An
 included file takes its own root the same way, falling back to the root of the
 file that included it.
 
-So a library of world files carries a `.concinnity/` at its top and names its
+So a library of asset files carries a `.concinnity/` at its top and names its
 files from there (`shaders/toon.hlsl`), and reads the same whether it is
-checked on its own or sits at `assets/` in a project whose world includes
+checked on its own or sits at `assets/` in a project whose application includes
 `assets/shaders/shaders.jsonl`. Once the includes are resolved, the build sees
 every path rebased onto the project root (`assets/shaders/toon.hlsl`), so
 everything after it resolves against that one root. An absolute path names
@@ -417,22 +431,23 @@ explicit spawn-by-name path.
 ### 5.5 Programmatic authoring
 
 Hosts and tools can construct the same entries through a typed builder
-vocabulary instead of writing JSON, and with the cook tier can build and run a
-world without touching disk. A world can also be assembled directly from runtime
-components in code, with no cook at all; such a world is limited to what needs
-no compiled payload (computable geometry and textures, UI, behaviors).
+vocabulary instead of writing JSON, and with the cook tier can build and run
+them without touching disk. A `World` can also be assembled directly from
+runtime components in code, with no cook at all; such a world is limited to
+what needs no compiled payload (computable geometry and textures, UI,
+behaviors).
 
 ---
 
 ## 6. Cook pipeline
 
-The **cook** turns an authored world and its source files into blobs. It has a
+The **cook** turns an authored file, with what it includes, and its source files into blobs. It has a
 front half (load, expand, validate) and a back half (compile, pack, write).
 `cn cook` runs it; `cn run -f`, `cn edit`, and `cn export` run it too.
 
 ```mermaid
 flowchart TD
-    A["world.jsonl"] --> B["parse + resolve Include"]
+    A[".jsonl file"] --> B["parse + resolve Include"]
     B --> C["structural validation"]
     C --> D["expansion passes"]
     D --> E["semantic validation"]
@@ -442,7 +457,7 @@ flowchart TD
     H --> I["scene partition"]
     I --> J["payload packing"]
     J --> K["data/0 .. data/N"]
-    J --> L["world-lock.json"]
+    J --> L["cook-lock.json"]
     K --> M["thumbnail bake"]
 ```
 
@@ -453,7 +468,7 @@ type, an object `args`, and at most one well-formed `$id`. Duplicate ids are
 rejected. Each anonymous entry is given its `<Type>#<ordinal>` label as its id so
 every later pass addresses entries one way.
 
-**Expansion.** A fixed, ordered sequence of passes rewrites the world. Order
+**Expansion.** A fixed, ordered sequence of passes rewrites the loaded entries. Order
 matters because later passes must see what earlier passes produced:
 
 | Order | Pass                 | Produces                                                                                                     |
@@ -466,9 +481,9 @@ matters because later passes must see what earlier passes produced:
 | 6     | Prefabs              | Instantiated prop templates.                                                                                 |
 | 7     | Room textures        | Per-surface texture assignment.                                                                              |
 | 8     | Companions (round 1) | The window and shader stack implied by everything above.                                                     |
-| 9     | AppConfig            | World name and window title for distribution.                                                                |
+| 9     | AppConfig            | Application name and window title for distribution.                                                          |
 | 10    | Screen children      | Each screen's `children`, lifted out into elements that name the screen.                                     |
-| 11    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.                                               |
+| 11    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering application.                                         |
 | 12    | Menus                | Screens, sprites, labels, hit regions, key bindings.                                                         |
 | 13    | Option selects       | Settings rows to their primitives.                                                                           |
 | 14    | Sliders              | Continuous settings rows to their primitives.                                                                |
@@ -477,16 +492,16 @@ matters because later passes must see what earlier passes produced:
 
 Two properties govern expansion:
 
-- **Injection is visible.** Every asset the cook adds without a `world.jsonl`
-  line is recorded in `world-lock.json` with its full args, so it can be copied
-  into the world verbatim as an override. `EngineDefaults` flags switch
+- **Injection is visible.** Every asset the cook adds without an authored line
+  is recorded in `cook-lock.json` with its full args, so it can be copied into
+  a file verbatim as an override. `EngineDefaults` flags switch
   individual injected defaults off.
-- **Authored wins.** If the world declares an asset with the same `$id` as one a
+- **Authored wins.** If the files declare an asset with the same `$id` as one a
   pass would generate, the authored entry shadows it. Same id and same type is a
   patch-merge with the author's fields winning; same id and different type is a
   hard error. Shadowing is recorded in the lock file.
 
-**Semantic validation.** Runs on the expanded world: cross-references resolve,
+**Semantic validation.** Runs on the expanded assets: cross-references resolve,
 singleton constraints hold, per-type validators pass, and arguments are in
 range. Every error is collected and reported together. `cn check` runs the front
 half alone.
@@ -534,7 +549,7 @@ compiled.
 a CPU rasterizer, for the editor's content browser. A thumbnail failure never
 fails a cook that produced valid blobs.
 
-### 6.3 world-lock.json
+### 6.3 cook-lock.json
 
 Written beside the blobs. Provenance metadata, not part of the container format.
 
@@ -561,7 +576,7 @@ Written beside the blobs. Provenance metadata, not part of the container format.
 | `assets`         | Every asset under its handle, with its id, discriminant, and args hash.              |
 | `resources`      | Assets compiled into the resource stream rather than the record table.               |
 | `injected`       | Everything the cook added with no authored line, with full args.                     |
-| `shadowed`       | Generated assets the world declared its own copy of, with the pre-merge args.        |
+| `shadowed`       | Generated assets the files declared their own copy of, with the pre-merge args.      |
 
 The recorded ids let a process that loads pre-cooked blobs without an in-process
 cook (the editor booting cold) rebuild the handle table exactly as the cook
@@ -569,7 +584,7 @@ recorded it.
 
 ---
 
-## 7. Compiled world format
+## 7. Compiled format
 
 The container format is a pure contract: record schema, header constants, and
 bytes-to-metadata transforms. It performs no I/O and holds no residency policy.
@@ -725,12 +740,12 @@ Everything the engine writes for a project lives under one state directory.
 ```
 <state root>/
 |-- data/            compiled blobs (0, 1, 2, ...)        read-only at runtime
-|-- world-lock.json  build provenance record (6.3)        cook only
+|-- cook-lock.json   build provenance record (6.3)        cook only
 |-- cache/           regenerable, deletable at any time   see 8.2
 |   |-- 0            runtime cache segment                runtime-writable
 |   `-- 1            build cache segment                  cook only
 |-- assets/          source assets                        authored
-|-- *.jsonl          world files (world.jsonl by default) authored
+|-- *.jsonl          asset files and applications         authored
 |-- saves/           runtime save files                   runtime-writable
 |-- preview-saves/   sandboxed saves for preview sessions runtime-writable
 |-- crashes/         crash reports and minidumps          runtime-writable
@@ -738,8 +753,9 @@ Everything the engine writes for a project lives under one state directory.
 ```
 
 The tree has four roots, and a host that keeps them together gets the layout
-above. The **content** root holds what a person authors (`assets/`, world files);
-the **build** root holds what a build produces (`data/`, `world-lock.json`); the
+above. The **content** root holds what a person authors (`assets/`, `.jsonl`
+files); the **build** root holds what a build produces (`data/`,
+`cook-lock.json`); the
 **writable** root holds what a run writes (`saves/`, `settings`, `crashes/`); the
 **cache** root holds the regenerable segments. Each of the last three defaults
 to the content root and may be split away on its own.
@@ -754,11 +770,11 @@ scatters state beside whatever directory it was launched from.
 
 | Host        | Root                                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Development | The CLI roots the project at the directory it was run from, so `assets/` and the world files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output; it also marks the directory as the root a world's file paths resolve against (5.3). With no `-f`, the nearest `world.jsonl` up from that directory is the world. |
+| Development | The CLI roots the project at the directory it was run from, so `assets/` and the `.jsonl` files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output; it also marks the directory as the root a file's paths resolve against (5.3). With no `-f`, a command uses the application under that directory (5.1). |
 | Shipped     | The player installs the directory beside its own executable (or `Contents/Resources` inside a macOS bundle).                                                                                               |
 | Embedded    | A world loaded from a blob path anchors the tree beside that blob, stepping out of a directory named `data`. A host that names its own directory overrides that.                                          |
 
-A world's `AppConfig.home` overrides where the runtime-writable half goes: an
+An application's `AppConfig.home` overrides where the runtime-writable half goes: an
 absolute path verbatim, a relative one against the content root, empty for
 "beside the data".
 
@@ -2727,8 +2743,8 @@ dispatches recovery on the class:
 
 | Class            | Condition                               | User message                             | Log line                                                          |
 | ---------------- | --------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------- |
-| Missing data     | The primary blob's path does not exist. | "Failed to find the data blob: `<path>`" | "no compiled world data at `<path>`, run `concinnity build` first" |
-| Unreadable data  | The path exists but the load failed.    | "Failed to read the data blob: `<path>`" | "compiled world data at `<path>` failed to load: `<status>`"      |
+| Missing data     | The primary blob's path does not exist. | "Failed to find the data blob: `<path>`" | "no cooked data at `<path>`, run `concinnity cook` first" |
+| Unreadable data  | The path exists but the load failed.    | "Failed to read the data blob: `<path>`" | "cooked data at `<path>` failed to load: `<status>`"      |
 | No renderer      | Content that draws, and no backend or GPU. | "This app could not start its renderer." with the cause | "failed to start app: the renderer could not start: `<cause>`" |
 
 Both messages name the path, because the path is the actionable part. Failures
@@ -2814,7 +2830,7 @@ fluctuation is not reported as a leak.
 
 ### 25.3 Benchmarks
 
-Any world can be benchmarked by launching it with `bench` (`cn bench`, an
+Any application can be benchmarked by launching it with `bench` (`cn bench`, an
 app's own `bench` command, or an app passing `LaunchArgs` with its `command`
 set to `LaunchCommand::Bench` to `App::with_args`). `--stop-at SECONDS` ends
 the run that far in, and its report is marked incomplete. A `BenchmarkConfig` asset customizes
@@ -2855,18 +2871,18 @@ reproducible across hosts.
 
 | Command   | Purpose                                                            |
 | --------- | ------------------------------------------------------------------ |
-| `init`    | Create a new app in the current directory.                         |
-| `new`     | Create a new app in a new directory.                               |
-| `cook`    | Cook a world into blobs.                                           |
-| `check`   | Validate every world file under the directory, or `-f` one world.  |
-| `run`     | Cook the discovered world first, then run it, or `-f` in memory.   |
-| `bench`   | Benchmark a world, found the way `run` finds it (section 25.3).    |
+| `init`    | Create a new application in the current directory.                 |
+| `new`     | Create a new application in a new directory.                       |
+| `cook`    | Cook the application, or `-f` one file, into blobs.                |
+| `check`   | Validate every `.jsonl` file under the directory, or `-f` one.     |
+| `run`     | Cook the application first, then run it, or `-f` in memory.        |
+| `bench`   | Benchmark an application, found the way `run` finds it (25.3).     |
 | `edit`    | Cook in memory and run with the editor overlay.                    |
-| `add`     | Append assets to the active world, editing only the world file.    |
-| `rm`      | Remove an asset by handle, editing only the world file.            |
-| `list`    | List declared assets, or the systems a world builds.               |
-| `explain` | Print an asset's effective entry from the expanded world.          |
-| `export`  | Package a cooked world for distribution (section 28).              |
+| `add`     | Append assets to the application, or `-f` one file.                |
+| `rm`      | Remove an asset by handle from the application, or `-f` one file.  |
+| `list`    | List declared assets, or the systems they build.                   |
+| `explain` | Print an asset's effective entry from the expanded assets.         |
+| `export`  | Package one application for distribution (section 28).             |
 | `docs`    | Regenerate the asset reference.                                    |
 | `mcp`     | Serve the debug protocol to an MCP client over stdio.              |
 | `version` | Print the version.                                                 |
@@ -2874,9 +2890,11 @@ reproducible across hosts.
 A bare `cn` prints its help. `-q` / `--quiet` on any command installs no log
 output and leaves the command's own output.
 
-`run` without `-f` cooks the discovered world and runs the blobs it writes, or
-runs the cooked blobs already in place when there is no world to discover;
-`run -f FILE` cooks `FILE` in memory and hot-reloads it.
+Every command that works on one file takes `-f FILE`, or `--app NAME` to pick
+among several applications (5.1); with neither it uses the only application.
+`run` without `-f` cooks the application and runs the blobs it writes, or runs
+the cooked blobs already in place when there is no application; `run -f FILE`
+cooks `FILE` in memory and hot-reloads it.
 `--debug-port [PORT]` (8777 when bare) serves the debug protocol on either path.
 
 `add` given a source file chooses the asset from its extension, the same mapping
@@ -2935,9 +2953,9 @@ A shipped player has no endpoint and cannot be inspected or driven remotely.
 
 ### 26.3 Editor
 
-`cn edit` cooks a world in memory, runs it serially, and injects an editor
+`cn edit` cooks a file in memory, runs it serially, and injects an editor
 overlay at reserved ids that is never saved. Saving writes the authored entry list
-back to `world.jsonl`.
+back to that file.
 
 - **Simulation control:** play, pause, step, stop.
 - **Undo and redo:** bounded whole-list snapshots.
@@ -3104,7 +3122,7 @@ _Timing-only_ identities time work recorded inside another graph node.
 
 ## Appendix B: glossary
 
-**Asset.** A typed declaration in `world.jsonl`, optionally identified by a `$id`.
+**Asset.** A typed declaration in a `.jsonl` file, optionally identified by a `$id`.
 The public authoring unit.
 
 **Baked record.** A blob record whose bytes are the serialized runtime component,

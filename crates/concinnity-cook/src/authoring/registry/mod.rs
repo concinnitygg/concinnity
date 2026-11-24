@@ -416,7 +416,7 @@ macro_rules! define_registered_type {
             /// Normalize a JSON args value through the typed args schema: the
             /// same deserialize + validate as `reserialize_args`, but back to
             /// JSON with defaults filled and references resolved. Authoring
-            /// tools (`cn add`, the editor form) write this into world.jsonl;
+            /// tools (`cn add`, the editor form) write this into a .jsonl file;
             /// the baked postcard bytes cannot round-trip to JSON.
             ///
             /// # Errors

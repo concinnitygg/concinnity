@@ -3,7 +3,7 @@
 // blob. The generators themselves (room, extrude, primitives, water grid)
 // and the payload tail (tangents, LOD alternates, serialization)
 // live in `concinnity_engine::geometry` / `concinnity_engine::bake::mesh`; this
-// module parses world.jsonl args and calls down into them.
+// module parses .jsonl args and calls down into them.
 //
 // Adding a new generator
 // 1. Add the build_* geometry function in `concinnity_engine::geometry`.
@@ -273,7 +273,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
 // Compile a VoxelChunk component into a packed binary mesh payload.
 //
 // `palette_lookup` resolves each palette entry name to its BlockType args
-// (typically by scanning the world.jsonl asset list). Non-solid entries
+// (typically by scanning the file's asset list). Non-solid entries
 // (`solid: false`) become `None` in the resolved palette and emit no faces.
 pub(crate) fn compile_voxel_chunk_payload<F>(
     args: &serde_json::Value,

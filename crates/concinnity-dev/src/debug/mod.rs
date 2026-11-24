@@ -27,7 +27,7 @@
 //   call       what a handler is handed: the snapshot and the engine queue
 //   queue      the jobs handlers queue for the engine thread
 //   state      the shared world-snapshot data model
-//   hot_reload asset / shader / world.jsonl reload machinery
+//   hot_reload asset / shader / .jsonl reload machinery
 //
 // The `wire` submodule holds everything that can only run against a live socket
 // and a live engine. It is excluded from coverage like the per-backend GPU

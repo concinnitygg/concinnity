@@ -4,7 +4,7 @@
 //! (`cook` / `add` / `rm` / `list` / `explain` / `check` / `docs` / `export` /
 //! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
 //! in-crate unit tests cannot, since those never run the binary), plus the
-//! world-discovery fallbacks each command reaches for when no `-f` is given,
+//! application discovery each command reaches for when no `-f` is given,
 //! which read process-global path anchors that a unit test in the shared test
 //! binary could not redirect without racing its neighbors. Under
 //! `cargo llvm-cov` the profile data the spawned binary writes on exit is
@@ -69,54 +69,58 @@ fn run(args: &[&str]) -> Output {
         .expect("spawn concinnity binary")
 }
 
-// The starter world the authoring tests operate on. A lone TextLabel, which the
-// build expands into a runnable world by injecting the renderer stack.
-const HELLO_WORLD: &str =
-    "[\"TextLabel\",{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}]\n";
+// The starter application the authoring tests operate on. An AppConfig and a
+// lone TextLabel, which the build expands into a runnable application by
+// injecting the renderer stack.
+const HELLO_APP: &str = "[\"AppConfig\",{\"name\":\"Hello\"}]\n\
+     [\"TextLabel\",{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}]\n";
 
 // An isolated project for one test: a temp directory the spawned binary runs
-// in, so the project it anchors to its working directory -- authored world
+// in, so the project it anchors to its working directory -- authored `.jsonl`
 // files and `assets/`, and everything derived beside them -- resolves inside it. Isolation is
 // per-process rather than per-thread, which is what makes these tests safe to
 // run in parallel: the path anchors they steer are process-global, so an
 // in-crate unit test could not do the same without racing every other test in
 // its binary.
 //
-// A temp root also keeps the discovery fallback honest. `find_world_jsonl` walks
-// up from the working directory looking for a `world.jsonl`, and the repository
-// root has one; running from a temp directory means an "empty project" really is
-// empty.
+// A temp root also keeps application discovery honest: it reads every `.jsonl`
+// file under the working directory, so running from a temp directory means an
+// "empty project" really is empty.
 struct Project {
     dir: tempfile::TempDir,
 }
 
 impl Project {
-    // A project with no world at all, so discovery fails and each subcommand
-    // takes its not-found path.
+    // A project with no application at all, so discovery finds none and each
+    // subcommand takes its not-found path.
     fn empty() -> Self {
         Self {
             dir: tempfile::tempdir().expect("create temp project dir"),
         }
     }
 
-    // A project whose discovered world holds `content`.
-    fn with_world(content: &str) -> Self {
+    // A project whose `app.jsonl` holds `content`.
+    fn with_app(content: &str) -> Self {
         let project = Self::empty();
-        std::fs::write(project.path().join("world.jsonl"), content).expect("write world");
+        project.write("app.jsonl", content);
         project
+    }
+
+    // Write `content` to `rel` under the project.
+    fn write(&self, rel: &str, content: &str) {
+        let path = self.path().join(rel);
+        std::fs::create_dir_all(path.parent().expect("a file has a parent")).expect("create dir");
+        std::fs::write(path, content).expect("write file");
     }
 
     fn path(&self) -> &Path {
         self.dir.path()
     }
 
-    // The path of the world `with_world` wrote, for the subcommands that take an
+    // The path of the file `with_app` wrote, for the subcommands that take an
     // explicit `--file` instead of discovering one.
-    fn world_path(&self) -> String {
-        self.path()
-            .join("world.jsonl")
-            .to_string_lossy()
-            .into_owned()
+    fn app_path(&self) -> String {
+        self.path().join("app.jsonl").to_string_lossy().into_owned()
     }
 
     fn cn(&self, args: &[&str]) -> Output {
@@ -127,7 +131,7 @@ impl Project {
             .expect("spawn concinnity binary")
     }
 
-    // Write a source file into the project's `assets/`, which a world names as
+    // Write a source file into the project's `assets/`, which a file names as
     // `assets/<name>`.
     fn write_asset(&self, name: &str, bytes: &[u8]) {
         let dir = self.path().join("assets");
@@ -225,7 +229,7 @@ fn a_bare_invocation_prints_the_help() {
 // `-q` silences logging only: a command's own output still prints.
 #[test]
 fn quiet_keeps_a_commands_own_output() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["-q", "check"]);
     expect_ok(&out, "concinnity -q check");
     assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
@@ -284,25 +288,65 @@ fn mcp_serves_the_catalog_with_no_app_running() {
     );
 }
 
-// `concinnity list` with no --file discovers the project's `world.jsonl`, the
-// branch an explicit path never reaches.
+// `concinnity list` with no --file finds the project's application, the branch
+// an explicit path never reaches.
 #[test]
-fn list_discovers_the_world_and_prints_the_asset_table() {
-    let project = Project::with_world(HELLO_WORLD);
+fn list_finds_the_application_and_prints_the_asset_table() {
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["list"]);
     expect_ok(&out, "concinnity list");
 
     let printed = stdout(&out);
     assert!(printed.contains("hello_world"), "got: {printed}");
     assert!(printed.contains("TextLabel"), "got: {printed}");
-    assert!(printed.contains("1 asset(s)"), "got: {printed}");
+    assert!(printed.contains("2 asset(s)"), "got: {printed}");
+}
+
+// With several applications, a command that needs one lists them and asks for
+// `--app`, which then picks one by its AppConfig name.
+#[test]
+fn several_applications_are_picked_by_name() {
+    let project = Project::with_app(HELLO_APP);
+    project.write(
+        "apps/arena.jsonl",
+        "[\"AppConfig\",{\"name\":\"Arena\"}]\n[\"Logger\",{\"$id\":\"arena_log\"}]\n",
+    );
+
+    let out = project.cn(&["list"]);
+    assert!(!out.status.success(), "two applications need a name");
+    let failure = stderr(&out);
+    assert!(failure.contains("--app"), "{failure}");
+    assert!(failure.contains("Hello"), "{failure}");
+    assert!(failure.contains("Arena"), "{failure}");
+
+    let out = project.cn(&["list", "--app", "Arena"]);
+    expect_ok(&out, "concinnity list --app Arena");
+    assert!(stdout(&out).contains("arena_log"), "{}", stdout(&out));
+
+    let out = project.cn(&["list", "--app", "Nope"]);
+    assert!(!out.status.success(), "an unknown application should fail");
+    assert!(stderr(&out).contains("Nope"), "{}", stderr(&out));
+}
+
+// A project without an application says so rather than guessing at a file.
+#[test]
+fn a_project_without_an_application_is_reported() {
+    let project = Project::empty();
+    project.write("props/kit.jsonl", "[\"Logger\",{}]\n");
+    let out = project.cn(&["list"]);
+    assert!(!out.status.success(), "no application should fail");
+    assert!(
+        stderr(&out).contains("no application found"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 // The expanded listing runs the build's front half, so it reports the injected
 // companions the authored file never mentions, each tagged with its pass.
 #[test]
 fn list_expanded_tags_injected_assets_with_their_pass() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["list", "--expanded"]);
     expect_ok(&out, "concinnity list --expanded");
 
@@ -317,7 +361,7 @@ fn list_expanded_tags_injected_assets_with_their_pass() {
 // scheduled system with the condition that gates it in.
 #[test]
 fn list_systems_names_each_system_and_its_gate() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["list", "--systems"]);
     expect_ok(&out, "concinnity list --systems");
 
@@ -336,49 +380,50 @@ fn list_systems_names_each_system_and_its_gate() {
 // is the companion every drawn world receives.
 #[test]
 fn explain_prints_an_injected_asset_as_a_pasteable_line() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["explain", "Window"]);
     expect_ok(&out, "concinnity explain Window");
 
     let printed = stdout(&out);
     assert!(printed.contains("injected:companion"), "got: {printed}");
+    // The application's name fills the injected window's title.
     assert!(
-        printed.contains("\n[\"Window\",{\"$id\":\"Window\""),
+        printed.contains("\n[\"Window\",{\"title\":\"Hello\",\"$id\":\"Window\"}]"),
         "got: {printed}"
     );
 }
 
 #[test]
 fn explain_of_an_unknown_name_fails() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["explain", "no_such_asset"]);
     assert!(!out.status.success(), "an unknown name should fail");
     assert!(stderr(&out).contains("no_such_asset"), "{}", stderr(&out));
 }
 
-// `cn check` validates without cooking; with no `-f` it checks every world file
-// under the directory it ran in.
+// `cn check` validates without cooking; with no `-f` it checks every `.jsonl`
+// file under the directory it ran in.
 #[test]
-fn check_validates_the_worlds_under_the_directory() {
-    let project = Project::with_world(HELLO_WORLD);
+fn check_validates_the_files_under_the_directory() {
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["check"]);
     expect_ok(&out, "concinnity check");
     assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
 #[test]
-fn check_reports_an_invalid_world() {
-    let project = Project::with_world("[\"NotARealAssetType\",{\"$id\":\"x\"}]\n");
+fn check_reports_an_invalid_file() {
+    let project = Project::with_app("[\"NotARealAssetType\",{\"$id\":\"x\"}]\n");
     let out = project.cn(&["check"]);
     assert!(!out.status.success(), "an unknown asset type should fail");
 }
 
-// A real compile, covering both ways `cn cook` resolves its world: discovery
-// when no --file is given, and an explicit path when one is. The second cook
-// reuses the first one's cache, so only one cook is paid for.
+// A real compile, covering both ways `cn cook` resolves its file: the
+// application when no --file is given, and an explicit path when one is. The
+// second cook reuses the first one's cache, so only one cook is paid for.
 #[test]
-fn cook_compiles_the_discovered_world_and_an_explicit_one() {
-    let project = Project::with_world(HELLO_WORLD);
+fn cook_compiles_the_application_and_an_explicit_file() {
+    let project = Project::with_app(HELLO_APP);
 
     let out = project.cn(&["cook"]);
     expect_ok(&out, "concinnity cook");
@@ -389,7 +434,9 @@ fn cook_compiles_the_discovered_world_and_an_explicit_one() {
         "no blob written"
     );
     assert!(
-        project.path().join("world-lock.json").exists(),
+        concinnity::player::StateTree::at(project.path())
+            .cook_lock_path()
+            .exists(),
         "no lock file written"
     );
     assert!(
@@ -397,15 +444,15 @@ fn cook_compiles_the_discovered_world_and_an_explicit_one() {
         "`.concinnity/` holds CLI configuration, not build output"
     );
 
-    let out = project.cn(&["cook", "-f", &project.world_path()]);
+    let out = project.cn(&["cook", "-f", &project.app_path()]);
     expect_ok(&out, "concinnity cook -f");
 }
 
-// Removing a name the world does not declare reports the ones it does, so a typo
+// Removing a name the file does not declare reports the ones it does, so a typo
 // is self-correcting.
 #[test]
 fn rm_of_an_unknown_name_lists_the_known_names() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["rm", "not_here"]);
     assert!(!out.status.success(), "removing an absent name should fail");
 
@@ -416,7 +463,7 @@ fn rm_of_an_unknown_name_lists_the_known_names() {
 
 #[test]
 fn add_of_an_unresolvable_target_fails() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let out = project.cn(&["add", "NotARealAssetType"]);
     assert!(!out.status.success(), "an unresolvable target should fail");
     assert!(
@@ -426,39 +473,85 @@ fn add_of_an_unresolvable_target_fails() {
     );
 }
 
-// `cn add` takes several targets in one call and only edits the world file:
-// the blobs are left for `run` or `cook` to write.
+// `cn add` takes several targets in one call and only edits the file: the
+// blobs are left for `run` or `cook` to write.
 #[test]
-fn add_edits_the_world_with_every_target_and_cooks_nothing() {
-    let project = Project::with_world(HELLO_WORLD);
+fn add_edits_the_application_with_every_target_and_cooks_nothing() {
+    let project = Project::with_app(HELLO_APP);
     std::fs::write(project.path().join("notes.txt"), "hello").expect("write notes");
     let out = project.cn(&["add", "./notes.txt", "Window"]);
     expect_ok(&out, "add");
 
-    let world = std::fs::read_to_string(project.path().join("world.jsonl")).expect("read world");
-    assert!(world.contains("\"notes\""), "{world}");
-    assert!(world.contains("\"Window\""), "{world}");
+    let app = std::fs::read_to_string(project.path().join("app.jsonl")).expect("read app");
+    assert!(app.contains("\"notes\""), "{app}");
+    assert!(app.contains("\"Window\""), "{app}");
     assert!(!project.path().join("data").exists(), "add wrote blobs");
 }
 
-// With nothing to discover, `cn add` falls back to `world.jsonl` in the working
-// directory rather than propagating the not-found. The target still fails to
-// resolve, but the failure names the fallback path, which is what distinguishes
-// the two branches.
+// `-f` adds to any file, here one that is not an application.
 #[test]
-fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
+fn add_edits_the_file_it_is_given() {
+    let project = Project::with_app(HELLO_APP);
+    project.write("props/kit.jsonl", "");
+    let out = project.cn(&[
+        "add",
+        "PointLight",
+        "--id",
+        "kit_log",
+        "-f",
+        "props/kit.jsonl",
+    ]);
+    expect_ok(&out, "add -f");
+
+    let kit = std::fs::read_to_string(project.path().join("props/kit.jsonl")).expect("read kit");
+    assert!(kit.contains("\"kit_log\""), "{kit}");
+    let app = std::fs::read_to_string(project.path().join("app.jsonl")).expect("read app");
+    assert!(!app.contains("kit_log"), "{app}");
+}
+
+// With no application, `cn add` starts one in `app.jsonl` in the working
+// directory, declaring its AppConfig.
+#[test]
+fn add_without_an_application_starts_one_in_app_jsonl() {
+    let project = Project::empty();
+    std::fs::write(project.path().join("notes.txt"), "hello").expect("write notes");
+    let out = project.cn(&["add", "./notes.txt"]);
+    expect_ok(&out, "add into an empty project");
+
+    let app = std::fs::read_to_string(project.path().join("app.jsonl")).expect("read app");
+    assert!(app.starts_with("[\"AppConfig\","), "{app}");
+    assert!(app.contains("\"notes\""), "{app}");
+}
+
+// An `app.jsonl` that declares no AppConfig is not an application yet, so `cn
+// add` adds to it and declares one.
+#[test]
+fn add_declares_an_app_config_in_an_app_jsonl_without_one() {
+    let project = Project::with_app("[\"Logger\",{\"$id\":\"log\"}]\n");
+    let out = project.cn(&["add", "Window"]);
+    expect_ok(&out, "add into an app.jsonl without an AppConfig");
+
+    let app = std::fs::read_to_string(project.path().join("app.jsonl")).expect("read app");
+    assert!(app.starts_with("[\"AppConfig\","), "{app}");
+    assert!(app.contains("\"log\""), "{app}");
+    assert!(app.contains("\"Window\""), "{app}");
+}
+
+// A target that cannot start a file names the file it would have started.
+#[test]
+fn add_without_an_application_names_app_jsonl() {
     let project = Project::empty();
     let out = project.cn(&["add", "NotARealAssetType"]);
     assert!(!out.status.success(), "an empty project should fail");
     assert!(
-        stderr(&out).contains("no world found at 'world.jsonl'"),
+        stderr(&out).contains("no file at 'app.jsonl'"),
         "{}",
         stderr(&out)
     );
 }
 
 // `concinnity docs` renders the rustdoc compiled into the binary, so it needs
-// neither a world nor the engine's sources: an empty directory gets the whole
+// neither an application nor the engine's sources: an empty directory gets the whole
 // reference.
 #[test]
 fn docs_writes_the_reference_pages() {
@@ -487,7 +580,7 @@ fn docs_writes_the_reference_pages() {
 // this costs no cook.
 #[test]
 fn export_rejects_a_foreign_platform() {
-    let project = Project::with_world(HELLO_WORLD);
+    let project = Project::with_app(HELLO_APP);
     let foreign = if cfg!(target_os = "windows") {
         "linux"
     } else {
@@ -502,20 +595,20 @@ fn export_rejects_a_foreign_platform() {
     );
 }
 
-// A `world.jsonl` at the project root counts as a scaffolded project, so
-// `cn init` over one leaves it alone.
+// A directory that already declares an application counts as a scaffolded
+// project, so `cn init` over one leaves it alone.
 #[test]
-fn init_skips_a_directory_that_already_has_a_world() {
+fn init_skips_a_directory_that_already_has_an_application() {
     let project = Project::empty();
-    std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
+    project.write("apps/hello.jsonl", HELLO_APP);
 
     let out = project.cn(&["init"]);
     expect_ok(&out, "concinnity init");
     assert!(stdout(&out).contains("skipping init"), "{}", stdout(&out));
 }
 
-// The full scaffold: a new directory, the starter world written into it, and an
-// initial build over it.
+// The full scaffold: a new directory, the starter application written into it,
+// and an initial build over it.
 #[test]
 fn new_scaffolds_and_builds_a_fresh_project() {
     let project = Project::empty();
@@ -524,12 +617,16 @@ fn new_scaffolds_and_builds_a_fresh_project() {
 
     let out = project.cn(&["new", &target_arg]);
     expect_ok(&out, "concinnity new");
-    assert!(target.join("world.jsonl").exists(), "no starter world");
+    let app = std::fs::read_to_string(target.join("app.jsonl")).expect("no starter app");
+    assert!(
+        app.starts_with(r#"["AppConfig",{"name":"fresh"}]"#),
+        "{app}"
+    );
     assert!(stdout(&out).contains("Created"), "{}", stdout(&out));
 }
 
-// A pre-existing but empty directory is a valid target: only an existing world
-// in it is refused.
+// A pre-existing but empty directory is a valid target: only an existing
+// application in it is refused.
 #[test]
 fn new_accepts_a_pre_existing_empty_directory() {
     let project = Project::empty();
@@ -538,15 +635,14 @@ fn new_accepts_a_pre_existing_empty_directory() {
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
     expect_ok(&out, "concinnity new into an empty directory");
-    assert!(target.join("world.jsonl").exists(), "no starter world");
+    assert!(target.join("app.jsonl").exists(), "no starter app");
 }
 
 #[test]
-fn new_refuses_a_directory_that_already_has_a_world() {
+fn new_refuses_a_directory_that_already_has_an_application() {
     let project = Project::empty();
+    project.write("taken/app.jsonl", HELLO_APP);
     let target = project.path().join("taken");
-    std::fs::create_dir_all(&target).expect("create target dir");
-    std::fs::write(target.join("world.jsonl"), HELLO_WORLD).expect("write world");
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
     assert!(!out.status.success(), "an occupied directory should fail");
@@ -634,11 +730,13 @@ fn skinned_morph_glb() -> Vec<u8> {
     out
 }
 
-// A world over that mesh, covering both ways an imported SkinnedMesh reaches
+// An application over that mesh, covering both ways an imported SkinnedMesh reaches
 // the blob. `body` keeps its morph targets, so the import writes them into its
 // args on a miss and not on a hit; `npc` is claimed by a baking CharacterShape,
 // whose proportions scale a capsule that rides the args rather than the payload.
-const SKINNED_WORLD: &str = concat!(
+const SKINNED_APP: &str = concat!(
+    r#"["AppConfig",{"name":"Skinned"}]"#,
+    "\n",
     r#"["Material",{"$id":"skin_mat","roughness":0.55,"tint":[0.85,0.62,0.5]}]"#,
     "\n",
     r#"["SkinnedMesh",{"$id":"body","source":"assets/body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}]"#,
@@ -649,12 +747,14 @@ const SKINNED_WORLD: &str = concat!(
     "\n",
 );
 
-// A world whose payloads all come from generators, so it needs no source file:
+// An application whose payloads all come from generators, so it needs no source file:
 // the EnvironmentMap convolutions the payload cache exists for, a generated
 // texture, and a procedural mesh. `rig` is a build-only asset, so the cooked
 // blob is reached through an expansion pass whose output rides on the args the
 // cache keys on.
-const GENERATED_WORLD: &str = concat!(
+const GENERATED_APP: &str = concat!(
+    r#"["AppConfig",{"name":"Generated"}]"#,
+    "\n",
     r#"["EnvironmentMap",{"$id":"ibl","generator":"sky","prefilter_face_size":32,"irradiance_face_size":16,"prefilter_samples":32}]"#,
     "\n",
     r#"["Texture",{"$id":"ground_tex","generator":"checker","resolution":64}]"#,
@@ -680,7 +780,7 @@ fn compile_step(out: &Output) -> String {
 }
 
 // The payload cache has to be transparent: replaying a hit must reproduce the
-// bytes the miss produced, or a world cooks differently depending on whether
+// bytes the miss produced, or an application cooks differently depending on whether
 // the machine happens to hold a cache entry. Driving the binary twice is the
 // only way to see this -- the cook crate's in-crate tests disable the payload
 // cache outright, so nothing there ever observes a hit.
@@ -716,12 +816,12 @@ fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
 
 #[test]
 fn a_warm_build_reproduces_the_cold_build_byte_for_byte() {
-    let project = Project::with_world(SKINNED_WORLD);
+    let project = Project::with_app(SKINNED_APP);
     project.write_asset("body.glb", &skinned_morph_glb());
     assert_warm_build_reproduces_the_cold_one(&project);
 }
 
 #[test]
 fn a_warm_build_of_generated_payloads_reproduces_the_cold_one() {
-    assert_warm_build_reproduces_the_cold_one(&Project::with_world(GENERATED_WORLD));
+    assert_warm_build_reproduces_the_cold_one(&Project::with_app(GENERATED_APP));
 }

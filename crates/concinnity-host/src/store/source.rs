@@ -1,14 +1,13 @@
-//! Where a path a world names points on disk: one home for the rule, so every
-//! reader of a world resolves a path the same way.
+//! Where a path a line names points on disk: one home for the rule, so every
+//! reader of a .jsonl file resolves a path the same way.
 //!
-//! A relative path is relative to a root. A world file and each file it
-//! includes take theirs from the nearest directory at or above them, and within
-//! the build's root, holding a [`LIBRARY_MARKER`], so a library of world files
+//! A relative path is relative to a root. A file and each file it includes
+//! take theirs from the nearest directory at or above them, and within the
+//! build's root, holding a [`LIBRARY_MARKER`], so a library of .jsonl files
 //! names its own files the same whether it is run on its own or sits inside a
-//! project. Once a world is read,
-//! every path in it is [`rebase`]d onto the one root the build was given, and
-//! everything after that [`resolve`]s against that root. An absolute path names
-//! itself everywhere.
+//! project. Once a file is read, every path in it is [`rebase`]d onto the one
+//! root the build was given, and everything after that [`resolve`]s against
+//! that root. An absolute path names itself everywhere.
 //!
 //! The root is the caller's: nothing here picks one, so two builds may resolve
 //! against different trees in one process.
@@ -79,7 +78,7 @@ pub fn normalized(path: &Path) -> PathBuf {
 }
 
 /// How a path relative to `dir` names `target`, with `/` separators, so a
-/// world file reads the same on every host.
+/// file reads the same on every host.
 pub fn relative_from(dir: &Path, target: &Path) -> String {
     let dir = normalized(dir);
     let target = normalized(target);

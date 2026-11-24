@@ -1,5 +1,5 @@
-// The AppConfig asset names the world for distribution. At most one may be
-// declared. When a Window carries no title of its own, the application name
+// The AppConfig asset names the application for distribution. At most one may
+// be declared. When a Window carries no title of its own, the application name
 // fills it, so a running game shows its own name in the title bar.
 
 use super::expand::{ExpandReport, asset_name, registered_type};
@@ -27,7 +27,7 @@ pub(crate) fn apply_app_config(
                 "AppConfig",
                 &name,
                 format!(
-                    "the world already declares AppConfig '{prev}'; \
+                    "AppConfig '{prev}' is already declared; \
                  declare at most one"
                 ),
             ));
@@ -68,7 +68,7 @@ pub(crate) fn apply_app_config(
             );
         }
         // Keep the lock's copy of a companion-injected Window in sync, so
-        // world-lock.json shows the title the blob carries.
+        // cook-lock.json shows the title the blob carries.
         if let Some(entry) = report
             .injected
             .iter_mut()

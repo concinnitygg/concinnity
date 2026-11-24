@@ -8,7 +8,7 @@ One `StoryImport` stands in for a whole branching, click-through story (a
 visual-novel flow). The build parses the Markdown and expands the import
 into the UI assets that play it: a [Screen](Screen.md) per page with a backdrop
 [Sprite](Sprite.md), [`TextLabel`](TextLabel.md)s for narration and speaker
-names, and [`HitRegion`](HitRegion.md)s wiring page to page, so `world.jsonl`
+names, and [`HitRegion`](HitRegion.md)s wiring page to page, so the `.jsonl` file
 stays a single readable line while the story lives in the Markdown file.
 
 The `source` file is `CommonMark` Markdown opening with a YAML frontmatter

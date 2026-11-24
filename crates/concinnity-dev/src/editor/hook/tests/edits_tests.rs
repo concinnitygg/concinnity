@@ -311,7 +311,7 @@ fn save_writes_the_world_file_and_no_build_output() {
     assert!(!h.dirty, "a written save clears the unsaved chip");
     assert_eq!(h.saved, h.entries, "and re-baselines dirty tracking");
     assert!(
-        !dir.path().join("data").exists() && !dir.path().join("world-lock.json").exists(),
+        !dir.path().join("data").exists() && !StateTree::at(dir.path()).cook_lock_path().exists(),
         "no blobs and no lock"
     );
 

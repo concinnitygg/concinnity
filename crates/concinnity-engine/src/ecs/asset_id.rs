@@ -1,4 +1,4 @@
-//! Asset identity: names declared in world.jsonl are interned to an `AssetId` in
+//! Asset identity: names declared in a .jsonl file are interned to an `AssetId` in
 //! declaration order, and the blob and the runtime carry only the integer, so
 //! every cross-reference lookup is an integer compare.
 //!

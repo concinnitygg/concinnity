@@ -40,7 +40,7 @@ pub(crate) struct DebugServer {
     // The snapshot's job queue, run every tick.
     queue: RuntimeQueue,
     frame: u64,
-    // The asset / shader / world.jsonl reload drive. The server owns the
+    // The asset / shader / .jsonl reload drive. The server owns the
     // session's one driver so the `reload-assets` command can reach its
     // pending flag; the drive itself is shared with the plain `cn edit`
     // path (see `crate::debug::hot_reload::HotReloadDriver`).
@@ -85,7 +85,7 @@ impl DebugServer {
         self
     }
 
-    // Watch the world.jsonl the handle names.
+    // Watch the .jsonl file the handle names.
     pub(crate) fn with_world_path(mut self, handle: hot_reload::WorldPathHandle) -> Self {
         self.reload = self.reload.with_world_path(handle);
         self
@@ -101,7 +101,7 @@ impl DebugServer {
 impl DebugServer {
     // Run the jobs the verbs queued once per frame: backend jobs against the
     // parked backend, then world jobs, then the per-frame camera-move advance.
-    // The asset / shader / world.jsonl reload passes live on `self.reload`,
+    // The asset / shader / .jsonl reload passes live on `self.reload`,
     // driven separately by `tick`.
     fn drive_jobs(&mut self, world: &mut World) {
         self.queue.set_frame(self.frame);
@@ -138,7 +138,7 @@ impl FrameHook for DebugServer {
     fn tick(&mut self, world: &mut World) {
         self.frame += 1;
 
-        // The queued verb jobs, then the asset / shader / world.jsonl reload
+        // The queued verb jobs, then the asset / shader / .jsonl reload
         // passes. Both run only from this hook, so a `cn run` (no debug hook)
         // never touches them.
         self.drive_jobs(world);

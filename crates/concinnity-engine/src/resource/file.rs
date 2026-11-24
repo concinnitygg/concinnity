@@ -138,7 +138,7 @@ mod tests {
     }
 
     // `cn add` writes normalized args back, so an inferred kind stays absent
-    // rather than being frozen into the world file.
+    // rather than being frozen into the file.
     #[test]
     fn an_absent_kind_is_omitted_from_the_serialized_args() {
         let args: FileArgs = serde_json::from_str(r#"{"path":"assets/board.obj"}"#).unwrap();

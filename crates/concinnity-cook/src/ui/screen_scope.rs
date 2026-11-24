@@ -65,7 +65,7 @@ pub(super) fn scope_to_screen(children: &mut [AssetSpec], screen: &str) {
     }
 }
 
-/// `scope_to_screen` for entries already in their world.jsonl form.
+/// `scope_to_screen` for entries already in their .jsonl form.
 pub(crate) fn scope_entries_to_screen(children: &mut [serde_json::Value], screen: &str) {
     if screen.is_empty() {
         return;

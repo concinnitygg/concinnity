@@ -1,7 +1,7 @@
 //! The `AppConfig` asset. Only what the running process needs survives
 //! the bake: the state-tree location and the resource budgets. The distribution
 //! metadata (name, id, version, author, icon) is read at build / export time
-//! from the authored world, so it never ships in the blob.
+//! from the authored file, so it never ships in the blob.
 
 use alloc::string::String;
 
@@ -49,12 +49,13 @@ impl FramePriority {
 
 /// Names, identifies, and sizes the application.
 ///
-/// Declare at most one `AppConfig` per world. It supplies the display name,
-/// bundle identifier, version, author, and icon that the export step reads when
-/// it packages the world into a distributable game (the archive and executable
-/// name, and on macOS the `.app` bundle metadata and icon). When the world
-/// declares no [Window](#window) title of its own, `name` also fills the window
-/// title, so a running game shows its own name in the title bar.
+/// A `.jsonl` file that declares an `AppConfig` line of its own is an
+/// application. The file and what it includes declare at most one. It supplies the display
+/// name, bundle identifier, version, author, and icon that the export step
+/// reads when it packages the application for distribution (the archive and
+/// executable name, and on macOS the `.app` bundle metadata and icon). When
+/// the application declares no [Window](#window) title of its own, `name` also
+/// fills the window title, so it shows its own name in the title bar.
 ///
 /// `icon` is a path to a source image (a square PNG, 512x512 or larger)
 /// relative to the root of the file holding the line; it is read by the
@@ -77,7 +78,7 @@ impl FramePriority {
 /// `frame_priority` decides which frame threads run ahead of the other
 /// applications on the machine; see [`FramePriority`].
 ///
-/// `headless` keeps a world that could draw from opening a window. A world
+/// `headless` keeps an application that could draw from opening a window. One
 /// that draws nothing runs that way already.
 #[derive(
     Debug,
@@ -89,8 +90,8 @@ impl FramePriority {
 )]
 #[serde(default)]
 pub struct AppConfigArgs {
-    /// Display name of the application: the game's window title, the exported
-    /// archive and executable name, and the macOS bundle display name.
+    /// Display name of the application: its window title, the exported archive
+    /// and executable name, and the macOS bundle display name.
     #[asset(default = "Concinnity")]
     pub name: String,
     /// Reverse-DNS bundle identifier (e.g. `gg.studio.mygame`). When empty the
@@ -121,9 +122,9 @@ pub struct AppConfigArgs {
     /// Which of the frame's threads run above normal priority, ahead of the
     /// other applications on the machine.
     pub frame_priority: FramePriority,
-    /// Run with no window and no renderer, whatever the world holds. `false`
-    /// (the default) lets the content decide: a world with something to draw
-    /// opens a window, one without runs headless either way.
+    /// Run with no window and no renderer, whatever the application holds.
+    /// `false` (the default) lets the content decide: an application with
+    /// something to draw opens a window, one without runs headless either way.
     pub headless: bool,
 }
 

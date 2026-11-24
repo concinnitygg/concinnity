@@ -12,7 +12,7 @@ use crate::ui::expand::expand_all;
 // `#[ignore]`d: run explicitly, e.g.
 //   CN_PROBE_PROFILE=minimal CN_PROBE_TAB=video cargo test -p concinnity-cook \
 //       dump_settings_tab_probe_world -- --ignored
-// then `concinnity run -f world.jsonl` + the `screenshot` debug verb.
+// then `concinnity run -f app.jsonl` + the `screenshot` debug verb.
 #[expect(
     clippy::disallowed_methods,
     reason = "an ignored probe takes its inputs from the shell that runs it"

@@ -7,9 +7,9 @@ Imports a 3D scene file as a single declaration.
 One `SceneImport` stands in for the whole asset graph a scene file
 describes: its [Texture](Texture.md)s, [Material](Material.md)s,
 [Mesh](Mesh.md)es, [Model](Model.md)s, and [Prop](Prop.md)s. The build expands the
-import into those concrete assets, so `world.jsonl` stays small and
+import into those concrete assets, so the authored file stays small and
 human-editable while the full graph lives in the lock file and compiled
-blob. Geometry and texture pixels are never inlined into `world.jsonl`.
+blob. Geometry and texture pixels are never inlined into a .jsonl file.
 
 Supported `source` formats: `.fbx` and `.glb`.
 

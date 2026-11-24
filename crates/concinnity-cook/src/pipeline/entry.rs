@@ -49,7 +49,7 @@ pub fn build_from_path(
 pub struct BuildReport {
     /// Each blob file written, with its size on disk in bytes.
     pub blobs: Vec<(std::path::PathBuf, u64)>,
-    /// The `world-lock.json` written beside the blobs.
+    /// The `cook-lock.json` written beside the blobs.
     pub lock: std::path::PathBuf,
     /// Payloads the build cache already held.
     pub cache_hits: usize,
@@ -116,7 +116,7 @@ pub(crate) fn write_blobs_to(
     )
 }
 
-/// Write the blobs and world-lock.json for a compiled world into `tree`, then
+/// Write the blobs and cook-lock.json for a compiled world into `tree`, then
 /// render its thumbnails: the shared build tail used by the CLI and the
 /// editor. The lock records each asset under its real name plus every
 /// injected default with its full args. The report's `injected` is left for
@@ -182,7 +182,7 @@ fn write_outputs(
     let thumbnails = crate::compile::thumbnail::bake_thumbnails(result, progress);
     Ok(BuildReport {
         blobs,
-        lock: tree.world_lock_path(),
+        lock: tree.cook_lock_path(),
         cache_hits: result.cache_hits,
         cache_misses: result.cache_misses,
         injected: 0,
@@ -1102,7 +1102,7 @@ mod tests {
             &library.join("kits/bark.jsonl"),
             br#"["Texture",{"$id":"tex_bark","source":"tex/bark.png"}]"#,
         );
-        let gallery = library.join("worlds/gallery.jsonl");
+        let gallery = library.join("apps/gallery.jsonl");
         write(&gallery, br#"["Include",{"path":"kits/bark.jsonl"}]"#);
         let world = project.join("world.jsonl");
         write(&world, br#"["Include",{"path":"assets/kits/bark.jsonl"}]"#);

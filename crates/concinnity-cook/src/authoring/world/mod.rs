@@ -1,19 +1,19 @@
-//! The authored world model: world.jsonl I/O (`WorldJsonlAsset`, the
+//! The authored model: `.jsonl` file I/O (`WorldJsonlAsset`, the
 //! `["Type", {args}]` line format, `parse/write_world_jsonl`,
-//! `patch_world_jsonl_to`, `find_world_jsonl`, the path consts) and structural
+//! `patch_world_jsonl_to`, the application a file declares) and structural
 //! validation (`load_world`), which resolves `Include` lines first. What sits
 //! on top of this -- expansion passes, injection, and `prepare_world` -- is
 //! `crate::build_only`; the shipped runtime plays compiled blobs and never
 //! sees any of this.
+mod app;
 mod entry_check;
-mod find;
 mod identity;
 mod io;
 mod line;
 mod source;
 
+pub use app::{APP_JSONL, declared_app_name};
 pub use entry_check::entry_errors;
-pub use find::{WORLD_JSONL, find_world_jsonl};
 pub use identity::{
     ID_KEY, anonymous_label, args_with_id, args_without_id, entry_handle, entry_handles, entry_id,
     entry_type, entry_type_name, find_entry, is_label_of, replace_args, set_entry_id,
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn load_world_rejects_runtime_only_type() {
         // Transform is pushed by a system at runtime (RuntimeOnly), so it may
-        // not be authored in the world file.
+        // not be authored in the file.
         let errs = load(r#"["Transform",{"$id":"t"}]"#).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("RuntimeOnly")));
     }

@@ -1,10 +1,8 @@
-//! Remove an asset from a world JSONL by its handle.
+//! Remove an asset from a .jsonl file by its handle.
 
 use std::path::Path;
 
-use concinnity_cook::authoring::world::{
-    WORLD_JSONL, find_entry, known_names, patch_world_jsonl_to,
-};
+use concinnity_cook::authoring::world::{find_entry, known_names, patch_world_jsonl_to};
 use concinnity_cook::build_only::include::with_includes;
 
 /// Remove the asset `name` addresses from `world_path`: the entry
@@ -35,7 +33,10 @@ pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
         if known.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("no asset named '{name}' in {WORLD_JSONL} (no assets declared)"),
+                format!(
+                    "no asset named '{name}' in {} (no assets declared)",
+                    world_path.display()
+                ),
             ));
         }
         return Err(std::io::Error::new(
@@ -43,7 +44,7 @@ pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
             format!(
                 "no asset named '{}' in {}\nKnown names: {}",
                 name,
-                WORLD_JSONL,
+                world_path.display(),
                 known.join(", ")
             ),
         ));
@@ -108,7 +109,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("no asset named 'ghost'"), "got: {msg}");
         assert!(msg.contains("Known names: log, log2"), "got: {msg}");
-        // The world file itself is left intact.
+        // The file itself is left intact.
         let survived = std::fs::read_to_string(&path).unwrap();
         assert!(survived.contains("\"log\""));
         assert!(survived.contains("\"log2\""));

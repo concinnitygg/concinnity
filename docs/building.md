@@ -33,7 +33,7 @@ concinnity = "0.20"
 | `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.                                                                                    |
 
 A build that wants a smaller graph turns the defaults off and names what it
-keeps. One that only plays an already-compiled world keeps the runtime and
+keeps. One that only plays an already-cooked application keeps the runtime and
 leaves out the editor and the asset importers `cook` pulls in (glTF, FBX,
 PNG and JPEG, KTX2 and Basis textures):
 
@@ -44,7 +44,7 @@ concinnity = { version = "0.20", default-features = false, features = ["std"] }
 `vulkan` is mirrored by every crate between the facade and the device
 backends, and by the `cn` CLI, so `--features vulkan` means the same thing
 whichever of them a build targets. A blob a two-backend build writes carries
-shaders for both, so one world plays on either.
+shaders for both, so one cook plays on either.
 
 Dropping `std` leaves the `no_std` core: the component vocabulary, a `World`,
 and the headless loop that steps it, with no operating system underneath.
@@ -100,7 +100,7 @@ checkout, install a
 put its `bin/` on `PATH`.
 
 A built binary needs no compiler to draw its own shaders. `cn cook` needs one
-to cook a world that declares a `Shader` or an `SdfVolume`, whose authored HLSL
+to cook assets that declare a `Shader` or an `SdfVolume`, whose authored HLSL
 compiles alongside the engine's.
 
 ## Third-party environment variables

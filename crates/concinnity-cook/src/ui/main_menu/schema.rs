@@ -11,7 +11,7 @@ use concinnity_engine::ecs::{AssetFields, FieldTable, NameRef};
 /// built from: a [Screen](#screen) layer, a dim backdrop [Sprite](#sprite), a
 /// [`TextLabel`](#textlabel) and [`HitRegion`](#hitregion) for each item, an
 /// optional [`KeyBinding`](#keybinding) that toggles the menu, and an optional
-/// in-engine mouse cursor [Sprite](#sprite). So `world.jsonl` stays small.
+/// in-engine mouse cursor [Sprite](#sprite). So the authored file stays small.
 ///
 /// The bare form gives a centered Resume / Settings / Quit menu that starts
 /// closed, with Escape opening it, so the scene itself shows first. Set

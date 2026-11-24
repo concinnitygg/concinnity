@@ -5,16 +5,18 @@ use concinnity_engine::launch::{DEFAULT_DEBUG_PORT, LaunchArgs};
 
 use super::launch_args::{BenchScope, LaunchArgsArg, RunScope};
 use super::value_enums::BundleFormatArg;
+use crate::command::Target;
 
 // Each command's rustdoc is its `--help` text and its section of the command
 // line reference: the first line is the summary, and the ```sh block lists
 // examples, each a whole command line.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
-    /// Create a new app in the current directory
+    /// Create a new application in the current directory
     ///
-    /// Writes a starter world to `world.jsonl` and cooks it. A directory that
-    /// already holds a world is left alone.
+    /// Writes a starter application to `app.jsonl`, named after the directory,
+    /// and cooks it. A directory that already holds an application is left
+    /// alone.
     ///
     /// ```sh
     /// concinnity init
@@ -22,10 +24,11 @@ pub(crate) enum Commands {
     #[command(name = "init", verbatim_doc_comment)]
     Init,
 
-    /// Create a new app in a new directory
+    /// Create a new application in a new directory
     ///
-    /// Creates the directory, writes a starter world to `world.jsonl` in it and
-    /// cooks it. A directory that already holds a world is refused.
+    /// Creates the directory, writes a starter application to `app.jsonl` in
+    /// it, named after the directory, and cooks it. A directory that already
+    /// holds an application is refused.
     ///
     /// ```sh
     /// concinnity new my-app
@@ -33,25 +36,26 @@ pub(crate) enum Commands {
     #[command(name = "new", verbatim_doc_comment)]
     New(NewArgs),
 
-    /// Cook an app into binary blobs
+    /// Cook assets into binary blobs
     ///
-    /// Compiles the world into the blobs a run loads and writes
-    /// `world-lock.json`, showing each step as it runs and the warnings the
-    /// build raises.
+    /// Compiles the application, or the file `-f` names, into the blobs a run
+    /// loads and writes `cook-lock.json`, showing each step as it runs and the
+    /// warnings the build raises.
     ///
     /// ```sh
     /// concinnity cook
+    /// concinnity cook --app Arena
     /// concinnity cook -f arena.jsonl --verbose
     /// ```
     #[command(name = "cook", verbatim_doc_comment)]
     Cook(CookArgs),
 
-    /// Validate world files without cooking them
+    /// Validate assets without cooking them
     ///
     /// Without `-f`, checks every `.jsonl` file under the current directory,
     /// each on its own, skipping hidden files and directories such as `.git`.
     /// A fragment that relies on what its includer declares fails on its own;
-    /// check the world that includes it with `-f` instead.
+    /// check the file that includes it with `-f` instead.
     ///
     /// ```sh
     /// concinnity check
@@ -60,26 +64,27 @@ pub(crate) enum Commands {
     #[command(name = "check", verbatim_doc_comment)]
     Check(CheckArgs),
 
-    /// Run an app
+    /// Run an application
     ///
-    /// Without `-f`, cooks the discovered world and runs the blobs it writes,
-    /// or runs the cooked blobs already in place when there is no world to
-    /// discover. With `-f`, cooks the named world in memory and reloads it as
-    /// its files change. `--debug-port` serves the debug protocol (MCP) either
-    /// way.
+    /// Without `-f`, cooks the application and runs the blobs it writes, or
+    /// runs the cooked blobs already in place when there is no application. A
+    /// project with several applications picks one with `--app`. With `-f`,
+    /// cooks the named file in memory and reloads it as its files change.
+    /// `--debug-port` serves the debug protocol (MCP) either way.
     ///
     /// ```sh
     /// concinnity run
+    /// concinnity run --app Arena
     /// concinnity run -f arena.jsonl --debug-port
     /// concinnity run --graphics-api vulkan --graphics-quality high --no-vsync
     /// ```
     #[command(name = "run", verbatim_doc_comment)]
     Run(RunArgs),
 
-    /// Benchmark an app and print what its frames cost
+    /// Benchmark an application and print what its frames cost
     ///
-    /// Finds its world the way `run` does, and prints the frame costs when the
-    /// run ends.
+    /// Finds its application the way `run` does, and prints the frame costs
+    /// when the run ends.
     ///
     /// ```sh
     /// concinnity bench
@@ -88,11 +93,12 @@ pub(crate) enum Commands {
     #[command(name = "bench", verbatim_doc_comment)]
     Bench(BenchArgs),
 
-    /// Edit an app in-engine with a save-back HUD
+    /// Edit an application in-engine with a save-back HUD
     ///
-    /// Cooks the world in memory, so it needs no `concinnity cook` first and
+    /// Cooks the file in memory, so it needs no `concinnity cook` first and
     /// neither reads nor refreshes the cooked blobs. The editor HUD saves edits
-    /// back to the world file and adds assets. `--debug-port` serves the same
+    /// back to the file and adds assets. Without `-f` or `--app`, it opens on a
+    /// listing of the project's files. `--debug-port` serves the same
     /// debug protocol `run` does, so an MCP client can drive the editor.
     ///
     /// ```sh
@@ -102,7 +108,10 @@ pub(crate) enum Commands {
     #[command(name = "edit", verbatim_doc_comment)]
     Edit(EditArgs),
 
-    /// Add assets to the active app
+    /// Add assets to a file
+    ///
+    /// Adds to the file `-f` names, else to the application. With no
+    /// application, starts one in `app.jsonl`.
     ///
     /// Each TARGET is one of:
     ///
@@ -112,7 +121,7 @@ pub(crate) enum Commands {
     ///   registered default args.
     /// - A whole entry, such as `'["Window", {}]'`.
     ///
-    /// Only the world file changes; `run` and `cook` compile it. Every target
+    /// Only the file changes; `run` and `cook` compile it. Every target
     /// resolves before the file is written, so one bad target adds nothing.
     ///
     /// ```sh
@@ -120,19 +129,20 @@ pub(crate) enum Commands {
     /// concinnity add models/scene.glb --template minimal-3d-world
     /// concinnity add PointLight --id lamp
     /// concinnity add '["Window", {}]'
+    /// concinnity add PointLight --id lamp -f props/lights.jsonl
     /// ```
     #[command(name = "add", verbatim_doc_comment)]
     Add(AddArgs),
 
-    /// Remove an asset from the active app by its id
+    /// Remove an asset from a file by its id
     ///
-    /// ID is the `$id` an entry declares in its args, or the `<Type>#<ordinal>`
-    /// handle of an anonymous one. Only the world file changes; `run` and
-    /// `cook` compile it.
+    /// Removes from the file `-f` names, else from the application. ID is the
+    /// `$id` an entry declares in its args, or the `<Type>#<ordinal>` handle of
+    /// an anonymous one. Only the file changes; `run` and `cook` compile it.
     ///
     /// ```sh
     /// concinnity rm lamp
-    /// concinnity rm 'Prop#3'
+    /// concinnity rm 'Prop#3' -f props/outdoor.jsonl
     /// ```
     #[command(name = "rm", verbatim_doc_comment)]
     Rm(RmArgs),
@@ -146,11 +156,11 @@ pub(crate) enum Commands {
     #[command(name = "list", verbatim_doc_comment)]
     List(ListArgs),
 
-    /// Print an asset's effective entry from the expanded app
+    /// Print an asset's effective entry from the expanded assets
     ///
-    /// Prints the whole world line for ID as the cook sees it, including assets
-    /// that only exist through cook-time expansion or injection. The line can
-    /// be pasted into the world file as it stands to override a default.
+    /// Prints the whole line for ID as the cook sees it, including assets that
+    /// only exist through cook-time expansion or injection. The line can be
+    /// pasted into the file as it stands to override a default.
     ///
     /// ```sh
     /// concinnity explain lamp
@@ -172,11 +182,14 @@ pub(crate) enum Commands {
     #[command(name = "docs", verbatim_doc_comment)]
     Docs(DocsArgs),
 
-    /// Package a cooked app for distribution
+    /// Package an application for distribution
+    ///
+    /// Cooks the application and bundles it with the player. A project with
+    /// several applications exports one at a time, picked with `--app`.
     ///
     /// ```sh
     /// concinnity export
-    /// concinnity export --name "My App" --version 1.2.0 --format dir --out build
+    /// concinnity export --app Arena --version 1.2.0 --format dir --out build
     /// ```
     #[command(name = "export", verbatim_doc_comment)]
     Export(ExportArgs),
@@ -204,8 +217,8 @@ pub(crate) enum Commands {
 }
 
 impl Commands {
-    // The launch a world-running command asks for, `quiet` from the root
-    // command. `None` for a command that runs no world.
+    // The launch a running command asks for, `quiet` from the root command.
+    // `None` for a command that runs nothing.
     pub(crate) fn launch_args(&self, quiet: bool) -> Option<LaunchArgs> {
         let args = match self {
             Self::Run(a) => &a.launch.args,
@@ -220,28 +233,36 @@ impl Commands {
     }
 }
 
-// The `-f` world a command operates on. Flattened into every command that
-// reads a world from disk; an absent flag discovers it, a named file that does
-// not exist is an error.
+// The file a command operates on. Flattened into every command that reads one
+// from disk: `-f` names it, else the application `--app` names, else the only
+// application. A named file that does not exist is an error.
 #[derive(Debug, clap::Args)]
-pub(crate) struct WorldArg {
-    /// Path to a world JSONL file
+pub(crate) struct TargetArg {
+    /// Path to a .jsonl file
     ///
-    /// Defaults to the nearest `world.jsonl` up from the current directory.
-    #[arg(short = 'f', long)]
+    /// Defaults to the application: the .jsonl file under the current
+    /// directory that declares an `AppConfig`.
+    #[arg(short = 'f', long, conflicts_with = "app")]
     file: Option<String>,
+
+    /// The application to use when there are several, by its `AppConfig` name
+    #[arg(long, value_name = "NAME")]
+    app: Option<String>,
 }
 
-impl WorldArg {
-    pub(crate) fn file(&self) -> Option<&str> {
-        self.file.as_deref()
+impl TargetArg {
+    pub(crate) fn target(&self) -> Target<'_> {
+        Target {
+            file: self.file.as_deref(),
+            app: self.app.as_deref(),
+        }
     }
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct RunArgs {
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 
     #[command(flatten)]
     pub(crate) launch: LaunchArgsArg<RunScope>,
@@ -250,7 +271,7 @@ pub(crate) struct RunArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct BenchArgs {
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 
     #[command(flatten)]
     pub(crate) launch: LaunchArgsArg<BenchScope>,
@@ -259,7 +280,7 @@ pub(crate) struct BenchArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct EditArgs {
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 
     #[command(flatten)]
     pub(crate) launch: LaunchArgsArg<RunScope>,
@@ -274,34 +295,40 @@ pub(crate) struct McpArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct AddArgs {
+    #[command(flatten)]
+    pub(crate) target: TargetArg,
+
     /// Paths to asset files, type names, or entries like '["Window", {}]'
     #[arg(value_name = "TARGET", required = true)]
     pub(crate) targets: Vec<String>,
 
-    /// The `$id` written into the world, for a single TARGET
+    /// The `$id` written into the file, for a single TARGET
     ///
     /// Without one, a file target's id comes from its file name, and a type
     /// name or an entry without one is added anonymous.
     #[arg(short, long)]
     pub(crate) id: Option<String>,
 
-    /// Named scaffold preset used when bootstrapping a new world
+    /// Named scaffold preset used when a scene starts a new file
     ///
     /// `minimal-3d-world` adds a camera, sun, room and sky to the base
-    /// scaffold. Ignored when the world already exists.
+    /// scaffold. Ignored when the file already renders.
     #[arg(short = 't', long)]
     pub(crate) template: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct RmArgs {
+    #[command(flatten)]
+    pub(crate) target: TargetArg,
+
     /// The asset's `$id`, or the `<Type>#<ordinal>` of an anonymous one
     pub(crate) id: String,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct CheckArgs {
-    /// Path to a world JSONL file
+    /// Path to a .jsonl file
     ///
     /// Defaults to every `.jsonl` file under the current directory.
     #[arg(short = 'f', long)]
@@ -311,17 +338,17 @@ pub(crate) struct CheckArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct ListArgs {
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 
-    /// List the expanded world the cook produces
+    /// List the expanded assets the cook produces
     ///
     /// Cook-time macros are expanded and injected defaults included, each row
     /// tagged with where it came from: authored, injected or expanded.
     #[arg(long)]
     pub(crate) expanded: bool,
 
-    /// List the systems this world runs, in order, each with the condition that
-    /// includes it
+    /// List the systems these assets run, in order, each with the condition
+    /// that includes it
     // Builds the world and reports `World::system_manifest()`, the same gates
     // the runtime runs at start, so it cannot drift.
     #[arg(long)]
@@ -334,7 +361,7 @@ pub(crate) struct ExplainArgs {
     pub(crate) id: String,
 
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 }
 
 #[derive(Debug, clap::Args)]
@@ -353,7 +380,7 @@ pub(crate) struct NewArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct CookArgs {
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 
     /// Also show the cook's informational messages, such as each imported mesh
     #[arg(short, long)]
@@ -363,7 +390,7 @@ pub(crate) struct CookArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct ExportArgs {
     #[command(flatten)]
-    pub(crate) world: WorldArg,
+    pub(crate) target: TargetArg,
 
     /// Override the application name
     #[arg(short = 'n', long)]
@@ -415,7 +442,7 @@ mod tests {
             .expect("a launch command")
     }
 
-    // Every world-launching command defaults every flag to absent, which the
+    // Every launching command defaults every flag to absent, which the
     // engine resolves to today's behavior, and names its own launch command.
     #[test]
     fn the_launch_flags_default_to_absent_on_every_launch_command() {
@@ -555,12 +582,12 @@ mod tests {
     }
 
     #[test]
-    fn run_takes_a_world_and_a_debug_port() {
-        let cli = Cli::try_parse_from(["concinnity", "run", "-f", "world.jsonl"]).unwrap();
+    fn run_takes_a_file_and_a_debug_port() {
+        let cli = Cli::try_parse_from(["concinnity", "run", "-f", "app.jsonl"]).unwrap();
         let Commands::Run(a) = &cli.command else {
             panic!("expected run");
         };
-        assert_eq!(a.world.file(), Some("world.jsonl"));
+        assert_eq!(a.target.target(), Target::file("app.jsonl"));
         assert_eq!(a.launch.args.debug_port, None);
         let port = |argv: &[&str]| launch(argv).debug_port;
         assert_eq!(
@@ -647,36 +674,61 @@ mod tests {
         assert_eq!(a.path, "my-app");
     }
 
-    // `run`, `bench`, `cook` and `edit` share the same optional --file,
-    // defaulting to discovery.
+    // Every command that reads one file takes the same optional `--file` or
+    // `--app`, but not both, defaulting to the only application.
     #[test]
-    fn the_world_commands_take_an_optional_world_file() {
-        let file = |argv: &[&str]| -> Option<String> {
+    fn the_file_commands_take_an_optional_file_or_app() {
+        let target = |argv: &[&str]| -> (Option<String>, Option<String>) {
             let cli = Cli::try_parse_from(argv).unwrap();
-            let world = match &cli.command {
-                Commands::Cook(a) => &a.world,
-                Commands::Run(a) => &a.world,
-                Commands::Bench(a) => &a.world,
-                Commands::Edit(a) => &a.world,
-                _ => panic!("expected a world command for {argv:?}"),
+            let arg = match &cli.command {
+                Commands::Cook(a) => &a.target,
+                Commands::Run(a) => &a.target,
+                Commands::Bench(a) => &a.target,
+                Commands::Edit(a) => &a.target,
+                Commands::List(a) => &a.target,
+                Commands::Export(a) => &a.target,
+                Commands::Add(a) => &a.target,
+                Commands::Rm(a) => &a.target,
+                Commands::Explain(a) => &a.target,
+                _ => panic!("expected a file command for {argv:?}"),
             };
-            world.file().map(str::to_string)
+            let t = arg.target();
+            (t.file.map(str::to_string), t.app.map(str::to_string))
         };
-        for command in ["cook", "run", "bench", "edit"] {
-            assert_eq!(file(&["concinnity", command]), None, "{command}");
+        let file = |f: &str| (Some(f.to_string()), None);
+        for command in [
+            &["cook"][..],
+            &["run"],
+            &["bench"],
+            &["edit"],
+            &["list"],
+            &["export"],
+            &["add", "Logger"],
+            &["rm", "log"],
+            &["explain", "log"],
+        ] {
+            let argv = |extra: &[&'static str]| {
+                let mut argv = vec!["concinnity"];
+                argv.extend_from_slice(command);
+                argv.extend_from_slice(extra);
+                argv
+            };
+            assert_eq!(target(&argv(&[])), (None, None), "{command:?}");
+            assert_eq!(target(&argv(&["-f", "w.jsonl"])), file("w.jsonl"));
+            assert_eq!(target(&argv(&["--file", "w.jsonl"])), file("w.jsonl"));
             assert_eq!(
-                file(&["concinnity", command, "-f", "w.jsonl"]).as_deref(),
-                Some("w.jsonl")
+                target(&argv(&["--app", "Arena"])),
+                (None, Some("Arena".to_string()))
             );
-            assert_eq!(
-                file(&["concinnity", command, "--file", "w.jsonl"]).as_deref(),
-                Some("w.jsonl")
+            assert!(
+                Cli::try_parse_from(argv(&["-f", "w.jsonl", "--app", "Arena"])).is_err(),
+                "{command:?} takes a file or an app, not both"
             );
         }
     }
 
     #[test]
-    fn check_takes_an_optional_world_file() {
+    fn check_takes_an_optional_file() {
         let file = |argv: &[&str]| -> Option<String> {
             let cli = Cli::try_parse_from(argv).unwrap();
             let Commands::Check(a) = cli.command else {
@@ -725,7 +777,7 @@ mod tests {
             panic!("expected explain");
         };
         assert_eq!(a.id, "gfx");
-        assert_eq!(a.world.file(), Some("w.jsonl"));
+        assert_eq!(a.target.target(), Target::file("w.jsonl"));
     }
 
     #[test]
@@ -796,7 +848,7 @@ mod tests {
         let Commands::Export(e) = &cli.command else {
             panic!("expected export");
         };
-        assert_eq!(e.world.file(), Some("w.jsonl"));
+        assert_eq!(e.target.target(), Target::file("w.jsonl"));
         assert_eq!(e.name.as_deref(), Some("My Game"));
         assert_eq!(e.version.as_deref(), Some("2.0.0"));
         assert_eq!(e.platform.as_deref(), Some("macos"));

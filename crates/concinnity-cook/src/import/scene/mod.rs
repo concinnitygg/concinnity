@@ -495,7 +495,7 @@ fn entries_from_glb(
             // Oversized: parse geometry now solely to learn how many u16-safe
             // chunks the build will produce. Emit one Mesh per chunk by name;
             // each carries `chunk_index` so desugar can re-split the primitive
-            // and pick the right slice: no inline data baked into world.jsonl.
+            // and pick the right slice: no inline data baked into a .jsonl file.
             let (_, indices32) = crate::import::glb::read_primitive_geometry(
                 &doc,
                 path,

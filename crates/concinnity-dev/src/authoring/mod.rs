@@ -1,6 +1,6 @@
 // In-memory world authoring + build orchestration.
 //
-// The add / rm / check / build operations on a world JSONL, plus the templates
+// The add / rm / check / build operations on a .jsonl file, plus the templates
 // bridge, shared by this crate's `command` layer and the editor.
 
 mod add;

@@ -24,7 +24,7 @@ pub struct SourcedEntry {
     /// The entry, as a `{"type", "args"}` object.
     pub entry: Value,
     /// The included file the entry was read from; `None` for an entry of the
-    /// world file itself.
+    /// top-level file itself.
     pub file: Option<PathBuf>,
     /// The root the entry's own paths resolve against: its file's.
     pub root: Option<PathBuf>,

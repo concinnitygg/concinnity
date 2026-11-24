@@ -1,17 +1,17 @@
-//! Print one asset's effective entry from the expanded world: the full JSONL
-//! line as the build sees it, pasteable into world.jsonl verbatim. This is the
+//! Print one asset's effective entry from the expanded assets: the full JSONL
+//! line as the build sees it, pasteable into a .jsonl file verbatim. This is the
 //! override path for injected defaults and expanded assets, which have no line
 //! in the authored file to copy from. An anonymous asset is named by its
 //! `<Type>#<ordinal>` label, and its line declares no `$id`.
 
 use concinnity_cook::authoring::world::entry_line;
 
-use crate::command::{provenance, resolve_world_path};
+use crate::command::{Target, provenance};
 
-/// Print one asset's effective entry from the expanded world, with where
+/// Print one asset's effective entry from the expanded assets, with where
 /// each value came from.
-pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
-    let json_path = resolve_world_path(json_path)?;
+pub(crate) fn explain(name: &str, target: Target<'_>) -> std::io::Result<()> {
+    let json_path = target.resolve()?;
     let content = std::fs::read_to_string(&json_path)?;
     let root = crate::project::content_root();
     let source = concinnity_cook::WorldSource::file(&content, &json_path, root.as_deref());
@@ -35,7 +35,7 @@ pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()
         };
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("no asset named '{name}' in the expanded world{hint}"),
+            format!("no asset named '{name}' among the expanded assets{hint}"),
         ));
     };
 
@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn explain_prints_a_known_asset() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
-        explain("gfx", Some(&path)).unwrap();
+        explain("gfx", Target::file(&path)).unwrap();
     }
 
     #[test]
@@ -71,21 +71,21 @@ mod tests {
             .join("absent.jsonl")
             .to_string_lossy()
             .into_owned();
-        let err = explain("gfx", Some(&path)).unwrap_err();
+        let err = explain("gfx", Target::file(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
     fn explain_resolves_an_anonymous_label() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{}]\n[\"Scene\"]\n");
-        explain("Scene#0", Some(&path)).unwrap();
-        assert!(explain("Scene#1", Some(&path)).is_err());
+        explain("Scene#0", Target::file(&path)).unwrap();
+        assert!(explain("Scene#1", Target::file(&path)).is_err());
     }
 
     #[test]
     fn explain_of_an_unknown_name_offers_close_matches() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
-        let err = explain("gf", Some(&path)).unwrap_err();
+        let err = explain("gf", Target::file(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         let msg = err.to_string();
         assert!(msg.contains("close matches"), "got: {msg}");
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn explain_of_an_unknown_name_without_matches_has_no_hint() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
-        let err = explain("zzz_nothing", Some(&path)).unwrap_err();
+        let err = explain("zzz_nothing", Target::file(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(!err.to_string().contains("close matches"), "got: {err}");
     }
@@ -103,6 +103,6 @@ mod tests {
     #[test]
     fn explain_surfaces_validation_failures() {
         let (_dir, path) = write_world("[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n");
-        assert!(explain("odd", Some(&path)).is_err());
+        assert!(explain("odd", Target::file(&path)).is_err());
     }
 }

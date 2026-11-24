@@ -84,12 +84,12 @@ impl fmt::Display for StartupError {
         match self {
             Self::MissingData { blob } => write!(
                 f,
-                "no compiled world data at {} -- run `concinnity build` first",
+                "no cooked data at {} -- run `concinnity cook` first",
                 blob.display()
             ),
             Self::UnreadableData { blob, cause } => write!(
                 f,
-                "compiled world data at {} failed to load: {cause}",
+                "cooked data at {} failed to load: {cause}",
                 blob.display()
             ),
             Self::OverflowUnsupported { blob, needed } => write!(
@@ -144,7 +144,7 @@ mod tests {
         let err = StartupError::from_blob_failure(blob, cause());
         assert!(matches!(err, StartupError::MissingData { .. }));
         assert!(err.user_message().contains("Failed to find"));
-        assert!(err.to_string().contains("concinnity build"));
+        assert!(err.to_string().contains("concinnity cook"));
     }
 
     #[test]
