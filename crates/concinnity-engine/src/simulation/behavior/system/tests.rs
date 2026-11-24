@@ -310,8 +310,7 @@ fn despawn_of_self_addresses_the_entity_not_a_name() {
     let requests: Vec<EntityTarget> = world
         .context()
         .events::<DespawnRequest>()
-        .map(|e| e.read(&mut cursor).map(|r| r.target).collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut cursor).map(|r| r.target).collect());
     assert_eq!(requests, vec![EntityTarget::Entity(entity)]);
 }
 
@@ -1227,8 +1226,7 @@ fn show_and_hide_send_visibility_requests() {
     let visible: Vec<bool> = world
         .context()
         .events::<VisibilityRequest>()
-        .map(|e| e.read(&mut cursor).map(|r| r.visible).collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut cursor).map(|r| r.visible).collect());
     assert_eq!(visible, vec![false, true], "hide then show, in body order");
 }
 

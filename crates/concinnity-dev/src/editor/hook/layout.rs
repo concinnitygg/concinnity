@@ -113,8 +113,7 @@ impl EditorHook {
     pub(super) fn template_entries(i: usize) -> Vec<serde_json::Value> {
         concinnity_cook::authoring::template::TEMPLATES
             .get(i)
-            .map(crate::authoring::world_template_entries)
-            .unwrap_or_default()
+            .map_or_default(crate::authoring::world_template_entries)
     }
 
     // Template `i`'s assets as the shared grouped rows (types + names alphabetical,

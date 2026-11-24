@@ -533,7 +533,7 @@ pub(crate) fn source_summary(verb: &str, on: Option<&Value>) -> String {
 fn node_summary(verb: &str, body: Option<&Value>) -> String {
     let at = |key: &str| body.and_then(|v| v.get(key));
     let name = |key: &str| str_text(at(key));
-    let target = |key: &str| at(key).map(expr_summary).unwrap_or_default();
+    let target = |key: &str| at(key).map_or_default(expr_summary);
     match verb {
         "for_each" => format!("{} -> {}", name("query"), name("bind")),
         "let" | "set_local" | "spawn" | "scene" | "screen" | "sound" => name(first_field(verb)),
@@ -592,8 +592,7 @@ pub(crate) fn literal_text(body: Option<&Value>) -> String {
 fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
 }
 
 fn count_text(n: usize) -> String {

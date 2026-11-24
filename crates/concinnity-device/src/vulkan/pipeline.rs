@@ -116,7 +116,9 @@ pub(super) fn spirv_words(spv: &[u8]) -> RenderResult<Vec<u32>> {
         )));
     }
     Ok(spv
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|w| u32::from_ne_bytes([w[0], w[1], w[2], w[3]]))
         .collect())
 }

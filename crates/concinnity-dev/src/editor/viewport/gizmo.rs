@@ -116,7 +116,7 @@ pub(crate) fn layout(
         }
         let aspect = vw / vh;
         Some([
-            (v[0] / (depth * tan_half * aspect) + 1.0) * 0.5 * vw,
+            f32::midpoint(v[0] / (depth * tan_half * aspect), 1.0) * vw,
             (1.0 - v[1] / (depth * tan_half)) * 0.5 * vh,
         ])
     };

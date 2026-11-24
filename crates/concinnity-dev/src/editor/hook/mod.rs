@@ -718,8 +718,7 @@ impl FrameHook for EditorHook {
         // they are toggled off or the HUD is hidden.
         let mut lines = world
             .remove_resource::<WorldLines>()
-            .map(|l| l.0)
-            .unwrap_or_default();
+            .map_or_default(|l| l.0);
         lines.clear();
         if self.show_flags.contains(view_menu::ShowFlags::LINES) && !self.start_mode {
             self.push_axis_lines(world, &mut lines);

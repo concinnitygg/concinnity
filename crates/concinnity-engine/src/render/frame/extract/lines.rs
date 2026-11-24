@@ -124,7 +124,7 @@ mod tests {
         // Compare ribbon centers: the two corners straddle the line, so their
         // midpoint is the segment endpoint itself (the corner offsets rotate
         // with the camera-facing normal and are not comparable directly).
-        let center = |v: &[LineVertex]| (v[0].pos[0] + v[1].pos[0]) * 0.5;
+        let center = |v: &[LineVertex]| f32::midpoint(v[0].pos[0], v[1].pos[0]);
         assert!((center(&shifted) - center(&plain) - 5.0).abs() < 1e-3);
     }
 }

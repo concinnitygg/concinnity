@@ -176,8 +176,8 @@ impl TypeMeta {
     // the registry derives from the type's schema, whichever group it is in.
     fn of(ty: &str) -> Self {
         let ct = RegisteredType::parse(ty);
-        let refs = ct.map(RegisteredType::ref_fields).unwrap_or_default();
-        let actions = ct.map(RegisteredType::action_fields).unwrap_or_default();
+        let refs = ct.map_or_default(RegisteredType::ref_fields);
+        let actions = ct.map_or_default(RegisteredType::action_fields);
         Self {
             ct,
             sparse: sparse_defaults(ty).is_some(),
@@ -542,7 +542,7 @@ fn collect_value(
                 out.push(FormField {
                     key: format!("{path}.{i}"),
                     kind: ekind,
-                    initial: elem.map(value_text).unwrap_or_default(),
+                    initial: elem.map_or_default(value_text),
                     boolval: false,
                     variants: Vec::new(),
                     variant_idx: 0,
@@ -887,7 +887,7 @@ pub(crate) fn working_args(ty: &str, editing: Option<&Map<String, Value>>) -> Ma
 // window; capturing an off-window field feeds this back through `assemble` so its
 // stored value round-trips unchanged instead of being blanked.
 pub(crate) fn current_text(args: &Map<String, Value>, path: &str) -> String {
-    get_at_path(args, path).map(value_text).unwrap_or_default()
+    get_at_path(args, path).map_or_default(value_text)
 }
 
 // The element template for the array at `path` in `args`: a clone of its first

@@ -70,7 +70,7 @@ pub(crate) fn grouped_rows(
         named.sort_by(|a, b| a.1.cmp(&b.1));
         rows.push(ListRow {
             is_header: true,
-            text: ty.clone(),
+            text: ty,
             entry: None,
         });
         for (i, name) in named {

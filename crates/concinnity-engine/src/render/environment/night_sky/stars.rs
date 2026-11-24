@@ -275,7 +275,7 @@ mod tests {
                 found += 1;
                 let (f, u, v) = cube_face(star.direction);
                 assert_eq!(f, face);
-                let cell = |x: f32| u32::saturating_from((x + 1.0) * 0.5 * STAR_GRID as f32);
+                let cell = |x: f32| u32::saturating_from(f32::midpoint(x, 1.0) * STAR_GRID as f32);
                 assert_eq!((cell(u), cell(v)), (i, j));
                 assert_eq!(star_in_cell(9, density, 8.0, face, i, j), Some(star));
             }

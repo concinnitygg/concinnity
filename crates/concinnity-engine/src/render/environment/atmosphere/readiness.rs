@@ -28,7 +28,7 @@ impl TableReadiness {
         // Saturating: a long run never wraps back to "not ready".
         let _ = self
             .recorded
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1));
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1));
     }
 
     /// Whether the tables hold this atmosphere's sky for work recorded now,

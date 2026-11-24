@@ -740,7 +740,7 @@ impl SkinnedDrawObject {
         let mut lo = [0.0f32; 3];
         let mut hi = [0.0f32; 3];
         for a in 0..3 {
-            let center = 0.5 * (self.local_bb_min[a] + self.local_bb_max[a]);
+            let center = f32::midpoint(self.local_bb_min[a], self.local_bb_max[a]);
             let half = 0.5 * (self.local_bb_max[a] - self.local_bb_min[a]) * SKINNED_BB_PAD_FACTOR;
             lo[a] = center - half;
             hi[a] = center + half;

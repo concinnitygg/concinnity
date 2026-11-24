@@ -172,8 +172,7 @@ fn object_name(n: &NodeHandle<'_>) -> String {
     n.attributes()
         .get(1)
         .and_then(attr_str)
-        .map(|s| s.split('\u{0}').next().unwrap_or(s).to_string())
-        .unwrap_or_default()
+        .map_or_default(|s| s.split('\u{0}').next().unwrap_or(s).to_string())
 }
 
 // Read a `Properties70` P entry's three numeric values (x, y, z at attribute
@@ -552,8 +551,7 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
 
         let local_mats: Vec<Option<usize>> = model_materials
             .get(&model_id)
-            .map(|ids| ids.iter().map(|m| material_index.get(m).copied()).collect())
-            .unwrap_or_default();
+            .map_or_default(|ids| ids.iter().map(|m| material_index.get(m).copied()).collect());
 
         let groups = extract_geometry_groups(geom, &local_mats);
         let mut prim_indices = Vec::new();

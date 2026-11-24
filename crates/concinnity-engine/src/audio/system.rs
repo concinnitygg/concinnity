@@ -286,8 +286,7 @@ impl System for AudioSystem {
             .collect();
         self.clip_locators = ctx
             .resource::<AudioClipTable>()
-            .map(|table| table.0.iter().map(|e| e.payload.clone()).collect())
-            .unwrap_or_default();
+            .map_or_default(|table| table.0.iter().map(|e| e.payload.clone()).collect());
 
         // The stored settings-menu volumes scale the master mix and each bus,
         // so they can be changed live (see `step`). `None` leaves a stage at
@@ -295,8 +294,7 @@ impl System for AudioSystem {
         // output-stage multipliers.
         let volumes = ctx
             .resource::<StoredSettings>()
-            .map(|stored| stored.audio.clone())
-            .unwrap_or_default();
+            .map_or_default(|stored| stored.audio.clone());
         for (target, gain) in [
             (AudioTarget::Master, volumes.master_volume),
             (AudioTarget::Music, volumes.music_volume),

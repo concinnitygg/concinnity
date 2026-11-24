@@ -163,14 +163,14 @@ impl BandJacobian {
     fn depth_for(self, target: f32) -> f32 {
         let (mut lo, mut hi) = (-4.0f32, 12.0f32);
         for _ in 0..40 {
-            let mid = 0.5 * (lo + hi);
+            let mid = f32::midpoint(lo, hi);
             if self.mean_foam(mid) > target {
                 lo = mid;
             } else {
                 hi = mid;
             }
         }
-        0.5 * (lo + hi)
+        f32::midpoint(lo, hi)
     }
 }
 

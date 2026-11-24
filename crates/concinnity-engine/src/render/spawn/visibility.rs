@@ -25,8 +25,7 @@ pub(super) fn set_subtree_visibility(
         // next entity's tag toggle.
         let slots: concinnity_core::memory::InlineVec<DrawIndex> = ctx
             .get::<RenderHandle>(entity)
-            .map(|h| h.draws.clone())
-            .unwrap_or_default();
+            .map_or_default(|h| h.draws.clone());
         for slot in slots {
             ops.record(move |backend| backend.update_visibility(slot, visible));
         }

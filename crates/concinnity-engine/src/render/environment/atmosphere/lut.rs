@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(sky_view_uv(bottom, top, r, rim - 0.1, 1.0)[1], first);
         let (grazing, _) = sky_view_direction(bottom, top, r, [0.5, first]);
         assert!((grazing - rim).abs() < 1e-5);
-        let mid = sky_view_uv(bottom, top, r, 0.5 * (rim + zenith_horizon), 1.0)[1];
+        let mid = sky_view_uv(bottom, top, r, f32::midpoint(rim, zenith_horizon), 1.0)[1];
         assert!(mid > first && mid < 0.5, "{mid}");
         // Inside the air the rim is the zenith; at the top they meet.
         assert_eq!(sky_angles(bottom, top, top - 0.01)[0], 0.0);

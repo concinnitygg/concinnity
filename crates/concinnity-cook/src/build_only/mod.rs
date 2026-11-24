@@ -168,15 +168,12 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let errs = prepare_world(content)
-            .err()
-            .map(|e| {
-                e.diagnostics()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let errs = prepare_world(content).err().map_or_default(|e| {
+            e.diagnostics()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
     }
@@ -207,15 +204,12 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"["Prop",{"$id":"prop","mesh":"nope"}]"#;
-        let errs = prepare_world(content)
-            .err()
-            .map(|e| {
-                e.diagnostics()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let errs = prepare_world(content).err().map_or_default(|e| {
+            e.diagnostics()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
     }

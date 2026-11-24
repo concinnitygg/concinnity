@@ -14,14 +14,11 @@ use alloc::string::String;
 // The events the system sent, read with a fresh cursor.
 fn events(world: &World) -> Vec<(String, Option<UiValue>)> {
     let mut cursor = EventCursor::default();
-    world
-        .events::<UiEvent>()
-        .map(|e| {
-            e.read(&mut cursor)
-                .map(|e| (e.name.clone(), e.value.clone()))
-                .collect()
-        })
-        .unwrap_or_default()
+    world.events::<UiEvent>().map_or_default(|e| {
+        e.read(&mut cursor)
+            .map(|e| (e.name.clone(), e.value.clone()))
+            .collect()
+    })
 }
 
 fn state(world: &World, name: &str) -> Option<UiValue> {

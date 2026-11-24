@@ -58,8 +58,7 @@ impl MenuItem {
         match self {
             Self::Type(ty) => crate::docs::type_summaries()
                 .get(*ty)
-                .map(String::as_str)
-                .unwrap_or_default(),
+                .map_or_default(String::as_str),
             Self::PrefabHeader { .. } | Self::Prefab(_) => "",
         }
     }

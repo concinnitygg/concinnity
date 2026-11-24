@@ -44,7 +44,7 @@ pub(crate) fn rows(args: Option<&Value>, used: &[String]) -> Vec<Row> {
             Row {
                 name: name_of(decl).to_string(),
                 at: Some(i),
-                ty: value.map(palette::verb_of).unwrap_or_default().to_string(),
+                ty: value.map_or_default(palette::verb_of).to_string(),
                 value: outline::literal_text(value.and_then(palette::body_of)),
                 local: false,
             }
@@ -88,8 +88,7 @@ pub(crate) fn unique_name(args: Option<&Value>, base: &str) -> String {
 fn decls(args: Option<&Value>) -> &[Value] {
     args.and_then(|a| a.get("vars"))
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
 }
 
 fn name_of(decl: &Value) -> &str {

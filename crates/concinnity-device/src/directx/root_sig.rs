@@ -471,18 +471,15 @@ fn serialize_desc_and_create(
         )
     }
     .map_err(|e| {
-        let msg = error
-            .as_ref()
-            .map(|b| {
-                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
-                let p = unsafe { b.GetBufferPointer() } as *const u8;
-                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
-                let n = unsafe { b.GetBufferSize() };
-                // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays
-                // live while `b` is held, and the text is copied out before the blob is released.
-                String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p, n) }).into_owned()
-            })
-            .unwrap_or_default();
+        let msg = error.as_ref().map_or_default(|b| {
+            // SAFETY: a property query on a live `ID3DBlob`; it only reads.
+            let p = unsafe { b.GetBufferPointer() } as *const u8;
+            // SAFETY: a property query on a live `ID3DBlob`; it only reads.
+            let n = unsafe { b.GetBufferSize() };
+            // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays
+            // live while `b` is held, and the text is copied out before the blob is released.
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p, n) }).into_owned()
+        });
         map_hresult(e.code(), &format!("serialize {label}: {msg}"))
     })?;
 
@@ -627,7 +624,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp, reason = "the max LOD is an exact constant")]
     fn static_samplers_carry_their_state() {
         let sig = RootSig::new()
             .static_sampler(SamplerState::LinearClamp, s(0), Visibility::Pixel)

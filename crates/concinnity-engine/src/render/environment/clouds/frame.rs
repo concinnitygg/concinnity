@@ -203,7 +203,7 @@ impl CloudFrame {
         let shadow = CloudShadowSquare::around(
             camera_km,
             f64::from(ground_km),
-            f64::from(ground_km + view.heights.drawn(0.5 * (lo + hi))),
+            f64::from(ground_km + view.heights.drawn(f32::midpoint(lo, hi))),
             // From where the layers draw in toward the ground, every cloud in
             // view casts its shadow, so the map covers the cap in view.
             f64::from(1.0 - view.heights.scale),
@@ -428,7 +428,7 @@ mod tests {
             )
         };
         let (shrunk, authored) = (at(heights), at(CloudHeights::AUTHORED));
-        let middle = 50.0 + heights.drawn(0.5 * (lo + hi));
+        let middle = 50.0 + heights.drawn(f32::midpoint(lo, hi));
         assert!(close(shrunk.shadow.radius_km, middle, 1e-4));
         assert!(shrunk.shadow.radius_km < authored.shadow.radius_km);
         assert!(close(

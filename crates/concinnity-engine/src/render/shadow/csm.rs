@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(cascade_coverage(start, start, reach), 1.0);
         assert_eq!(cascade_coverage(reach, start, reach), 0.0);
         assert_eq!(cascade_coverage(reach * 2.0, start, reach), 0.0);
-        let mid = cascade_coverage(0.5 * (start + reach), start, reach);
+        let mid = cascade_coverage(f32::midpoint(start, reach), start, reach);
         assert!((mid - 0.5).abs() < 1e-4, "{mid}");
         let mut last = 1.0;
         for i in 0..=32 {

@@ -115,5 +115,5 @@ fn knot_mu(i: usize) -> f32 {
 pub(in crate::render) fn knot_coord(mu: f32) -> f32 {
     let mu = mu.clamp(-1.0, 1.0);
     let s = if mu < 0.0 { -sqrt(-mu) } else { sqrt(mu) };
-    (s + 1.0) * 0.5 * (DAYLIGHT_KNOTS - 1) as f32
+    f32::midpoint(s, 1.0) * (DAYLIGHT_KNOTS - 1) as f32
 }

@@ -120,8 +120,7 @@ fn a_var_action_and_an_emit_reach_their_systems() {
     let mut cursor = EventCursor::default();
     let events: Vec<UiEvent> = world
         .events::<UiEvent>()
-        .map(|e| e.read(&mut cursor).cloned().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut cursor).cloned().collect());
     assert_eq!(
         events,
         vec![UiEvent {
@@ -136,8 +135,7 @@ fn a_var_action_and_an_emit_reach_their_systems() {
     let mut cursor = EventCursor::default();
     let commands: Vec<VariableCommand> = world
         .events::<VariableCommand>()
-        .map(|e| e.read(&mut cursor).cloned().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut cursor).cloned().collect());
     assert_eq!(
         commands,
         vec![VariableCommand {

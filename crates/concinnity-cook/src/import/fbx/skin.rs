@@ -157,14 +157,12 @@ pub(super) fn parse_skin(
                 .first_child_by_name("Indexes")
                 .as_ref()
                 .and_then(arr_i32)
-                .map(<[i32]>::to_vec)
-                .unwrap_or_default(),
+                .map_or_default(<[i32]>::to_vec),
             weights: node
                 .first_child_by_name("Weights")
                 .as_ref()
                 .and_then(arr_f64)
-                .map(<[f64]>::to_vec)
-                .unwrap_or_default(),
+                .map_or_default(<[f64]>::to_vec),
             transform_link: node
                 .first_child_by_name("TransformLink")
                 .as_ref()
@@ -276,7 +274,7 @@ pub(super) fn parse_skin(
         };
         let (translation, rotation, scale) = decompose(local);
         joints.push(SkeletonJoint {
-            name: model_by_id.get(&id).map(object_name).unwrap_or_default(),
+            name: model_by_id.get(&id).map_or_default(object_name),
             parent: parents[i].map_or(-1, i32::saturating_from),
             translation,
             rotation_deg: euler_yxz_from_quat(rotation),

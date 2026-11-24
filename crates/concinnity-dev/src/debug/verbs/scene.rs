@@ -231,8 +231,7 @@ mod tests {
     fn sent<E: Clone + 'static>(world: &World, cursor: &mut EventCursor) -> Vec<E> {
         world
             .events::<E>()
-            .map(|events| events.read(cursor).cloned().collect())
-            .unwrap_or_default()
+            .map_or_default(|events| events.read(cursor).cloned().collect())
     }
 
     fn engine_with(names: &[&str]) -> Engine {

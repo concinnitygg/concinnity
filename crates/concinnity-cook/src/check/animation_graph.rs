@@ -14,8 +14,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     let states = args
         .get("states")
         .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+        .map_or_default(Vec::as_slice);
     if states.is_empty() {
         return err("`states` must declare at least one state".into());
     }
@@ -24,8 +23,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     for param in args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
     {
         if let Some(param_name) = param.get("name").and_then(|v| v.as_str()) {
             param_names_owned.push(param_name);
@@ -72,8 +70,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     for (i, param) in args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
         .iter()
         .enumerate()
     {
@@ -99,8 +96,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     for (i, tr) in args
         .get("transitions")
         .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
         .iter()
         .enumerate()
     {
@@ -132,8 +128,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
         for (j, cond) in tr
             .get("conditions")
             .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+            .map_or_default(Vec::as_slice)
             .iter()
             .enumerate()
         {
@@ -160,16 +155,14 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     for (i, chain) in args
         .get("ik_chains")
         .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
         .iter()
         .enumerate()
     {
         let joints = chain
             .get("joints")
             .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         if joints.len() != 3 {
             return err(format!(
                 "ik_chains[{i}]: `joints` must name exactly three joints (root, middle, end), \
@@ -234,8 +227,7 @@ fn check_blend(
         let values: Vec<f64> = blend
             .get(field)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(Value::as_f64).collect())
-            .unwrap_or_default();
+            .map_or_default(|a| a.iter().filter_map(Value::as_f64).collect());
         if values.is_empty() {
             return Err(Diagnostic::asset(
                 "AnimationGraph",
@@ -265,8 +257,7 @@ fn check_blend(
             let points = blend
                 .get("points")
                 .and_then(|v| v.as_array())
-                .map(Vec::as_slice)
-                .unwrap_or_default();
+                .map_or_default(Vec::as_slice);
             if points.is_empty() {
                 return err("blend has no `points`".into());
             }
@@ -298,8 +289,7 @@ fn check_blend(
             let rows = blend
                 .get("rows")
                 .and_then(|v| v.as_array())
-                .map(Vec::as_slice)
-                .unwrap_or_default();
+                .map_or_default(Vec::as_slice);
             if rows.len() != y_values.len() {
                 return err(format!(
                     "blend `rows` must have {} row(s), one per y value",
@@ -307,7 +297,7 @@ fn check_blend(
                 ));
             }
             for (j, row) in rows.iter().enumerate() {
-                let cells = row.as_array().map(Vec::as_slice).unwrap_or_default();
+                let cells = row.as_array().map_or_default(Vec::as_slice);
                 if cells.len() != x_values.len() {
                     return err(format!(
                         "blend `rows` row #{j} must have {} clip(s), one per x value",

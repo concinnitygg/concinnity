@@ -289,8 +289,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic
             .args
             .get("states")
             .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+            .map_or_default(Vec::as_slice)
         {
             // Single-clip and blendspace members alike; a state naming no
             // clips at all is already reported by cross_refs.

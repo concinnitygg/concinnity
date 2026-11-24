@@ -172,7 +172,7 @@ fn growth_to_reach(inner: f32, reach: f32) -> f32 {
     }
     let (mut lo, mut hi) = (1.0_f32, 2.0_f32);
     for _ in 0..48 {
-        let mid = 0.5 * (lo + hi);
+        let mid = f32::midpoint(lo, hi);
         if outer_span(inner, mid, outer) < need {
             lo = mid;
         } else {
@@ -223,7 +223,7 @@ mod tests {
         let n = i32::saturating_from(OCEAN_GRID_HALF_LINES);
         for i in 0..n {
             let cell = g.line(i + 1) - g.line(i);
-            let mid = 0.5 * (g.line(i + 1) + g.line(i));
+            let mid = f32::midpoint(g.line(i + 1), g.line(i));
             let est = g.estimated_cell(mid);
             assert!(
                 est <= cell * g.growth * 1.01 && est >= cell / g.growth * 0.99,
@@ -264,7 +264,12 @@ mod tests {
         let (rings_v, rings) = g.ring_mesh();
         assert_eq!(rows_v.len(), rings_v.len());
         let triangles = |idx: &[u16]| {
-            let mut t: Vec<[u16; 3]> = idx.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+            let mut t: Vec<[u16; 3]> = idx
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| [c[0], c[1], c[2]])
+                .collect();
             t.sort_unstable();
             t
         };
@@ -278,7 +283,7 @@ mod tests {
                 assert!(p[0].abs() <= half && p[2].abs() <= half, "ring {k}: {p:?}");
             }
             let outside = &rings[g.ring_indices(k) as usize..];
-            for tri in outside.chunks_exact(3) {
+            for tri in outside.as_chunks::<3>().0 {
                 let inside = tri.iter().all(|&i| {
                     let p = rings_v[i as usize].pos;
                     p[0].abs() <= half && p[2].abs() <= half

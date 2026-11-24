@@ -617,8 +617,7 @@ fn encode_skin_dispatch(
         let matrices: &[[[f32; 4]; 4]] = skinned
             .joint_matrices
             .get(obj_idx)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .map_or_default(Vec::as_slice);
         // Empty pose -> a single identity joint (undeformed) so the dispatch
         // always has a valid palette to index.
         let joint_count = matrices.len().max(1);

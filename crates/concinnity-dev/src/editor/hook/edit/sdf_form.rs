@@ -62,7 +62,7 @@ impl FormExtras for SdfExtras {
     }
 
     fn rows(&self, cx: &ExtrasCx<'_>) -> Vec<ExtraRow> {
-        let declared = self.new_file(cx.name).map(|(_, d)| d).unwrap_or_default();
+        let declared = self.new_file(cx.name).map_or_default(|(_, d)| d);
         self.form.rows(&declared)
     }
 

@@ -75,7 +75,7 @@ pub(crate) fn screen_rect(
         if depth <= 1e-4 {
             return None;
         }
-        let px = (v[0] / (depth * tan_half * aspect) + 1.0) * 0.5 * vw;
+        let px = f32::midpoint(v[0] / (depth * tan_half * aspect), 1.0) * vw;
         let py = (1.0 - v[1] / (depth * tan_half)) * 0.5 * vh;
         x0 = x0.min(px);
         y0 = y0.min(py);

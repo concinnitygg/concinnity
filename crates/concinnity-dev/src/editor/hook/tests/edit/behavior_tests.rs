@@ -975,7 +975,7 @@ fn a_stale_behavior_fault_never_points_off_its_own_path() {
 
     let data = h.behavior_data();
     let row = h.behavior_fault_row(&data);
-    let path = row.map(|i| data.rows[i].path.clone()).unwrap_or_default();
+    let path = row.map_or_default(|i| data.rows[i].path.clone());
     assert!(
         path::starts_with(&located, &path),
         "pointed at {path:?}, which is not on the way to {located:?}",

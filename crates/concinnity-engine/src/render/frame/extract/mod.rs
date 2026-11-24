@@ -591,8 +591,7 @@ impl FrameExtractor {
         let mut entries = ctx
             .resources
             .take::<PickIndex>()
-            .map(|index| index.entries)
-            .unwrap_or_default();
+            .map_or_default(|index| index.entries);
         entries.clear();
         {
             let empty = BTreeSet::new();

@@ -145,8 +145,7 @@ impl BuildStatus {
             .blobs
             .first()
             .and_then(|(path, _)| path.parent())
-            .map(shown_path)
-            .unwrap_or_default();
+            .map_or_default(shown_path);
         let outcome = Outcome::Built {
             written: report.blobs.iter().map(|(_, size)| size).sum(),
             data_dir,

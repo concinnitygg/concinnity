@@ -108,11 +108,7 @@ fn collect(
         .members
         .iter()
         .map(|member| Field {
-            name: member
-                .name
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
+            name: member.name.as_ref().map_or_default(ToString::to_string),
             offset: member.offset as usize,
             size: member.size,
         })

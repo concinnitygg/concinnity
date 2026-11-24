@@ -156,24 +156,19 @@ impl Ledger {
     /// increments; one that knows its total should `set` it instead.
     pub fn add(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
-        let (Ok(held) | Err(held)) = cell
+        let held = cell
             .bytes
-            .fetch_update(Relaxed, Relaxed, |held| Some(held.saturating_add(bytes)));
+            .update(Relaxed, Relaxed, |held| held.saturating_add(bytes));
         cell.observe(held.saturating_add(bytes));
     }
 
     /// Give up `bytes` under `tag`. Saturates at zero: a reporter that
     /// double-releases should read as holding nothing, never as holding an
     /// enormous amount.
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the update never declines, so it cannot fail"
-    )]
     pub fn release(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
-        let _ = cell
-            .bytes
-            .fetch_update(Relaxed, Relaxed, |held| Some(held.saturating_sub(bytes)));
+        cell.bytes
+            .update(Relaxed, Relaxed, |held| held.saturating_sub(bytes));
     }
 
     /// Declare the tag's whole holding. Idempotent, so a pool that recomputes

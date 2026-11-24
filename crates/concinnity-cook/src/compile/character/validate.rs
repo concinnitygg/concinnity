@@ -20,8 +20,7 @@ pub(crate) fn source_errors(
         Some(if j.parent >= 0 {
             skeleton
                 .get(usize::saturating_from(j.parent))
-                .map(|p| p.name.clone())
-                .unwrap_or_default()
+                .map_or_default(|p| p.name.clone())
         } else {
             String::new()
         })

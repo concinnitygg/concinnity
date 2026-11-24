@@ -49,7 +49,11 @@ impl EditorHook {
             // (lights, trigger volumes, and other billboard-only types rest
             // their origin on the floor).
             let foot = match bounds {
-                Some((mn, mx)) => [(mn[0] + mx[0]) * 0.5, mn[1], (mn[2] + mx[2]) * 0.5],
+                Some((mn, mx)) => [
+                    f32::midpoint(mn[0], mx[0]),
+                    mn[1],
+                    f32::midpoint(mn[2], mx[2]),
+                ],
                 None => position,
             };
             let floor_y = nearest_floor(world, foot, &selected_ids).unwrap_or(0.0);

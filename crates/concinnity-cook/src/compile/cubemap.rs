@@ -181,8 +181,8 @@ mod tests {
         assert_eq!(face_size, 8);
         assert_eq!(face_bytes.len(), 6 * 8 * 8 * 4 * 4);
         // A solid equirect resamples to the same color on every face.
-        for (i, texel) in face_bytes.chunks_exact(4).enumerate() {
-            let v = f32::from_le_bytes(texel.try_into().unwrap());
+        for (i, texel) in face_bytes.as_chunks::<4>().0.iter().enumerate() {
+            let v = f32::from_le_bytes(*texel);
             let want = if i % 4 == 3 { 1.0 } else { rgb[i % 4] };
             assert!((v - want).abs() < 0.01, "float {i} was {v}, want {want}");
         }

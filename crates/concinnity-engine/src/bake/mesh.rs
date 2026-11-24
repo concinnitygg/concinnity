@@ -26,7 +26,7 @@ type VertT = ([f32; 3], [f32; 3], [f32; 3], [f32; 3], [f32; 2]);
 /// Returns an error if a triangle indexes past the vertex list.
 pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Vert>, String> {
     let mut normals = alloc::vec![[0.0f32; 3]; data.len()];
-    for (t, tri) in indices.chunks_exact(3).enumerate() {
+    for (t, tri) in indices.as_chunks::<3>().0.iter().enumerate() {
         let [ia, ib, ic] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
         if ia >= data.len() || ib >= data.len() || ic >= data.len() {
             return Err(format!(

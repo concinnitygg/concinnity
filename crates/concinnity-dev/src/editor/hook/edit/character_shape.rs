@@ -109,25 +109,22 @@ impl EditorHook {
         };
         let args = self.entry_args(idx);
         let strings = |v: Option<&serde_json::Value>| -> Vec<String> {
-            v.and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|s| s.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default()
+            v.and_then(|v| v.as_array()).map_or_default(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(String::from))
+                    .collect()
+            })
         };
         ShapeTarget {
             morph_names: strings(args.get("morph_target_names")),
             joint_names: args
                 .get("skeleton")
                 .and_then(|v| v.as_array())
-                .map(|a| {
+                .map_or_default(|a| {
                     a.iter()
                         .filter_map(|j| j.get("name").and_then(|n| n.as_str()).map(String::from))
                         .collect()
-                })
-                .unwrap_or_default(),
+                }),
         }
     }
 

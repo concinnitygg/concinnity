@@ -112,7 +112,8 @@ impl SurfacePalette {
         let layers = grass.map_or(&[][..], |g| &g.layers[..]);
         for (slot, layer) in out.grass.iter_mut().zip(layers) {
             let look = &layer.look;
-            let mean = core::array::from_fn(|i| 0.5 * (look.root_color[i] + look.tip_color[i]));
+            let mean =
+                core::array::from_fn(|i| f32::midpoint(look.root_color[i], look.tip_color[i]));
             *slot = (layer.rule, mean);
             out.grass_count += 1;
         }

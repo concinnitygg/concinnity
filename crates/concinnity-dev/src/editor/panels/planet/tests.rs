@@ -243,7 +243,7 @@ fn assemble_writes_the_boxes() {
     let rows = rows(Some(&args));
     let mut texts: Vec<String> = rows
         .iter()
-        .map(|r| r.field().map(|f| f.initial.clone()).unwrap_or_default())
+        .map(|r| r.field().map_or_default(|f| f.initial.clone()))
         .collect();
     let at = |key: &str| {
         rows.iter()
@@ -277,7 +277,7 @@ fn assembled_args_validate() {
     let rows = rows(Some(&args));
     let texts: Vec<String> = rows
         .iter()
-        .map(|r| r.field().map(|f| f.initial.clone()).unwrap_or_default())
+        .map(|r| r.field().map_or_default(|f| f.initial.clone()))
         .collect();
     let out = assemble(&args, &rows, &texts);
     form::validate(TY, "world", &out).expect("a valid Planet");

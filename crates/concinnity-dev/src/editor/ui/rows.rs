@@ -15,16 +15,13 @@ fn held(world: &World, host: AssetId) -> Vec<AssetId> {
     let mut out = Vec::new();
     let mut walk: Vec<AssetId> = Vec::new();
     let children = |id: AssetId| {
-        world
-            .get_by_id::<Layout>(id)
-            .map(|l| {
-                l.children
-                    .iter()
-                    .filter_map(|c| c.item)
-                    .map(concinnity_engine::ecs::Ref::id)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        world.get_by_id::<Layout>(id).map_or_default(|l| {
+            l.children
+                .iter()
+                .filter_map(|c| c.item)
+                .map(concinnity_engine::ecs::Ref::id)
+                .collect::<Vec<_>>()
+        })
     };
     walk.extend(children(host));
     while let Some(id) = walk.pop() {

@@ -19,8 +19,7 @@ fn sent(world: &World) -> Vec<Toast> {
     let mut cursor = EventCursor::default();
     world
         .events::<Toast>()
-        .map(|e| e.read(&mut cursor).cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|e| e.read(&mut cursor).cloned().collect())
 }
 
 fn click(h: &mut EditorHook, world: &mut World, name: &str, value: Option<UiValue>) {

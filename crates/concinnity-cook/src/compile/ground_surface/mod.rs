@@ -176,7 +176,14 @@ mod tests {
 
     fn channel_mean(pixels: &[u8], c: usize) -> f32 {
         let n = pixels.len() / 4;
-        pixels.chunks_exact(4).map(|p| f32::from(p[c])).sum::<f32>() / n as f32 / 255.0
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| f32::from(p[c]))
+            .sum::<f32>()
+            / n as f32
+            / 255.0
     }
 
     #[test]
@@ -198,10 +205,15 @@ mod tests {
     fn a_dirts_albedo_stays_under_its_peak_and_spans_its_heights() {
         let look = DirtLook::default();
         let (_, _, px) = dirt_texture(&look, GroundMap::Albedo, 64);
-        let heights: Vec<u8> = px.chunks_exact(4).map(|p| p[3]).collect();
+        let heights: Vec<u8> = px.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
         assert_eq!(heights.iter().min(), Some(&0));
         assert_eq!(heights.iter().max(), Some(&255));
-        let saturated = px.chunks_exact(4).filter(|p| p[..3].contains(&255)).count();
+        let saturated = px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[..3].contains(&255))
+            .count();
         assert!(saturated * 50 < heights.len(), "{saturated} texels clip");
     }
 
@@ -213,7 +225,12 @@ mod tests {
             albedo: vec![[0.5; 3]; 16],
         };
         let px = flat.encode_normal();
-        assert!(px.chunks_exact(4).all(|p| p == [128, 128, 255, 255]));
+        assert!(
+            px.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [128, 128, 255, 255])
+        );
     }
 
     #[test]

@@ -334,7 +334,7 @@ fn shoaling(omega: f32, k: f32, depth: f32) -> f32 {
     let n = if kh > 20.0 {
         0.5
     } else {
-        0.5 * (1.0 + 2.0 * kh / (2.0 * kh).sinh())
+        f32::midpoint(1.0, 2.0 * kh / (2.0 * kh).sinh())
     };
     (0.5 * 9.81 / omega / (n * omega / k)).sqrt()
 }

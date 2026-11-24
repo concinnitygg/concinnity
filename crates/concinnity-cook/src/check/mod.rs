@@ -138,8 +138,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<Diagnost
     let declared_vars = assets
         .iter()
         .find(|a| a.asset_type == RegisteredType::Variables)
-        .map(|a| behavior::DeclaredVars::from_args(&a.args))
-        .unwrap_or_default();
+        .map_or_default(|a| behavior::DeclaredVars::from_args(&a.args));
 
     for asset in assets {
         let checked = if asset.asset_type == RegisteredType::Behavior {

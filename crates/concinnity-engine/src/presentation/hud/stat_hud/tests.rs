@@ -52,8 +52,7 @@ fn hud_world() -> World {
 fn chip(world: &World, id: u32) -> String {
     world
         .get_by_id::<TextLabel>(AssetId(id))
-        .map(|l| l.content.clone())
-        .unwrap_or_default()
+        .map_or_default(|l| l.content.clone())
 }
 
 fn frame_time(world: &mut World, dt: f32) {

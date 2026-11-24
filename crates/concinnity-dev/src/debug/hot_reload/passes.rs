@@ -204,7 +204,7 @@ pub(super) fn reload_procedural_meshes(
                 continue;
             }
         };
-        new_args_by_name.insert(name.clone(), (parsed, raw_args));
+        new_args_by_name.insert(name, (parsed, raw_args));
     }
 
     // Collect rebuild changes batched into a single rebuild call (mirrors the
@@ -415,7 +415,7 @@ pub(super) fn reload_stories(
         }
         match concinnity_cook::authoring::from_authored::<Story>(&args) {
             Ok(story) => {
-                snapshots.insert(name.clone(), args);
+                snapshots.insert(name, args);
                 out.push(story);
             }
             Err(e) => {

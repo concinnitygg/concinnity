@@ -67,8 +67,7 @@ fn the_live_fields_are_the_ones_the_schema_declares_live() {
         let mut live = declared
             .iter()
             .find(|(s, _)| s == section)
-            .map(|(_, keys)| keys.clone())
-            .unwrap_or_default();
+            .map_or_default(|(_, keys)| keys.clone());
         live.sort_unstable();
         if section == "frame_pacing" {
             // Live through the settings menu, not this seam.

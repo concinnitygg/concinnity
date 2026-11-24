@@ -107,11 +107,11 @@ impl DxContext {
         // Clear every re-rendered cascade first: with nothing to rasterize the
         // pass is these clears, which is what the raymarched casters below and
         // the main pass's sampler both expect.
-        for cascade_idx in 0..NUM_SHADOW_CASCADES {
+        for (cascade_idx, &dsv) in self.shadow.dsvs.iter().enumerate() {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            Self::clear_shadow_slice(cmd, self.shadow.dsvs[cascade_idx]);
+            Self::clear_shadow_slice(cmd, dsv);
         }
 
         if let Some(views) = self.cull.shadow_views.get(frame_idx)

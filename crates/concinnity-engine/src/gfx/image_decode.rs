@@ -64,7 +64,7 @@ pub fn decode_into_rgba8(raw: &[u8], layout: PixelLayout, out: &mut Vec<u8>) {
 // 8-bit-per-channel formats (4 B/px). `bgra` swizzles B and R; alpha is forced
 // opaque.
 fn decode_8bit(raw: &[u8], bgra: bool, out: &mut Vec<u8>) {
-    for px in raw.chunks_exact(4) {
+    for px in raw.as_chunks::<4>().0 {
         if bgra {
             out.extend_from_slice(&[px[2], px[1], px[0], 255]);
         } else {
@@ -78,7 +78,7 @@ fn decode_8bit(raw: &[u8], bgra: bool, out: &mut Vec<u8>) {
 // the sRGB OETF to get a valid (non-tonemapped) image. On the PQ path the stored
 // values are PQ code values already in [0, 1]; pass them through clamped.
 fn decode_rgba16f(raw: &[u8], scrgb: bool, out: &mut Vec<u8>) {
-    for px in raw.chunks_exact(8) {
+    for px in raw.as_chunks::<8>().0 {
         let r = f16_to_f32(u16::from_le_bytes([px[0], px[1]]));
         let g = f16_to_f32(u16::from_le_bytes([px[2], px[3]]));
         let b = f16_to_f32(u16::from_le_bytes([px[4], px[5]]));
@@ -99,7 +99,7 @@ fn decode_rgba16f(raw: &[u8], scrgb: bool, out: &mut Vec<u8>) {
 // texel: R in bits [9:0], G [19:10], B [29:20], A [31:30]). The values are PQ
 // code values, so this is not display-ready, but it is a valid image.
 fn decode_a2b10g10r10(raw: &[u8], out: &mut Vec<u8>) {
-    for px in raw.chunks_exact(4) {
+    for px in raw.as_chunks::<4>().0 {
         let v = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
         let r = v & 0x3ff;
         let g = (v >> 10) & 0x3ff;

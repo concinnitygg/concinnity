@@ -577,7 +577,7 @@ fn seed_grid_probes(
             let x1 = lerp(aabb_min[0], aabb_max[0], (ix + 1) as f32 / nx as f32);
             let z0 = lerp(aabb_min[2], aabb_max[2], iz as f32 / nz as f32);
             let z1 = lerp(aabb_min[2], aabb_max[2], (iz + 1) as f32 / nz as f32);
-            let center = [(x0 + x1) * 0.5, y_eye, (z0 + z1) * 0.5];
+            let center = [f32::midpoint(x0, x1), y_eye, f32::midpoint(z0, z1)];
             out.push(ProbePlacement::seeded(
                 open_capture_point(center, x0, x1, z0, z1, occupancy),
                 [x0, aabb_min[1], z0],
@@ -616,13 +616,15 @@ pub fn fold_world_bounds(
 // center at eye height above the floor. +Y is up.
 pub(crate) fn probe_eye_point(aabb_min: [f32; 3], aabb_max: [f32; 3]) -> [f32; 3] {
     const EYE_HEIGHT: f32 = 1.7;
-    let cx = 0.5 * (aabb_min[0] + aabb_max[0]);
-    let cz = 0.5 * (aabb_min[2] + aabb_max[2]);
+    let cx = f32::midpoint(aabb_min[0], aabb_max[0]);
+    let cz = f32::midpoint(aabb_min[2], aabb_max[2]);
     let floor = aabb_min[1];
     let ceil = aabb_max[1];
     // Eye height off the floor, but never above the scene's own mid-height (so a
     // scene shorter than a person still places the probe inside its bounds).
-    let y = (floor + EYE_HEIGHT).min(0.5 * (floor + ceil)).max(floor);
+    let y = (floor + EYE_HEIGHT)
+        .min(f32::midpoint(floor, ceil))
+        .max(floor);
     [cx, y, cz]
 }
 

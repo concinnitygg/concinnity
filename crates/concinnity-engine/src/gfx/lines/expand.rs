@@ -205,7 +205,7 @@ mod tests {
         let tan_half = (cam.fov_y_radians * 0.5).tan();
         let aspect = cam.viewport[0] / cam.viewport[1];
         [
-            (x / (depth * tan_half * aspect) + 1.0) * 0.5 * cam.viewport[0],
+            f32::midpoint(x / (depth * tan_half * aspect), 1.0) * cam.viewport[0],
             (1.0 - y / (depth * tan_half)) * 0.5 * cam.viewport[1],
         ]
     }

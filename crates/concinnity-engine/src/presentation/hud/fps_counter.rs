@@ -110,7 +110,6 @@ mod tests {
     fn content(world: &World) -> String {
         world
             .get_by_id::<TextLabel>(AssetId(1))
-            .map(|l| l.content.clone())
-            .unwrap_or_default()
+            .map_or_default(|l| l.content.clone())
     }
 }

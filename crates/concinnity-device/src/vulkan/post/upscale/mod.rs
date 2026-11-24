@@ -516,8 +516,7 @@ impl UpscaleSdk {
             ResolvedBackend::Xess => self
                 .xess
                 .as_ref()
-                .map(|q| q.device_extensions(instance, physical_device))
-                .unwrap_or_default(),
+                .map_or_default(|q| q.device_extensions(instance, physical_device)),
             _ => Vec::new(),
         };
         raw.into_iter()

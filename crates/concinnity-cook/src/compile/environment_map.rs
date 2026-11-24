@@ -474,11 +474,11 @@ mod tests {
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.0, 0.0, 0.0]));
         let payload = decode_source(Path::new(&src), 16, 8, 16, 0.0).expect("decode");
         let view = deserialize(&payload).expect("deserialize");
-        for (i, texel) in view.irradiance_bytes.chunks_exact(4).enumerate() {
+        for (i, texel) in view.irradiance_bytes.as_chunks::<4>().0.iter().enumerate() {
             if i % 4 == 3 {
                 continue; // alpha
             }
-            let v = f32::from_le_bytes(texel.try_into().unwrap());
+            let v = f32::from_le_bytes(*texel);
             assert_eq!(v, 0.0, "irradiance float {i} was {v}");
         }
     }

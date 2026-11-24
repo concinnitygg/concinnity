@@ -160,7 +160,7 @@ mod tests {
     fn every_triangle_lies_on_the_grid_surface() {
         let g = grid(6);
         for c in terrain_chunks(&g) {
-            for tri in c.indices.chunks_exact(3) {
+            for tri in c.indices.as_chunks::<3>().0 {
                 let [a, b, d] = [tri[0], tri[1], tri[2]].map(|i| c.vertices[i as usize].pos);
                 let centroid = [
                     (a[0] + b[0] + d[0]) / 3.0,

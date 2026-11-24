@@ -209,8 +209,7 @@ fn clip_faces(clip: &FaceClip, out: &mut Manifold) -> bool {
     let mut separations = [0.0f32; MAX_CLIP_POINTS];
     let mut ids = [0u32; MAX_CLIP_POINTS];
     let mut kept = 0usize;
-    for index in 0..clipped.count {
-        let local = clipped.points[index];
+    for &local in &clipped.points[..clipped.count] {
         let separation = sign * local.get(axis) - half_ref.get(axis);
         if separation > clip.margin {
             continue;

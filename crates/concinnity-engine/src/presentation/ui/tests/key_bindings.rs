@@ -8,8 +8,7 @@ use super::*;
 fn shown_views(world: &World, cursor: &mut EventCursor) -> Vec<AssetId> {
     world
         .events::<ScreenShown>()
-        .map(|e| e.read(cursor).map(|s| s.screen).collect())
-        .unwrap_or_default()
+        .map_or_default(|e| e.read(cursor).map(|s| s.screen).collect())
 }
 
 // Both the initial screen at start and a Show navigation announce the newly
@@ -83,8 +82,7 @@ fn produced_story_commands(world: &World) -> Vec<StoryCommand> {
     let mut cursor = EventCursor::default();
     world
         .events::<StoryCommand>()
-        .map(|e| e.read(&mut cursor).cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|e| e.read(&mut cursor).cloned().collect())
 }
 
 // A non-Escape KeyBinding fires when its key is pressed (surfaced as the

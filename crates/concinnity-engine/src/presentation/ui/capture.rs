@@ -77,8 +77,7 @@ impl UiInputSystem {
         let prev_text = ctx
             .resource::<SettingValues>()
             .and_then(|v| v.text(setting_key))
-            .map(String::from)
-            .unwrap_or_default();
+            .map_or_default(String::from);
         let prompt = if captures_button(setting_key) {
             PAD_REBIND_PROMPT
         } else {

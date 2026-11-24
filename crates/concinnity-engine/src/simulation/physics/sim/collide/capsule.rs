@@ -223,7 +223,7 @@ fn clip_segment_to_face(clip: &SegmentOnFace, out: &mut Manifold) -> bool {
     // An empty interval means the axis passes beside the face rather than over
     // it; the midpoint of the crossed bounds is the nearest stretch to it.
     if low > high {
-        let t = ((low + high) * 0.5).clamp(0.0, 1.0);
+        let t = f32::midpoint(low, high).clamp(0.0, 1.0);
         return point.push_at(t, 0, out);
     }
     let mut pushed = point.push_at(low, 0, out);

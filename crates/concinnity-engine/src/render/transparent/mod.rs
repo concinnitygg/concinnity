@@ -95,9 +95,9 @@ impl SeeThroughMesh {
             index_count,
             base_vertex: obj.base_vertex,
             center: [
-                0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-                0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-                0.5 * (obj.bb_min[2] + obj.bb_max[2]),
+                f32::midpoint(obj.bb_min[0], obj.bb_max[0]),
+                f32::midpoint(obj.bb_min[1], obj.bb_max[1]),
+                f32::midpoint(obj.bb_min[2], obj.bb_max[2]),
             ],
             distance,
         }

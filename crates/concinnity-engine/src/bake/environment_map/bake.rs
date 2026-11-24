@@ -523,14 +523,14 @@ mod tests {
         let faces = bake.bake(&Inline);
         for face in &faces {
             assert_eq!(face.len(), 4 * 4 * 4);
-            assert!(face.chunks_exact(4).all(|px| px[0] > 0.0));
+            assert!(face.as_chunks::<4>().0.iter().all(|px| px[0] > 0.0));
         }
     }
 
     fn face_mean(face: &[f32]) -> [f32; 3] {
         let n = face.len() / 4;
         let mut m = [0.0f32; 3];
-        for px in face.chunks_exact(4) {
+        for px in face.as_chunks::<4>().0 {
             m[0] += px[0];
             m[1] += px[1];
             m[2] += px[2];
@@ -540,9 +540,11 @@ mod tests {
 
     fn face_variance_red(face: &[f32]) -> f32 {
         let n = face.len() / 4;
-        let mean = face.chunks_exact(4).map(|p| p[0]).sum::<f32>() / n as f32;
+        let mean = face.as_chunks::<4>().0.iter().map(|p| p[0]).sum::<f32>() / n as f32;
 
-        face.chunks_exact(4)
+        face.as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| (p[0] - mean).powi(2))
             .sum::<f32>()
             / n as f32
@@ -553,7 +555,7 @@ mod tests {
     fn firefly_cube(face: usize) -> [Vec<f32>; 6] {
         let mut s: [Vec<f32>; 6] = core::array::from_fn(|_| vec![0.0; face * face * 4]);
         for fd in &mut s {
-            for p in fd.chunks_exact_mut(4) {
+            for p in fd.as_chunks_mut::<4>().0 {
                 p[0] = 1.0;
                 p[1] = 1.0;
                 p[2] = 1.0;
@@ -568,7 +570,9 @@ mod tests {
     }
 
     fn peak(fd: &[f32]) -> f32 {
-        fd.chunks_exact(4)
+        fd.as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| p[0].max(p[1]).max(p[2]))
             .fold(0.0f32, f32::max)
     }
@@ -738,7 +742,7 @@ mod tests {
         let face = 16usize;
         let mut source: [Vec<f32>; 6] = core::array::from_fn(|_| vec![0.0; face * face * 4]);
         for face_data in &mut source {
-            for p in face_data.chunks_exact_mut(4) {
+            for p in face_data.as_chunks_mut::<4>().0 {
                 p[3] = 1.0;
             }
         }

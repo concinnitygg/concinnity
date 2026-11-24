@@ -97,8 +97,7 @@ pub fn apply(
 fn morph_names(world: &World, handle: SkinnedMeshHandle) -> Vec<String> {
     world
         .resource::<SkinnedMeshMorphNames>()
-        .map(|m| m.of(handle).to_vec())
-        .unwrap_or_default()
+        .map_or_default(|m| m.of(handle).to_vec())
 }
 
 #[cfg(test)]

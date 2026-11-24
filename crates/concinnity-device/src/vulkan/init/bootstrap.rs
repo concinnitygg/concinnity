@@ -476,7 +476,7 @@ fn drop_benign_dlss_layout_error(message_id: &[u8], budget: &std::sync::atomic::
         return false;
     }
     budget
-        .fetch_update(
+        .try_update(
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
             |n| (n > 0).then(|| n - 1),

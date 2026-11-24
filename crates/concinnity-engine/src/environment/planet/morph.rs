@@ -172,7 +172,7 @@ pub fn morph_point(grid: &[[f32; 3]], i: usize, j: usize, k: f32) -> [f32; 3] {
         return p;
     };
     let (a, b) = (grid[a.1 * side + a.0], grid[b.1 * side + b.0]);
-    core::array::from_fn(|c| p[c] + ((a[c] + b[c]) * 0.5 - p[c]) * k)
+    core::array::from_fn(|c| p[c] + (f32::midpoint(a[c], b[c]) - p[c]) * k)
 }
 
 #[cfg(test)]
@@ -315,7 +315,7 @@ mod tests {
         let start = narrow_f32(crate::environment::planet::MORPH_START) * 100.0;
         assert_eq!(morph_factor(&r, 100.0, 3, 5, 0.0), 0.0);
         assert_eq!(morph_factor(&r, 100.0, 3, 5, start), 0.0);
-        assert!((morph_factor(&r, 100.0, 3, 5, (start + 100.0) * 0.5) - 0.5).abs() < 1e-5);
+        assert!((morph_factor(&r, 100.0, 3, 5, f32::midpoint(start, 100.0)) - 0.5).abs() < 1e-5);
         assert_eq!(morph_factor(&r, 100.0, 3, 5, 100.0), 1.0);
         assert_eq!(morph_factor(&r, 0.0, 3, 5, 1e6), 0.0);
     }
@@ -330,7 +330,10 @@ mod tests {
             finer: TileSide::MaxS.bit(),
         };
         let r = row(seams);
-        let mid = (narrow_f32(crate::environment::planet::MORPH_START) * 100.0 + 100.0) * 0.5;
+        let mid = f32::midpoint(
+            narrow_f32(crate::environment::planet::MORPH_START) * 100.0,
+            100.0,
+        );
         assert_eq!(morph_factor(&r, 100.0, 0, 3, 0.0), 1.0);
         assert_eq!(morph_factor(&r, 100.0, 5, n, 0.0), 1.0);
         assert_eq!(morph_factor(&r, 100.0, n, 3, 1e6), 0.0);

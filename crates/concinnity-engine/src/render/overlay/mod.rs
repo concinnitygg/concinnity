@@ -377,10 +377,7 @@ impl OverlaySystem {
         if want_ui_cursor {
             // The `cn edit` HUD switches the silhouette to a resize cursor over a
             // panel edge; every other cursor stays the arrow (the default absence).
-            let cursor_shape = ctx
-                .resource::<DesiredCursor>()
-                .map(|c| c.0)
-                .unwrap_or_default();
+            let cursor_shape = ctx.resource::<DesiredCursor>().map_or_default(|c| c.0);
             cursor::build_cursor_calls_into(
                 &mut self.buffer,
                 sprites,

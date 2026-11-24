@@ -85,7 +85,7 @@ fn ggx_lambda(alpha: f32, cos_theta: f32) -> f32 {
     let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
     let tan_theta = sin_theta / cos_theta;
     let a = 1.0 / (alpha * tan_theta);
-    0.5 * (-1.0 + (1.0 + 1.0 / (a * a)).sqrt())
+    f32::midpoint(-1.0, (1.0 + 1.0 / (a * a)).sqrt())
 }
 
 // The cosine-weighted GGX BRDF with Fresnel factored out:
@@ -610,14 +610,10 @@ mod tests {
         };
         ltc.update();
         let product = ltc.inverse.mul(&ltc.matrix);
-        for row in 0..3 {
-            for col in 0..3 {
+        for (row, values) in product.m.iter().enumerate() {
+            for (col, &value) in values.iter().enumerate() {
                 let want = if row == col { 1.0 } else { 0.0 };
-                assert!(
-                    (product.m[row][col] - want).abs() < 1.0e-4,
-                    "[{row}][{col}] = {}",
-                    product.m[row][col]
-                );
+                assert!((value - want).abs() < 1.0e-4, "[{row}][{col}] = {value}");
             }
         }
     }

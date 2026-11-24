@@ -1436,7 +1436,9 @@ impl TransparentResources {
             .collect();
         let view_sets: Vec<FrameViewSets> =
             alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?
-                .chunks_exact(FrameViewSets::COUNT)
+                .as_chunks::<{ FrameViewSets::COUNT }>()
+                .0
+                .iter()
                 .map(|sets| FrameViewSets {
                     scene: sets[0],
                     layers: [sets[1], sets[2]],
@@ -1697,8 +1699,7 @@ impl TransparentResources {
     pub(in crate::vulkan) fn seethrough_mesh_indices(&self) -> &[usize] {
         self.glass_mesh
             .as_ref()
-            .map(|p| p.object_indices.as_slice())
-            .unwrap_or_default()
+            .map_or_default(|p| p.object_indices.as_slice())
     }
 
     // True when the see-through mesh pipelines are built, so the Layer 2 reroute

@@ -65,9 +65,9 @@ pub fn instance_camera_distance(model: [[f32; 4]; 4], cam_pos: [f32; 3]) -> f32 
 pub fn camera_distance(obj: &DrawObject, cam_pos: [f32; 3]) -> f32 {
     let center = if obj.cullable() {
         [
-            0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-            0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-            0.5 * (obj.bb_min[2] + obj.bb_max[2]),
+            f32::midpoint(obj.bb_min[0], obj.bb_max[0]),
+            f32::midpoint(obj.bb_min[1], obj.bb_max[1]),
+            f32::midpoint(obj.bb_min[2], obj.bb_max[2]),
         ]
     } else {
         [obj.model[3][0], obj.model[3][1], obj.model[3][2]]

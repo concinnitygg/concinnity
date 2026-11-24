@@ -41,7 +41,7 @@ pub fn group_speed(omega: f64, k: f64, depth: f64) -> f64 {
     let n = if kh > 20.0 {
         0.5
     } else {
-        0.5 * (1.0 + 2.0 * kh / libm::sinh(2.0 * kh))
+        f64::midpoint(1.0, 2.0 * kh / libm::sinh(2.0 * kh))
     };
     n * omega / k
 }

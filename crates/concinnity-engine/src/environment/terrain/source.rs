@@ -91,7 +91,13 @@ pub(super) fn red_channel(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8
             rgba.len()
         ));
     }
-    Ok(rgba.chunks_exact(4).take(texels).map(|p| p[0]).collect())
+    Ok(rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .take(texels)
+        .map(|p| p[0])
+        .collect())
 }
 
 /// Bilinearly sample `texels` (`width` x `height`, one byte each) at

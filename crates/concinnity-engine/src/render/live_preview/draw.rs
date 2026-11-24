@@ -165,8 +165,7 @@ fn by_handle(world: &World, handle: MaterialHandle) -> Option<DrawMaterial> {
 fn draws_of(world: &World, entity: Entity) -> Vec<DrawIndex> {
     world
         .get::<RenderHandle>(entity)
-        .map(|h| h.draws.to_vec())
-        .unwrap_or_default()
+        .map_or_default(|h| h.draws.to_vec())
 }
 
 #[cfg(test)]

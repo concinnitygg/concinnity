@@ -59,7 +59,12 @@ fn read_indices(
     what: &'static str,
 ) -> Result<Vec<u16>, DecodeError> {
     let block = cur.take(checked_product(what, &[n, 2])?)?;
-    Ok(block.chunks_exact(2).map(|c| chunk_u16(c, 0)).collect())
+    Ok(block
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| chunk_u16(c, 0))
+        .collect())
 }
 
 /// Vertex layout shared by all mesh producers and both GPU backends.
@@ -424,16 +429,18 @@ pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Dec
         let block = cur.take(checked_product("morph offsets", &[vertex_count + 1, 4])?)?;
         morphs
             .offsets
-            .extend(block.chunks_exact(4).map(|c| chunk_u32(c, 0)));
+            .extend(block.as_chunks::<4>().0.iter().map(|c| chunk_u32(c, 0)));
         let block = cur.take(checked_product("morph entries", &[entry_count, 28])?)?;
-        morphs.entries.extend(block.chunks_exact(28).map(|e| {
-            let f = |i: usize| chunk_f32(e, i * 4);
-            MorphEntry {
-                target: chunk_u32(e, 0),
-                position: [f(1), f(2), f(3)],
-                normal: [f(4), f(5), f(6)],
-            }
-        }));
+        morphs
+            .entries
+            .extend(block.as_chunks::<28>().0.iter().map(|e| {
+                let f = |i: usize| chunk_f32(e, i * 4);
+                MorphEntry {
+                    target: chunk_u32(e, 0),
+                    position: [f(1), f(2), f(3)],
+                    normal: [f(4), f(5), f(6)],
+                }
+            }));
         morphs
             .validate()
             .map_err(|e| DecodeError::invalid("skinned mesh", format!("morph block: {e}")))?;
@@ -509,7 +516,9 @@ fn read_skinned_vertices(
 ) -> Result<Vec<SkinnedVertex>, DecodeError> {
     let block = cur.take(checked_product("skinned vertices", &[count, 80])?)?;
     Ok(block
-        .chunks_exact(80)
+        .as_chunks::<80>()
+        .0
+        .iter()
         .map(|v| {
             let f = |i: usize| chunk_f32(v, i * 4);
             let j = |i: usize| chunk_u16(v, 56 + i * 2);
@@ -532,7 +541,9 @@ fn read_skinned_vertices(
 fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, DecodeError> {
     let block = cur.take(checked_product("vertices", &[count, 56])?)?;
     Ok(block
-        .chunks_exact(56)
+        .as_chunks::<56>()
+        .0
+        .iter()
         .map(|v| {
             let f = |i: usize| chunk_f32(v, i * 4);
             Vertex {

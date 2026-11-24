@@ -92,7 +92,7 @@ mod tests {
 
         assert_eq!((w, h), (2, 2));
         assert_eq!(out.len(), 2 * 2 * 4);
-        assert!(out.chunks_exact(4).all(|p| p == [9, 8, 7, 255]));
+        assert!(out.as_chunks::<4>().0.iter().all(|p| *p == [9, 8, 7, 255]));
     }
 
     #[test]

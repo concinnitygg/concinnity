@@ -156,7 +156,10 @@ impl EditorHook {
             return;
         }
         let vp = self.viewport;
-        let middle = [vp[0] * 0.5, (crate::editor::hud::body_top() + vp[1]) * 0.5];
+        let middle = [
+            vp[0] * 0.5,
+            f32::midpoint(crate::editor::hud::body_top(), vp[1]),
+        ];
         let Some(pos) = self.drop_point(world, vp, middle, false) else {
             return;
         };

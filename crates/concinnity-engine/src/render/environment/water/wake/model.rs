@@ -47,8 +47,8 @@ pub(super) fn propagate(
     damping: [f32; 2],
 ) -> [f32; 2] {
     // The height's and the rise's own transforms, from the conjugate pair.
-    let h = [0.5 * (z[0] + mirror[0]), 0.5 * (z[1] - mirror[1])];
-    let v = [0.5 * (z[1] + mirror[1]), -0.5 * (z[0] - mirror[0])];
+    let h = [f32::midpoint(z[0], mirror[0]), 0.5 * (z[1] - mirror[1])];
+    let v = [f32::midpoint(z[1], mirror[1]), -0.5 * (z[0] - mirror[0])];
     let w = sqrt(gravity * k);
     let (c, s) = (cos(w * dt), sin(w * dt));
     // sin(w dt) / w, which tends to dt as w does.

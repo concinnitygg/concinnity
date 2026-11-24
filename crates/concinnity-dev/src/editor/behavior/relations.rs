@@ -610,8 +610,7 @@ fn scan_expr(value: &Value, body: &mut Body) {
 fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
 }
 
 #[cfg(test)]

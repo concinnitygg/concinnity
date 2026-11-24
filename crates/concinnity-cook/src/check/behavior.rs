@@ -157,7 +157,7 @@ pub fn check_with_variables(
     args: &Value,
     variables: Option<&Value>,
 ) -> Result<(), Fault> {
-    let declared = variables.map(DeclaredVars::from_args).unwrap_or_default();
+    let declared = variables.map_or_default(DeclaredVars::from_args);
     // Every complaint reads "Behavior '<name>': ...", so the label is attached
     // once here rather than at each return in `body`.
     body(args, &declared).map_err(|f| f.about(&format!("Behavior '{name}':")))
@@ -702,8 +702,7 @@ fn single_key(value: &Value) -> Option<(&str, &Value)> {
 fn array<'a>(args: &'a Value, key: &str) -> &'a [Value] {
     args.get(key)
         .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
 }
 
 fn str_array<'a>(args: &'a Value, key: &str) -> Vec<&'a str> {

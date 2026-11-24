@@ -60,7 +60,7 @@ pub fn depth_desc(gi_scale: u32, extent: PostExtent) -> TextureDesc {
 /// Levels a pyramid over a `base`-sized top level holds: [`DEPTH_LEVELS`], or
 /// fewer where the full chain down to one texel is shorter.
 pub fn pyramid_levels(base: PostExtent) -> u32 {
-    let full_chain = u32::BITS - base.width.max(base.height).max(1).leading_zeros();
+    let full_chain = base.width.max(base.height).max(1).bit_width();
     full_chain.min(DEPTH_LEVELS)
 }
 

@@ -335,24 +335,17 @@ fn label_content(world: &World, name: &str) -> String {
     let id = intern(name);
     world
         .get_by_id::<TextLabel>(id)
-        .map(|l| l.content.clone())
-        .unwrap_or_default()
+        .map_or_default(|l| l.content.clone())
 }
 
 fn label_y(world: &World, name: &str) -> f32 {
     let id = intern(name);
-    world
-        .get_by_id::<TextLabel>(id)
-        .map(|l| l.y)
-        .unwrap_or_default()
+    world.get_by_id::<TextLabel>(id).map_or_default(|l| l.y)
 }
 
 fn label_color(world: &World, name: &str) -> [f32; 3] {
     let id = intern(name);
-    world
-        .get_by_id::<TextLabel>(id)
-        .map(|l| l.color)
-        .unwrap_or_default()
+    world.get_by_id::<TextLabel>(id).map_or_default(|l| l.color)
 }
 
 fn two_page_story() -> Story {

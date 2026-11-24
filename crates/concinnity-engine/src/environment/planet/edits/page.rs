@@ -77,7 +77,7 @@ impl EditPage {
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
                 (lo.min(v), hi.max(v))
             });
-        let offset = narrow_f32((lo + hi) * 0.5);
+        let offset = narrow_f32(f64::midpoint(lo, hi));
         let scale = narrow_f32((hi - lo) * 0.5 / E_STEPS);
         let step = |v: f64| {
             if scale > 0.0 {

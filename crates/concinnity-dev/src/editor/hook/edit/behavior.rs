@@ -141,9 +141,7 @@ impl EditorHook {
             picks,
             editable: selected
                 .is_some_and(|r| edit::text_value(&self.behavior_args(), r).is_some()),
-            fields: card
-                .map(|i| fields::own_rows(&rows, &chart.cards, i))
-                .unwrap_or_default(),
+            fields: card.map_or_default(|i| fields::own_rows(&rows, &chart.cards, i)),
             overview: match self.behavior.mode {
                 ViewMode::Overview => {
                     relations::map(&self.behavior_pairs(), &self.declared_assets())

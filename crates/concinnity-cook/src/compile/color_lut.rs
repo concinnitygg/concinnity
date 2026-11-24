@@ -161,7 +161,7 @@ fn load_png_rgba8(path: &Path) -> Result<(u32, u32, Vec<u8>), CompileError> {
         ColorType::Rgba => raw.to_vec(),
         ColorType::Rgb => {
             let mut out = Vec::with_capacity(info.width as usize * info.height as usize * 4);
-            for chunk in raw.chunks_exact(3) {
+            for chunk in raw.as_chunks::<3>().0 {
                 out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
             }
             out
@@ -239,13 +239,15 @@ mod tests {
     fn parse_png_strip_accepts_rgb_and_fills_alpha() {
         let dir = tempfile::tempdir().expect("tempdir");
         let rgb: Vec<u8> = strip2_pixels()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|c| [c[0], c[1], c[2]])
             .collect();
         let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Rgb, &rgb);
         let (size, data) = parse_png_strip(Path::new(&src)).expect("parse strip");
         assert_eq!(size, 2);
-        assert!(data.chunks_exact(4).all(|c| c[3] == 255));
+        assert!(data.as_chunks::<4>().0.iter().all(|c| c[3] == 255));
     }
 
     #[test]

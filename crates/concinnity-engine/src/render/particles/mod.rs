@@ -735,9 +735,9 @@ mod tests {
     fn aabb_centers_on_emission_origin() {
         let r = make_record([3.0, 4.0, -5.0]);
         let (mn, mx) = r.aabb();
-        let cx = 0.5 * (mn[0] + mx[0]);
-        let cy = 0.5 * (mn[1] + mx[1]);
-        let cz = 0.5 * (mn[2] + mx[2]);
+        let cx = f32::midpoint(mn[0], mx[0]);
+        let cy = f32::midpoint(mn[1], mx[1]);
+        let cz = f32::midpoint(mn[2], mx[2]);
         assert!((cx - 3.0).abs() < 1e-5);
         assert!((cy - 4.0).abs() < 1e-5);
         assert!((cz + 5.0).abs() < 1e-5);

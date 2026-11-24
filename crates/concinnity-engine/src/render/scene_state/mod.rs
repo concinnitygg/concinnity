@@ -360,7 +360,7 @@ impl SceneView {
     /// The block every pass drawing a planet tile morphs it by: all zero, which
     /// morphs nothing, for a world without one.
     pub fn tile_morph_view(&self) -> crate::gfx::render_types::TileMorphView {
-        self.tile_morph.map(|m| m.view()).unwrap_or_default()
+        self.tile_morph.map_or_default(|m| m.view())
     }
 
     /// An identity view with no fade, cleared to `clear_color`.

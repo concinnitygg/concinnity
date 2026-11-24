@@ -109,8 +109,7 @@ fn static_world_frame_allocs_stay_pinned() {
     let shown = world
         .query::<TextLabel>()
         .find(|l| l.text_binding.is_some())
-        .map(|l| l.content.clone())
-        .unwrap_or_default();
+        .map_or_default(|l| l.content.clone());
     assert!(
         shown.parse::<i32>().is_ok_and(|beat| beat > 0),
         "label shows {shown:?}"

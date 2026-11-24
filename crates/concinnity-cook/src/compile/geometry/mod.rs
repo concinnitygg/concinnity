@@ -87,12 +87,11 @@ fn finish_mesh_payload(
     let lod_distances: Vec<f32> = args
         .get("lod_distances")
         .and_then(|v| v.as_array())
-        .map(|arr| {
+        .map_or_default(|arr| {
             arr.iter()
                 .filter_map(|x| x.as_f64().map(narrow_f32))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     concinnity_engine::bake::mesh::finish_mesh_payload(
         vertices,
         indices,

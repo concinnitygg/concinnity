@@ -1218,8 +1218,7 @@ impl TransparentResources {
     pub(in crate::directx) fn seethrough_mesh_indices(&self) -> &[usize] {
         self.glass_mesh
             .as_ref()
-            .map(|p| p.object_indices.as_slice())
-            .unwrap_or_default()
+            .map_or_default(|p| p.object_indices.as_slice())
     }
 
     // True when the see-through mesh pipelines are built, so the Layer 2 reroute

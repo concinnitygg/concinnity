@@ -83,7 +83,7 @@ impl Horizon {
     /// Where the box `lo..hi` sits against the horizon, as its bounding
     /// sphere.
     pub fn sight_of_box(&self, lo: [f32; 3], hi: [f32; 3]) -> HorizonSight {
-        let center = core::array::from_fn(|i| 0.5 * (f64::from(lo[i]) + f64::from(hi[i])));
+        let center = core::array::from_fn(|i| f64::midpoint(f64::from(lo[i]), f64::from(hi[i])));
         let half: DVec3 = core::array::from_fn(|i| 0.5 * (f64::from(hi[i]) - f64::from(lo[i])));
         self.sight_of_sphere(center, dvec3::length(half))
     }

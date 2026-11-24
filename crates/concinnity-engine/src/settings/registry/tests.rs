@@ -392,7 +392,7 @@ fn sliders_have_unique_keys_and_valid_ranges() {
 fn slider_apply_and_recover_round_trip() {
     for s in &SLIDERS {
         let (lo, hi) = s.range;
-        for v in [lo, (lo + hi) * 0.5, hi] {
+        for v in [lo, f32::midpoint(lo, hi), hi] {
             let recovered = (s.recover)(s.apply(v));
             assert!(
                 (recovered - v).abs() < 1.0e-3,

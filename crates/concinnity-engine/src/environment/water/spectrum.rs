@@ -123,7 +123,7 @@ impl SeaShape {
         let floor = share * self.density(self.peak_omega);
         let (mut below, mut above) = (0.1 * self.peak_omega, self.peak_omega);
         for _ in 0..32 {
-            let mid = 0.5 * (below + above);
+            let mid = f32::midpoint(below, above);
             if self.density(mid) >= floor {
                 above = mid;
             } else {

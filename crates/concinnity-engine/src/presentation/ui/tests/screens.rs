@@ -185,8 +185,7 @@ fn scoped_keybinding_fires_only_while_its_screen_is_top() {
     let mut cursor = EventCursor::default();
     let sent: Vec<ScreenCommand> = world
         .events::<ScreenCommand>()
-        .map(|e| e.read(&mut cursor).copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|e| e.read(&mut cursor).copied().collect());
     assert!(
         sent.iter()
             .any(|c| matches!(c, ScreenCommand::Show(AssetId(111)))),
