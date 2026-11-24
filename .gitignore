@@ -2,7 +2,6 @@
 !/.cargo/
 !/.git*
 
-/assets/
 /dist/
 /logs/
 /out/
