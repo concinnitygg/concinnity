@@ -5,11 +5,6 @@
 //!
 //! Also stamps the version this build reports: `cn version` and `cn --version`
 //! read the commit and date baked in here.
-//!
-//! This crate is a library, not a final binary, so it does NOT bundle the
-//! graphics-SDK runtime DLLs next to an artifact or emit the Agility linker
-//! exports; those belong to whichever package owns the final executable: the
-//! `concinnity` package, which builds both bins and the examples.
 
 use concinnity_toolchain::{emit_version_stamp, setup_graphics_backends};
 

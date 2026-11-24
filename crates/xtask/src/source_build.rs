@@ -5,11 +5,11 @@ use std::fs;
 use std::process::Command;
 use std::time::Instant;
 
-use crate::components::{Component, DXC_COMMIT, DXC_REPO, Source};
-use crate::fetch::file_name;
-use crate::host::Host;
-use crate::tools::{self, install, remove_dir_quietly, staging_dir};
-use crate::{Context, Result, fail, status, vendor_dir, workspace_root};
+use concinnity_vendor::files::{file_name, install, remove_dir_quietly, staging_dir};
+use concinnity_vendor::{Component, Context, Host, Result, fail};
+
+use crate::components::{DXC, DXC_COMMIT, DXC_REPO};
+use crate::{status, tools, vendor_dir, workspace_root};
 
 /// How a source build runs.
 #[derive(clap::Args)]
@@ -30,7 +30,7 @@ pub(crate) fn build(
         println!("{name}: no build for this host, skipped");
         return Ok(());
     };
-    let Source::Build(build) = (component.source)(host) else {
+    if !component.is_built(host) {
         if named {
             return fail(format!(
                 "{name} is downloaded here, not built -- run `cargo xtask vendor fetch {name}`"
@@ -38,8 +38,11 @@ pub(crate) fn build(
         }
         println!("{name}: downloaded here, skipped");
         return Ok(());
+    }
+    let Some(build) = builder(component) else {
+        return fail(format!("{name} has no source build"));
     };
-    let target = component.install_dir(host);
+    let target = component.install_dir(&vendor_dir(), host);
     if target.join((component.payload)(host)).is_file() && !options.force {
         println!("{name}: already built, {}", file_name(&target));
         return Ok(());
@@ -52,6 +55,11 @@ pub(crate) fn build(
     println!("{name}: built {}", shown.display());
     status::print_report(component, &target, host);
     Ok(())
+}
+
+// The source build of `component`, for the components a host builds.
+fn builder(component: &Component) -> Option<fn(&Component, Host, &Options) -> Result> {
+    (component.name == DXC.name).then_some(dxc as fn(&Component, Host, &Options) -> Result)
 }
 
 // The submodules a compiler build needs. The tests' googletest is the fourth,
@@ -131,7 +139,7 @@ pub(crate) fn dxc(component: &Component, host: Host, _options: &Options) -> Resu
             .args(["--target", "dxc", "dxildll"]),
     )?;
 
-    let target = component.install_dir(host);
+    let target = component.install_dir(&vendor_dir(), host);
     let staging = staging_dir(&target);
     remove_dir_quietly(&staging);
     let suffix = if host == Host::MacosArm64 {

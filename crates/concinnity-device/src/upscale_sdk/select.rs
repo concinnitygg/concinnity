@@ -30,7 +30,7 @@ impl UpscaleRequest {
     }
 
     /// Keep the preset a DLSS fallback settled on, so a rebuild (every resize)
-    /// goes straight to it instead of repeating the one NGX refused. `running`
+    /// goes straight to it instead of repeating the one DLSS refused. `running`
     /// is `None` when the built upscaler is not DLSS.
     pub(crate) fn adopt_running_preset(&mut self, running: Option<DlssPreset>) {
         if let Some(preset) = running {

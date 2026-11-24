@@ -3,10 +3,10 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::components::Component;
-use crate::fetch::file_name;
-use crate::host::Host;
-use crate::{Result, tools, vendor_dir};
+use concinnity_vendor::files::file_name;
+use concinnity_vendor::{Component, Host, Result};
+
+use crate::{tools, vendor_dir};
 
 pub(crate) fn status(component: &Component, current: Option<Host>, named: bool) -> Result {
     let host = component.host_for(current, named)?;
@@ -39,7 +39,7 @@ pub(crate) fn status(component: &Component, current: Option<Host>, named: bool) 
             component.name
         );
     }
-    let pinned = component.install_dir(host);
+    let pinned = component.install_dir(&vendor_dir(), host);
     for path in &vendored {
         let mark = if *path == pinned { "*" } else { " " };
         println!("  vendored {mark}{}", file_name(path));

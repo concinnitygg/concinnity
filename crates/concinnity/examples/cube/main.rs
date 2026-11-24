@@ -84,6 +84,7 @@ const CAMERA_PITCH: f32 = -0.09;
 const CAMERA_FOV_Y_DEGREES: f32 = 40.0;
 
 fn main() {
+    concinnity::dev::use_vendored_runtime();
     let args = match concinnity::launch::from_env() {
         Ok(args) => args,
         Err(LaunchArgsError::Help) => {

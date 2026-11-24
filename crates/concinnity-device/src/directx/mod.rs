@@ -57,6 +57,7 @@ mod root_sig;
 mod screenshot;
 mod shadow_receivers;
 mod sky;
+mod streamline;
 mod texture;
 mod transient_pool;
 mod transparent;

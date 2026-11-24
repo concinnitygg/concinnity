@@ -33,6 +33,8 @@ pub(super) fn capabilities(ray_tracing: bool) -> DeviceCapabilities {
 // tier. The device is dropped on return. Built on a throwaway DXGI factory with
 // no debug flag, so it never needs the "Graphics Tools" optional feature.
 pub(crate) fn probe_device() -> Option<DeviceProbe> {
+    // Before the probe's device, which would otherwise pin the OS runtime.
+    super::agility::activate();
     let factory: IDXGIFactory4 =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.

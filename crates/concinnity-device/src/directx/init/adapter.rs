@@ -145,41 +145,32 @@ pub(super) fn binding_tier_refusal(
     ))
 }
 
-// Not even the software adapter was usable, so every rejection is quoted. With
-// the bundled Agility SDK, a failure on every adapter usually means
-// `D3D12Core.dll` did not load from beside the executable.
+// Not even the software adapter was usable, so every rejection is quoted. On
+// the Agility SDK's runtime, a failure on every adapter usually means its
+// `D3D12Core.dll` does not run here.
 fn no_usable_adapter_message(rejections: &[String]) -> String {
-    compose_refusal(rejections, cfg!(agility_sdk_configured), || {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("D3D12").display().to_string()))
-    })
+    compose_refusal(
+        rejections,
+        crate::directx::agility::activate().map(|dir| dir.display().to_string()),
+    )
 }
 
 // The message composition, separated from the queries that feed it so it can be
 // read back without a device.
-fn compose_refusal(
-    rejections: &[String],
-    agility_bundled: bool,
-    agility_dir: impl Fn() -> Option<String>,
-) -> String {
+fn compose_refusal(rejections: &[String], agility_dir: Option<String>) -> String {
     let message = if rejections.is_empty() {
         "no D3D12 adapter found".to_string()
     } else {
         format!("no usable D3D12 adapter: {}", rejections.join("; "))
     };
-    if agility_bundled {
-        return format!(
-            "{message}. This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
-             Microsoft's Agility SDK and needs D3D12Core.dll in {}; without it \
-             D3D12 fails to start and every adapter reports unsupported. Copy \
-             that directory next to the executable, or rebuild without the \
-             opt-in to use the OS D3D12 runtime",
-            agility_dir()
-                .unwrap_or_else(|| "a `D3D12` directory beside the executable".to_string())
-        );
+    match agility_dir {
+        Some(dir) => format!(
+            "{message}. D3D12 runs on Microsoft's Agility SDK from {dir}, and when its \
+             D3D12Core.dll cannot start every adapter reports unsupported. Remove that \
+             directory to run on the OS D3D12 runtime"
+        ),
+        None => message,
     }
-    message
 }
 
 /// The adapter's description string, or a stand-in when the query fails.
@@ -228,8 +219,7 @@ mod tests {
                 "one is tier 1".to_string(),
                 "the software adapter is unavailable".to_string(),
             ],
-            false,
-            || None,
+            None,
         );
         assert!(message.contains("one is tier 1"), "{message}");
         assert!(
@@ -240,25 +230,19 @@ mod tests {
 
     #[test]
     fn an_enumeration_that_found_nothing_says_so() {
-        let message = compose_refusal(&[], false, || None);
+        let message = compose_refusal(&[], None);
         assert!(message.contains("no D3D12 adapter found"), "{message}");
     }
 
-    // A bundled Agility SDK that cannot load leaves every adapter looking
+    // An Agility runtime that cannot start leaves every adapter looking
     // unsupported, so the message names the directory rather than the hardware.
     #[test]
-    fn a_bundled_agility_sdk_names_the_directory_it_needs() {
-        let message = compose_refusal(&["D3D12CreateDevice failed".to_string()], true, || {
-            Some("C:\\app\\D3D12".to_string())
-        });
+    fn an_agility_runtime_names_the_directory_it_runs_from() {
+        let message = compose_refusal(
+            &["D3D12CreateDevice failed".to_string()],
+            Some("C:\\app\\D3D12".to_string()),
+        );
         assert!(message.contains("C:\\app\\D3D12"), "{message}");
         assert!(message.contains("D3D12Core.dll"), "{message}");
-    }
-
-    #[test]
-    fn an_unlocatable_agility_directory_still_names_what_is_missing() {
-        let message = compose_refusal(&[], true, || None);
-        assert!(message.contains("D3D12Core.dll"), "{message}");
-        assert!(message.contains("beside the executable"), "{message}");
     }
 }

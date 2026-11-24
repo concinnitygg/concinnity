@@ -4,7 +4,7 @@
 //!
 //! Three interchangeable backends sit behind the `UpscaleBackend` trait:
 //!   fsr   AMD FidelityFX FSR3 (cross-vendor; needs the Agility SDK bundled)
-//!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
+//!   dlss  NVIDIA DLSS via Streamline (RTX only)
 //!   xess  Intel XeSS (cross-vendor `DP4a` + Arc XMX)
 //! The API-independent half of each lives in `crate::upscale_sdk`; these files
 //! hold the D3D12 resources, DLL loading and command recording. `build_upscaler`
@@ -35,7 +35,6 @@ use crate::upscale_sdk::{
     ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest,
 };
 
-#[cfg(ngx_sdk_bundled)]
 mod dlss;
 mod fsr;
 mod xess;
@@ -47,7 +46,7 @@ pub(in crate::directx) struct UpscaleState {
     pub backend: Option<Box<dyn UpscaleBackend>>,
     pub requested: UpscaleRequest,
     // This frame's jitter as the offset from the sample back to the pixel
-    // center in y-down render pixels, the convention FFX, NGX and XeSS share.
+    // center in y-down render pixels, the convention FFX, DLSS and XeSS share.
     pub jitter: Cell<[f32; 2]>,
     // The pre-exposure the upscaler divides its input by, stepped between
     // frames so its history stays in FP16's normal range.
@@ -105,16 +104,12 @@ pub(in crate::directx) struct UpscalerDescriptors {
     pub srv_gpu: SrvSlot,
 }
 
-// The device an upscaler is created on, and the queue NGX's one-shot feature
-// creation is submitted to.
+// The device an upscaler is created on, and the Streamline session bound to
+// it, which DLSS runs through.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct UpscaleDevice<'a> {
     pub device: &'a ID3D12Device,
-    #[cfg_attr(
-        not(ngx_sdk_bundled),
-        expect(dead_code, reason = "only NGX feature creation submits work")
-    )]
-    pub command_queue: &'a ID3D12CommandQueue,
+    pub streamline: Option<&'a crate::directx::streamline::DxStreamline>,
 }
 
 // What every backend is created from.
@@ -123,10 +118,6 @@ struct UpscalerTarget<'a> {
     gpu: UpscaleDevice<'a>,
     extent: UpscaleExtent,
     descriptors: UpscalerDescriptors,
-    #[cfg_attr(
-        not(ngx_sdk_bundled),
-        expect(dead_code, reason = "only DLSS has render presets")
-    )]
     dlss_preset: DlssPreset,
 }
 
@@ -262,15 +253,15 @@ impl SdkLibrary for Dll {
 }
 
 // The vendor upscalers this process can load. FFX also needs the Agility SDK's
-// newer D3D12 runtime, which only an opt-in build bundles. The pre-backend probe
+// newer D3D12 runtime to be the one the process runs on. The pre-backend probe
 // reports the same set, so the settings predict the choice this backend makes.
 // Probed once per process.
 pub(in crate::directx) fn availability() -> UpscalerAvailability {
     static AVAILABILITY: OnceLock<UpscalerAvailability> = OnceLock::new();
     *AVAILABILITY.get_or_init(|| UpscalerAvailability {
-        dlss: cfg!(ngx_sdk_bundled),
+        dlss: crate::upscale_sdk::streamline::available(),
         xess: Dll::open(xess::LIBRARY).is_some(),
-        fsr: cfg!(agility_sdk_configured)
+        fsr: crate::directx::agility::activate().is_some()
             && Dll::open(fsr::LIBRARY).is_some()
             && Dll::open(fsr::UPSCALER_LIBRARY).is_some(),
     })
@@ -299,9 +290,8 @@ pub(in crate::directx) fn build_upscaler(
             Ok(match candidate {
                 ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(target)?.map(boxed),
                 ResolvedBackend::Xess => xess::XessUpscaler::try_new(target)?.map(boxed),
-                #[cfg(ngx_sdk_bundled)]
                 ResolvedBackend::Dlss => dlss::DlssUpscaler::try_new(target)?.map(boxed),
-                _ => None,
+                ResolvedBackend::Native => None,
             })
         })?;
     requested.adopt_running_preset(built.as_deref().and_then(UpscaleBackend::dlss_preset));
@@ -386,6 +376,7 @@ impl crate::directx::context::DxContext {
                 params.frame.near,
                 params.frame.fov_y_radians,
                 self.upscale.exposure.value(),
+                self.state.view.matrix,
             ),
         );
         if local_mask {

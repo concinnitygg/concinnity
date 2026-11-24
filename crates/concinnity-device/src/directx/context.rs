@@ -353,8 +353,10 @@ impl StreamState {
 
 // The swapchain, its back buffers + RTV heap, and the presentation pacing.
 pub(super) struct SwapchainState {
-    pub handle: IDXGISwapChain3,
+    // Ahead of `handle`, so the buffers' references to the swapchain are gone
+    // by the time it is released.
     pub back_buffers: Vec<ID3D12Resource>,
+    pub handle: IDXGISwapChain3,
     pub rtv_heap: ID3D12DescriptorHeap,
     pub rtv_descriptor_size: usize,
     // Swapchain RTV format captured at init. Stored so the composite + text PSO
@@ -503,6 +505,9 @@ pub(super) struct RtState {
 // negotiated with them. The window is declared last so every COM object that
 // presents to it releases first.
 pub(super) struct DxHardware {
+    // Streamline bound to `device`, when it loaded. First, so its session
+    // shuts down before the device is released.
+    pub streamline: Option<super::streamline::DxStreamline>,
     pub device: ID3D12Device,
     pub command_queue: ID3D12CommandQueue,
     // Placement pool every persistent buffer and CPU-uploaded texture is
@@ -555,6 +560,7 @@ impl DxHardware {
                 &self.command_queue,
                 self.alloc.frames_in_flight(),
             ),
+            streamline: self.streamline.clone(),
             device: self.device.clone(),
             command_queue: self.command_queue.clone(),
             adapter: self.adapter.clone(),
@@ -1260,6 +1266,9 @@ impl FrameDevice for DxContext {
 impl Drop for DxContext {
     fn drop(&mut self) {
         self.wait_idle();
+        // The upscaler first: a DLSS viewport is freed through the Streamline
+        // session the hardware holds.
+        self.upscale.backend = None;
         // Persist and release the pipeline library. `win_state` is `None` only
         // on the outgoing context of a `reload_world`, whose successor keeps
         // the device and the installed library.

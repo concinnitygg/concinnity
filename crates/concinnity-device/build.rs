@@ -1,22 +1,17 @@
-//! The device-backend crate (rlib). The first two jobs run behind one
-//! `setup_graphics_backends` call into the shared concinnity-toolchain helper:
+//! The device-backend crate (rlib).
 //!
-//! 1. Resolve the rendering backends and expose one cfg per backend the crate
+//! 1. Resolve the rendering backends through the shared concinnity-toolchain
+//!    helper's `setup_graphics_backends`, exposing one cfg per backend the crate
 //!    gates on (`backend_metal` / `backend_dx` / `backend_vk`).
 //!
-//! 2. Detect the optional upscaler SDKs and emit the cfgs the backends gate on.
-//!    This crate produces only an rlib (consumed by the client) plus its own test
-//!    binaries, so it does NOT bundle runtime DLLs next to a binary (that belongs
-//!    to whichever package owns the final artifact).
-//!
-//! 3. Precompile every resolved backend's engine programs (metallibs, DXIL,
+//! 2. Precompile every resolved backend's engine programs (metallibs, DXIL,
 //!    SPIR-V) so the binary embeds them.
 //!
-//! 4. Check the Metal and DirectX bindings the shared sources declare against
+//! 3. Check the Metal and DirectX bindings the shared sources declare against
 //!    the slots and root signatures their hosts bind, as the engine's
 //!    `programs::abi` tables state them (`assert_metal_abi`, `assert_dxil_abi`).
 //!
-//! 5. Derive the hash of the shader-compile sources that `shader_cache` folds
+//! 4. Derive the hash of the shader-compile sources that `shader_cache` folds
 //!    into every artifact key (see `emit_shader_compile_source_hash`).
 
 use concinnity_core::platform::Platform;

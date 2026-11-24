@@ -146,6 +146,9 @@ struct DeviceInner {
     instance: ash::Instance,
     // The loader must outlive the instance it produced; nothing reads it.
     _entry: ash::Entry,
+    // The Streamline session the instance and device were created under,
+    // shut down before the device is destroyed.
+    streamline: Option<super::streamline::Session>,
     queue: Mutex<RetireQueue>,
     debug: DebugMessenger,
     caps: DeviceCaps,
@@ -160,6 +163,14 @@ pub(in crate::vulkan) struct DeviceCaps {
     pub(in crate::vulkan) independent_blend: bool,
     // `VK_KHR_compute_shader_derivatives` was enabled with `computeDerivativeGroupLinear`.
     pub(in crate::vulkan) compute_derivatives: bool,
+}
+
+// What a device was loaded through: the entry, the instance created from it,
+// and the Streamline session both were created under, if any.
+pub(in crate::vulkan) struct DeviceLoader {
+    pub(in crate::vulkan) entry: ash::Entry,
+    pub(in crate::vulkan) instance: ash::Instance,
+    pub(in crate::vulkan) streamline: Option<super::streamline::Session>,
 }
 
 // The validation messenger and its callback's budget, owned by the device so
@@ -202,6 +213,7 @@ impl Drop for DeviceInner {
         // shader artifacts were compiled lazily since init's own.
         super::pipeline_cache::shutdown(&self.raw);
         crate::shader::runtime_cache::checkpoint();
+        self.streamline = None;
         // SAFETY: destroyed exactly once, when the last handle to it drops; every object created
         // from it has been destroyed above or by the context's own teardown, which runs first.
         unsafe { self.raw.destroy_device(None) };
@@ -248,26 +260,38 @@ impl std::ops::Deref for VkDevice {
 }
 
 impl VkDevice {
-    // Take ownership of a freshly created device. The entry and instance are
-    // held for the device's whole life and destroyed after it.
+    // Take ownership of a freshly created device. The entry, the instance and
+    // the Streamline session they were created under are held for the
+    // device's whole life; the session shuts down just before it is destroyed.
     pub(in crate::vulkan) fn new(
-        entry: ash::Entry,
-        instance: ash::Instance,
+        loader: DeviceLoader,
         raw: ash::Device,
         frames_in_flight: usize,
         debug: DebugMessenger,
         caps: DeviceCaps,
     ) -> Self {
+        let DeviceLoader {
+            entry,
+            instance,
+            streamline,
+        } = loader;
         Self {
             inner: Arc::new(DeviceInner {
                 raw,
                 instance,
                 _entry: entry,
+                streamline,
                 queue: Mutex::new(RetireQueue::new(frames_in_flight)),
                 debug,
                 caps,
             }),
         }
+    }
+
+    // The Streamline session the device was created under, if any.
+    #[cfg(windows)]
+    pub(in crate::vulkan) fn streamline(&self) -> Option<&super::streamline::Session> {
+        self.inner.streamline.as_ref()
     }
 
     // The color targets the reactive mask's writer passes draw.

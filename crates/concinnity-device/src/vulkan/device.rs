@@ -152,6 +152,7 @@ pub(super) fn create_logical_device(
     graphics_family: u32,
     present_family: u32,
     upscaler_sdk: &UpscaleSdk,
+    streamline: bool,
 ) -> RenderResult<LogicalDevice> {
     let priority = [1.0f32];
     let mut queue_infos = vec![
@@ -419,8 +420,8 @@ pub(super) fn create_logical_device(
         .compute_derivative_group_quads(derivatives_probe.compute_derivative_group_quads != 0)
         .compute_derivative_group_linear(true);
 
-    // `bufferDeviceAddress` for DLSS (NGX needs the feature, not just the
-    // extension) and for the RT build inputs; enabled whenever RT is capable.
+    // `bufferDeviceAddress` for DLSS (its evaluate needs the feature, not just
+    // the extension) and for the RT build inputs; enabled whenever RT is capable.
     let want_bda = rt_capable
         || (upscaler_sdk.choice == ResolvedBackend::Dlss && {
             let mut bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
@@ -441,6 +442,20 @@ pub(super) fn create_logical_device(
         .shader_sampled_image_array_non_uniform_indexing(want_nonuniform_indexing)
         .runtime_descriptor_array(want_runtime_pool)
         .descriptor_binding_sampled_image_update_after_bind(want_update_after_bind);
+    // Streamline's common plugin keeps per-object data in a private data slot,
+    // so a device created under it has the feature on where it is supported.
+    let want_private_data = streamline && {
+        let mut private_data_probe = vk::PhysicalDevicePrivateDataFeatures::default();
+        {
+            let mut probe =
+                vk::PhysicalDeviceFeatures2::default().push_next(&mut private_data_probe);
+            // SAFETY: a property query on a live handle; it only reads.
+            unsafe { instance.get_physical_device_features2(pd, &mut probe) };
+        }
+        private_data_probe.private_data != 0
+    };
+    let mut private_data_enable =
+        vk::PhysicalDevicePrivateDataFeatures::default().private_data(true);
     // The probed portability subset, reused as the enable struct so every
     // feature the driver supports is on. Its `p_next` still points into the
     // probe chain, so clear it before it is pushed onto a different chain.
@@ -468,9 +483,15 @@ pub(super) fn create_logical_device(
         // Hand XeSS our chain head; it patches required features + appends its
         // own structs (SDK-owned memory, valid while `upscaler_sdk` lives) and
         // returns the head to use as `VkDeviceCreateInfo.pNext`.
-        let head =
+        let mut head =
             upscaler_sdk.xess_device_features(instance, pd, (&raw mut features2).cast::<c_void>());
         enable_bindless_features(head);
+        // XeSS may chain a `Vulkan13Features`, which then carries the feature
+        // instead of a struct of its own.
+        if want_private_data && !enable_private_data(head) {
+            private_data_enable.p_next = head;
+            head = (&raw mut private_data_enable).cast::<c_void>();
+        }
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&ext_names);
@@ -524,6 +545,9 @@ pub(super) fn create_logical_device(
     if has_portability_subset {
         device_info = device_info.push_next(&mut portability_enable);
     }
+    if want_private_data {
+        device_info = device_info.push_next(&mut private_data_enable);
+    }
 
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
@@ -543,6 +567,42 @@ pub(super) fn create_logical_device(
 // Turn the bindless pool's two descriptor-indexing features on in the
 // `Vulkan12Features` XeSS already chained, since a second struct is invalid.
 fn enable_bindless_features(head: *mut c_void) {
+    let Some(node) = chained(head, vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) else {
+        tracing::warn!(
+            "no Vulkan12Features in the device chain, so the bindless texture pool's \
+             declarations have no features to enable"
+        );
+        return;
+    };
+    // SAFETY: `sType` names this struct, so the node is one, and it is still
+    // mutable here: the chain is only read once `create_device` consumes it,
+    // which has not been called yet.
+    let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features<'_>>() };
+    tracing::info!(
+        "chained Vulkan12Features: runtime_descriptor_array={}, \
+         sampled_image_non_uniform_indexing={}; forcing both on for the \
+         bindless texture pool",
+        f.runtime_descriptor_array != 0,
+        f.shader_sampled_image_array_non_uniform_indexing != 0,
+    );
+    f.runtime_descriptor_array = vk::TRUE;
+    f.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+}
+
+// Turn `privateData` on in a `Vulkan13Features` already in the chain at `head`,
+// whether one was there.
+fn enable_private_data(head: *mut c_void) -> bool {
+    let Some(node) = chained(head, vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) else {
+        return false;
+    };
+    // SAFETY: as in `enable_bindless_features`, for the 1.3 struct.
+    let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan13Features<'_>>() };
+    f.private_data = vk::TRUE;
+    true
+}
+
+// The first node of type `s_type` in the `pNext` chain at `head`.
+fn chained(head: *mut c_void, s_type: vk::StructureType) -> Option<*mut c_void> {
     // Every `pNext` node begins with these two fields, which is what lets a walk
     // read a chain of mixed struct types.
     #[repr(C)]
@@ -556,29 +616,12 @@ fn enable_bindless_features(head: *mut c_void) {
         // SAFETY: `head` is a Vulkan `pNext` chain, so every non-null node begins with an
         // `sType` / `pNext` pair, which is the contract Vulkan itself reads the chain under.
         let header = unsafe { &*node.cast::<Node>() };
-        let (s_type, next) = (header.s_type, header.p_next);
-        if s_type == vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES {
-            // SAFETY: `sType` names this struct, so the node is one, and it is
-            // still mutable here: the chain is only read once `create_device`
-            // consumes it, which has not been called yet.
-            let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features<'_>>() };
-            tracing::info!(
-                "chained Vulkan12Features: runtime_descriptor_array={}, \
-                 sampled_image_non_uniform_indexing={}; forcing both on for the \
-                 bindless texture pool",
-                f.runtime_descriptor_array != 0,
-                f.shader_sampled_image_array_non_uniform_indexing != 0,
-            );
-            f.runtime_descriptor_array = vk::TRUE;
-            f.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
-            return;
+        if header.s_type == s_type {
+            return Some(node);
         }
-        node = next;
+        node = header.p_next;
     }
-    tracing::warn!(
-        "no Vulkan12Features in the device chain, so the bindless texture pool's \
-         declarations have no features to enable"
-    );
+    None
 }
 
 // The requested HDR sample count clamped to what the device supports. A
@@ -644,6 +687,42 @@ mod tests {
         assert_eq!(
             resolve_sample_count(vk::SampleCountFlags::TYPE_1, 4),
             vk::SampleCountFlags::TYPE_1
+        );
+    }
+
+    // XeSS's chain carries the 1.3 struct, which then takes the feature; a
+    // chain without one reports so, and the caller chains its own.
+    #[test]
+    fn private_data_rides_a_chained_vulkan13_struct() {
+        let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
+        let mut v12 = vk::PhysicalDeviceVulkan12Features {
+            p_next: (&raw mut v13).cast::<c_void>(),
+            ..Default::default()
+        };
+        let head = (&raw mut v12).cast::<c_void>();
+        assert!(enable_private_data(head));
+        assert_eq!(v13.private_data, vk::TRUE);
+
+        let mut alone = vk::PhysicalDeviceVulkan12Features::default();
+        assert!(!enable_private_data((&raw mut alone).cast::<c_void>()));
+        assert!(!enable_private_data(std::ptr::null_mut()));
+    }
+
+    #[test]
+    fn a_chain_walk_finds_the_first_node_of_a_type() {
+        let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures {
+            p_next: (&raw mut v12).cast::<c_void>(),
+            ..Default::default()
+        };
+        let head = (&raw mut bda).cast::<c_void>();
+        assert_eq!(
+            chained(head, vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES),
+            Some((&raw mut v12).cast::<c_void>())
+        );
+        assert_eq!(
+            chained(head, vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES),
+            None
         );
     }
 }

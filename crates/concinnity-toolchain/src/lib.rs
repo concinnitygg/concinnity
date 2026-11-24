@@ -1,55 +1,28 @@
 //! Shared build-script support for the workspace.
 //!
 //! Besides the Metal shader precompilation in `metal_shaders`, the emitted
-//! binding readers in `shader_abi` and the source hashing in `source_hash`, two
-//! responsibilities every build script that links the runtime needs, including
-//! the example binaries':
+//! binding readers in `shader_abi` and the source hashing in `source_hash`, one
+//! responsibility every build script that compiles the renderer needs: resolve
+//! the rendering backends the build compiles in and emit one cfg per backend
+//! (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on, behind
+//! one call, [`setup_graphics_backends`].
 //!
-//! 1. Resolve the rendering backends the build compiles in and emit one cfg
-//!    per backend (`backend_metal` / `backend_dx` / `backend_vk`) the source
-//!    gates on.
-//!
-//! 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
-//!    (`agility_sdk_configured`, `ngx_sdk_bundled`). For a package that produces
-//!    final binaries this also copies the runtime DLLs next to the .exe and links
-//!    the NGX import lib; for a package that produces only an rlib and its own
-//!    test binaries just the NGX link is needed. Which of the two, and where the
-//!    binaries land, is read off the calling package by `targets` -- a build
-//!    script declares nothing about its own target list.
-//!
-//! Both run behind one call, [`setup_graphics_backends`], for a package in this
-//! workspace and for one outside it alike. The steps it assembles are private,
-//! so the build scripts here cannot drift into declaring the cfgs, gating on a
-//! backend and probing the SDKs in different orders.
-//!
-//! The entry point emits `cargo::` directives on stdout, which Cargo attributes
-//! to the build script of whichever package called in. That is what lets an
-//! example binary's build script pick up the same NGX link and DLL bundling the
-//! CLI's does, without duplicating any of this logic. It is also what a package
-//! outside this workspace needs, since the NGX link reaches only the package
-//! that emits it.
-//!
-//! This file is the thin environment-reading layer: it snapshots everything the
-//! setup needs from the process environment into an `SdkEnv` and prints the
-//! directives. The probe/copy/directive logic itself lives in the `sdks`
-//! module, which never touches the environment or stdout.
+//! Nothing here reads a graphics SDK: the upscalers and the Agility runtime
+//! are loaded when an app runs, from the libraries `concinnity vendor` stages,
+//! so a build needs none of them.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod embedded_shaders;
 mod metal_shaders;
 mod parallel;
-mod sdks;
 mod shader_abi;
 mod shader_artifacts;
 mod source_hash;
-mod targets;
-mod vendored;
 mod version_stamp;
 
 pub use metal_shaders::{EmittedMsl, precompile_metal_shaders};
 pub use parallel::parallel_map;
-use sdks::SdkEnv;
 pub use shader_abi::{msl_binds, msl_binds_a_resource, msl_entry_params, msl_param_name};
 pub use shader_artifacts::{ShaderArtifact, precompile_shader_artifacts};
 pub use version_stamp::emit_version_stamp;
@@ -85,47 +58,6 @@ impl Backend {
     }
 }
 
-// Which of the calling package's targets are the final binaries the graphics
-// SDKs serve. Cargo scopes a linker argument by target kind and places each kind
-// in its own directory, so this picks both the `cargo::rustc-link-arg-*` key the
-// Agility exports go out under and the directory the runtime DLLs are copied
-// into -- which has to be the one holding the .exe, since that is where Windows
-// looks for them. Discovered per package by `targets`, never named by a caller.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BinaryTargets {
-    // The package links no binary of its own. Its test and bench executables
-    // still resolve the NGX symbols through the plain `rustc-link-arg`, but
-    // nothing is placed beside them.
-    None,
-    // `src/main.rs` and `src/bin/`, which land in `<target>/<profile>/`.
-    Bins,
-    // `examples/`, which land in `<target>/<profile>/examples/`.
-    Examples,
-}
-
-impl BinaryTargets {
-    pub(crate) fn bundles(self) -> bool {
-        self != Self::None
-    }
-
-    // The `cargo::rustc-link-arg-*` key covering these targets. Cargo rejects
-    // `rustc-link-arg-bins` outright from a package with no bin target, and has
-    // no per-example form at all, so an argument emitted for `Examples` reaches
-    // every example the package builds.
-    pub(crate) fn link_arg_key(self) -> Option<&'static str> {
-        match self {
-            Self::None => None,
-            Self::Bins => Some("cargo::rustc-link-arg-bins"),
-            Self::Examples => Some("cargo::rustc-link-arg-examples"),
-        }
-    }
-
-    // Subdirectory of `<target>/<profile>/` Cargo writes these binaries to.
-    pub(crate) fn exe_subdir(self) -> Option<&'static str> {
-        matches!(self, Self::Examples).then_some("examples")
-    }
-}
-
 // Whether the calling package's build script runs with its `vulkan` feature on.
 #[expect(
     clippy::disallowed_methods,
@@ -151,14 +83,15 @@ pub(crate) fn resolve_backends(target_os: &str, vulkan: bool) -> Vec<Backend> {
     native.into_iter().chain(vulkan).collect()
 }
 
-// Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
+// Declare every backend cfg the renderer source gates on, so `--check-cfg` does
+// not warn about the ones a build leaves unset.
 fn emit_check_cfgs() {
-    for line in sdks::check_cfg_directives() {
-        println!("{line}");
+    for backend in [Backend::Metal, Backend::Dx, Backend::Vk] {
+        println!("cargo::rustc-check-cfg=cfg({})", backend.cfg_name());
     }
 }
 
-// The whole setup: declare the cfgs, emit the backend cfgs, then set up the SDKs.
+// The whole setup: declare the cfgs, then emit one for each backend.
 #[expect(
     clippy::disallowed_methods,
     reason = "cargo passes build-script inputs through the environment"
@@ -168,28 +101,21 @@ fn setup_for(vulkan: bool) -> Vec<Backend> {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let backends = resolve_backends(&target_os, vulkan);
     for &backend in &backends {
-        println!("{}", sdks::backend_cfg_directive(backend));
+        println!("cargo::rustc-cfg={}", backend.cfg_name());
     }
-    setup_graphics_sdks(&backends);
     backends
 }
 
-/// The whole build-script graphics setup for a package that links the engine:
-/// declares the cfgs the renderer source gates on, resolves the backends from
+/// The whole build-script graphics setup for a package that compiles the
+/// renderer: declares the cfgs its source gates on, resolves the backends from
 /// the calling package's own features and emits a cfg for each
-/// (`backend_metal` / `backend_dx` / `backend_vk`), then sets up the optional
-/// graphics SDKs. The target's native backend is always built; the `vulkan`
-/// feature adds Vulkan beside it. Returns the backends, native first, so a
-/// build script with steps of its own can branch.
+/// (`backend_metal` / `backend_dx` / `backend_vk`). The target's native backend
+/// is always built; the `vulkan` feature adds Vulkan beside it. Returns the
+/// backends, native first, so a build script with steps of its own can branch.
 ///
-/// The NGX link directive is scoped to the package that emits it, so every
-/// package whose final links (bins, examples, tests, benches) pull in the DLSS
-/// code calls this itself. The SDK runtime DLLs are bundled beside each binary
-/// kind the package's manifest declares: bins in `target/<profile>/`, examples in
-/// `target/<profile>/examples/`. A package depending on `concinnity` calls this
-/// from its own build script for the same reason, and one that took
-/// `concinnity`'s `vulkan` feature carries a `vulkan` feature of its own, since
-/// a build script only sees the features of the package it belongs to.
+/// A package that took `concinnity`'s `vulkan` feature carries a `vulkan`
+/// feature of its own, since a build script only sees the features of the
+/// package it belongs to.
 ///
 /// An empty list is a target with no window layer yet (iOS, Android), which
 /// builds no GPU backend. That emits no backend cfg, and the check-cfg list
@@ -200,48 +126,6 @@ fn setup_for(vulkan: bool) -> Vec<Backend> {
 /// ```
 pub fn setup_graphics_backends() -> Vec<Backend> {
     setup_for(vulkan_from_cargo())
-}
-
-// Set up the optional graphics SDKs for the given backends. On a non-Windows
-// target (or Metal alone) this is a no-op: none of these SDKs apply.
-//
-// Which kinds of final binary the calling package builds is read from that
-// package, not passed in: a package can build both bins and examples, and each
-// kind takes its own linker-argument key and its own directory for the bundled
-// DLLs, so the setup runs once per kind. A directive both kinds produce --
-// every cfg, every warning -- is emitted once.
-fn setup_graphics_sdks(backends: &[Backend]) {
-    let env = sdk_env_from_cargo();
-    if let Some(dir) = manifest_dir() {
-        for path in targets::watched_inputs(&dir) {
-            println!("cargo::rerun-if-changed={}", path.display());
-        }
-    }
-    if backends.is_empty() {
-        return;
-    }
-    for line in sdks::graphics_sdk_directives(backends, &binary_targets_from_cargo(), &env) {
-        println!("{line}");
-    }
-}
-
-// The calling package's binary kinds, from the manifest Cargo is building it
-// from. A package Cargo hands no manifest (nothing does outside a build script)
-// falls back to the kind that scopes nothing.
-fn binary_targets_from_cargo() -> Vec<BinaryTargets> {
-    let Some(dir) = manifest_dir() else {
-        return vec![BinaryTargets::None];
-    };
-    let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default();
-    targets::binary_targets(&manifest, &dir)
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "cargo passes build-script inputs through the environment"
-)]
-fn manifest_dir() -> Option<PathBuf> {
-    std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from)
 }
 
 /// Hash the Rust sources under `roots`, and emit the rerun directives that
@@ -276,88 +160,6 @@ pub fn hash_sources(roots: &[PathBuf]) -> u32 {
         );
     }
     source_hash::hash_named(&mut named)
-}
-
-// Whether an opt-in variable's value asks for the feature, for the one SDK that
-// is off by default. Bundling Agility links `D3D12SDKVersion` / `D3D12SDKPath`
-// into the binary, and `d3d12.dll` reads those before any engine code runs: a
-// binary carrying them starts only where the staged `D3D12/` directory sits
-// beside it, so an executable copied anywhere else -- every `cargo install` --
-// reaches no adapter at all. That makes bundling a decision about how the
-// artifact is distributed rather than about which SDKs the build machine
-// happens to have, so it has to be asked for. `0` keeps meaning off, as it
-// always has for these variables.
-fn opted_in(value: Option<&str>) -> bool {
-    matches!(value, Some("1" | "true" | "TRUE"))
-}
-
-// Snapshot every environment input the SDK setup reads. This is the only place
-// the setup consults the process environment; everything downstream works on
-// the returned struct.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "cargo passes build-script inputs through the environment"
-)]
-fn sdk_env_from_cargo() -> SdkEnv {
-    let var = |name: &str| std::env::var(name).ok();
-    let workspace = workspace_root();
-    let root = |name: &str, component: &str| {
-        sdk_root(var(name), vendored::newest(workspace.as_deref(), component))
-    };
-    // The `LoadLibrary`-at-runtime SDKs default to ON and are opted out of with
-    // `<VAR>=0`: an absent DLL costs the feature and nothing else.
-    let enabled = |name: &str| var(name).as_deref() != Some("0");
-    // Agility is the exception and defaults to OFF; see `opted_in`.
-    let opted_in = |name: &str| opted_in(var(name).as_deref());
-    SdkEnv {
-        target_os: var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
-        out_dir: var("OUT_DIR").map(PathBuf::from),
-        agility_root: root("CN_AGILITY_SDK", "agility"),
-        fidelityfx_root: root("CN_FIDELITYFX_SDK", "fidelityfx"),
-        xess_root: root("CN_XESS_SDK", "xess"),
-        streamline_root: root("CN_STREAMLINE_SDK", "streamline"),
-        agility_enabled: opted_in("CN_ENABLE_AGILITY_SDK"),
-        ffx_enabled: enabled("CN_ENABLE_FFX_FSR3"),
-        xess_enabled: enabled("CN_ENABLE_XESS"),
-        dlss_enabled: enabled("CN_ENABLE_DLSS"),
-    }
-}
-
-// Where an SDK is: the explicit variable, else whatever `vendor/` holds. There
-// is no third guess -- each of these unpacks wherever its user put it, so a
-// hardcoded install path was only ever right by accident, and being wrong it
-// reported a location nobody had rather than that nothing was found. The
-// variable leads because an explicit answer beats a discovered one, including
-// when it is wrong: a mistyped path fails instead of silently resolving
-// elsewhere.
-fn sdk_root(explicit: Option<String>, vendored: Option<PathBuf>) -> Option<PathBuf> {
-    explicit.map(PathBuf::from).or(vendored)
-}
-
-// Locate the workspace root by walking up from the caller's manifest until a
-// `Cargo.toml` declaring `[workspace]` is found.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "cargo passes build-script inputs through the environment"
-)]
-fn workspace_root() -> Option<PathBuf> {
-    let start = std::env::var("CARGO_MANIFEST_DIR").ok()?;
-    find_ancestor_with(Path::new(&start), |dir| {
-        std::fs::read_to_string(dir.join("Cargo.toml")).is_ok_and(|c| c.contains("[workspace]"))
-    })
-}
-
-// Walk `start` and its ancestors, returning the first that satisfies `pred`.
-fn find_ancestor_with(start: &Path, pred: impl Fn(&Path) -> bool) -> Option<PathBuf> {
-    let mut dir = start.to_path_buf();
-    loop {
-        if pred(&dir) {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -407,126 +209,6 @@ mod tests {
         assert_eq!(Backend::Vk.cfg_name(), "backend_vk");
     }
 
-    #[test]
-    fn ancestor_search_finds_marked_dir() {
-        let start = Path::new("/a/b/c/d");
-        let hit = find_ancestor_with(start, |p| p == Path::new("/a/b"));
-        assert_eq!(hit, Some(PathBuf::from("/a/b")));
-
-        let miss = find_ancestor_with(start, |p| p == Path::new("/x"));
-        assert_eq!(miss, None);
-    }
-
-    #[test]
-    fn workspace_root_finds_the_workspace_manifest() {
-        // Cargo sets CARGO_MANIFEST_DIR for test binaries, so the walk starts
-        // at this crate and must land on the workspace's own Cargo.toml.
-        let root = workspace_root().expect("workspace root");
-        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
-        assert!(manifest.contains("[workspace]"));
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the default holds only while the shell leaves the variable unset"
-    )]
-    #[test]
-    fn sdk_env_snapshot_defaults_the_loadlibrary_probes_on() {
-        let env = sdk_env_from_cargo();
-        // The `LoadLibrary` probes default ON when their opt-out variable is
-        // unset. Only assert for variables the surrounding environment leaves
-        // unset, so a local `<VAR>=0` opt-out does not fail the test.
-        for (var, flag) in [
-            ("CN_ENABLE_FFX_FSR3", env.ffx_enabled),
-            ("CN_ENABLE_XESS", env.xess_enabled),
-            ("CN_ENABLE_DLSS", env.dlss_enabled),
-        ] {
-            if std::env::var(var).is_err() {
-                assert!(flag, "{var} should default on");
-            }
-        }
-    }
-
-    // The order is the contract, and it is not observable from a snapshot: a
-    // host that has vendored the SDK resolves it there with nothing set, which
-    // is correct and which asserting the default would call a failure.
-    #[test]
-    fn an_sdk_root_prefers_the_variable_then_vendor_then_nothing() {
-        let vendored = PathBuf::from("/checkout/vendor/xess-3.0.1-windows-x86_64");
-        let cases = [
-            (Some("/explicit"), Some(vendored.clone()), Some("/explicit")),
-            (Some("/explicit"), None, Some("/explicit")),
-            (
-                None,
-                Some(vendored),
-                Some("/checkout/vendor/xess-3.0.1-windows-x86_64"),
-            ),
-            // Nothing named a root, which is an answer rather than a reason to
-            // guess: the warning then says the SDK is not vendored and the
-            // variable is unset, not that it was missing from a path nobody has.
-            (None, None, None),
-        ];
-        for (explicit, found, want) in cases {
-            let got = sdk_root(explicit.map(str::to_string), found.clone());
-            assert_eq!(got, want.map(PathBuf::from), "{explicit:?} + {found:?}");
-        }
-    }
-
-    // Agility is the one that binds the executable to a directory beside it, so
-    // an unset variable must leave it OFF: the default has to be the artifact
-    // that runs anywhere, not the one that runs only where it was built.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the default holds only while the shell leaves the variable unset"
-    )]
-    #[test]
-    fn sdk_env_snapshot_defaults_agility_off() {
-        if std::env::var("CN_ENABLE_AGILITY_SDK").is_err() {
-            assert!(!sdk_env_from_cargo().agility_enabled);
-        }
-    }
-
-    // Only an affirmative value opts in. `0` has always meant off and keeps
-    // meaning off, so an environment carrying the old opt-out is unaffected.
-    #[test]
-    fn only_an_affirmative_value_opts_into_agility() {
-        for on in ["1", "true", "TRUE"] {
-            assert!(opted_in(Some(on)), "{on}");
-        }
-        for off in ["0", "", "no", "yes", "2", "false"] {
-            assert!(!opted_in(Some(off)), "{off}");
-        }
-        assert!(!opted_in(None));
-    }
-
-    #[test]
-    fn graphics_sdk_setup_is_a_noop_off_windows_targets() {
-        // Metal never has SDKs to set up, and the Vulkan arm is gated on a
-        // Windows target OS (CARGO_CFG_TARGET_OS is unset outside build
-        // scripts), so neither requires any SDK to be present.
-        let env = sdk_env_from_cargo();
-        for targets in [
-            &[BinaryTargets::None][..],
-            &[BinaryTargets::Bins],
-            &[BinaryTargets::Examples],
-            &[BinaryTargets::Bins, BinaryTargets::Examples],
-        ] {
-            for backends in [
-                &[Backend::Metal][..],
-                &[Backend::Vk],
-                &[Backend::Metal, Backend::Vk],
-            ] {
-                assert!(sdks::graphics_sdk_directives(backends, targets, &env).is_empty());
-            }
-        }
-        setup_graphics_sdks(&[Backend::Metal]);
-        setup_graphics_sdks(&[Backend::Metal, Backend::Vk]);
-        // A build with no backend has no SDK setup to do at all.
-        setup_graphics_sdks(&[]);
-        // The check-cfg list is emitted unconditionally and must not panic.
-        emit_check_cfgs();
-    }
-
     #[expect(
         clippy::disallowed_methods,
         reason = "the expected backends follow the target cargo builds for"
@@ -541,12 +223,5 @@ mod tests {
                 "vulkan: {vulkan}"
             );
         }
-    }
-
-    #[test]
-    fn this_crate_builds_no_final_binary() {
-        // concinnity-toolchain is a lib with no bin and no example, so the
-        // discovery run from its own test binary has to say so.
-        assert_eq!(binary_targets_from_cargo(), vec![BinaryTargets::None]);
     }
 }

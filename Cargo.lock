@@ -376,6 +376,7 @@ dependencies = [
  "concinnity-runtime",
  "concinnity-testing",
  "concinnity-toolchain",
+ "concinnity-vendor",
  "tempfile",
 ]
 
@@ -443,6 +444,7 @@ dependencies = [
  "concinnity-shader",
  "concinnity-testing",
  "concinnity-toolchain",
+ "concinnity-vendor",
  "notify",
  "objc2 0.6.5",
  "objc2-app-kit",
@@ -473,6 +475,7 @@ dependencies = [
  "concinnity-shader",
  "concinnity-testing",
  "concinnity-toolchain",
+ "concinnity-vendor",
  "dispatch2",
  "glfw",
  "hex",
@@ -604,6 +607,17 @@ dependencies = [
  "concinnity-shader",
  "concinnity-testing",
  "tempfile",
+]
+
+[[package]]
+name = "concinnity-vendor"
+version = "0.20.0"
+dependencies = [
+ "flate2",
+ "sha2",
+ "tar",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]
@@ -3314,11 +3328,8 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "clap",
- "flate2",
- "sha2",
- "tar",
+ "concinnity-vendor",
  "tempfile",
- "zip",
 ]
 
 [[package]]

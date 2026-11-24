@@ -207,6 +207,23 @@ pub(crate) enum Commands {
     #[command(name = "mcp", verbatim_doc_comment)]
     Mcp(McpArgs),
 
+    /// Fetch the runtime SDKs an application loads
+    ///
+    /// Downloads the pinned Agility, FidelityFX, XeSS and Streamline releases
+    /// (Windows only) into the workspace's `vendor/` directory, or a per-user
+    /// one outside a workspace, and stages their libraries into the runtime
+    /// directory that `run`, `bench` and `edit` load from and `export` bundles.
+    /// An SDK whose terms are an agreement asks for them to be accepted first;
+    /// `--accept-licenses` accepts them without asking.
+    ///
+    /// ```sh
+    /// concinnity vendor
+    /// concinnity vendor streamline xess
+    /// concinnity vendor --status
+    /// ```
+    #[command(name = "vendor", verbatim_doc_comment)]
+    Vendor(VendorArgs),
+
     /// Print the version
     ///
     /// ```sh
@@ -385,6 +402,25 @@ pub(crate) struct CookArgs {
     /// Also show the cook's informational messages, such as each imported mesh
     #[arg(short, long)]
     pub(crate) verbose: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct VendorArgs {
+    /// The SDKs to fetch, every one when none is named
+    #[arg(value_parser = clap::builder::PossibleValuesParser::new(concinnity_vendor::sdks::NAMES))]
+    pub(crate) sdks: Vec<String>,
+
+    /// Re-download over an existing copy
+    #[arg(long, conflicts_with = "status")]
+    pub(crate) force: bool,
+
+    /// Accept the SDKs' terms without asking
+    #[arg(long, conflicts_with = "status")]
+    pub(crate) accept_licenses: bool,
+
+    /// Report what is vendored and staged instead of fetching
+    #[arg(long)]
+    pub(crate) status: bool,
 }
 
 #[derive(Debug, clap::Args)]

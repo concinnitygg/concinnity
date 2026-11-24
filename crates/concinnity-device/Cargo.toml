@@ -42,7 +42,7 @@ glfw = { workspace = true, features = ["vulkan", "x11", "wayland", "prebuilt-lib
 [target.'cfg(target_os = "windows")'.dependencies]
 ash = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Threading", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Threading", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 ash = { workspace = true, optional = true }
@@ -67,6 +67,7 @@ objc2-core-graphics = { workspace = true }
 # The layout guard reads a compiled module's decorations, on every backend.
 concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 concinnity-testing = { workspace = true }
+concinnity-vendor = { workspace = true }
 
 [build-dependencies]
 concinnity-core = { workspace = true }

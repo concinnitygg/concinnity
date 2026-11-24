@@ -89,7 +89,10 @@ pub(super) fn acquire_hardware(
         title_bar,
     )?;
 
-    let entry = crate::vulkan::loader::load_entry()?;
+    // Streamline, when it loads, sees the instance and device created and the
+    // swapchain presented, so it initializes first and the loader runs through it.
+    let streamline = crate::vulkan::streamline::init();
+    let entry = crate::vulkan::streamline::load_entry(streamline.as_ref())?;
 
     // Which upscaler SDK needs instance and device extensions (DLSS / XeSS),
     // resolved before instance creation and kept alive past device creation for
@@ -236,14 +239,18 @@ pub(super) fn acquire_hardware(
         graphics_family,
         present_family,
         &upscale_sdk,
+        streamline.is_some(),
     )?;
     // Hand the raw device to the owning wrapper straight away: from
     // here on the device, the instance and the entry are destroyed
     // by the last handle to them, and every Vulkan object the
     // backend owns retires through this device's queue.
     let device = crate::vulkan::owned::VkDevice::new(
-        entry.clone(),
-        instance.clone(),
+        crate::vulkan::owned::DeviceLoader {
+            entry: entry.clone(),
+            instance: instance.clone(),
+            streamline,
+        },
         device,
         frames,
         crate::vulkan::owned::DebugMessenger {

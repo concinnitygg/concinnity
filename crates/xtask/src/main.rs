@@ -1,11 +1,12 @@
 //! Workspace tasks, run as `cargo xtask <task>` through the alias in
 //! `.cargo/config.toml`.
 //!
-//! The one task is `vendor`, which puts the third-party binaries this checkout
-//! builds against under `vendor/`. A component is pinned to one release and
-//! unpacks into `vendor/<name>-<version>-<os>-<arch>/`, which the build prefers
-//! over whatever the machine happens to have installed, so what a checkout
-//! builds with is a property of the revision rather than of the host.
+//! The one task is `vendor`, which puts the shader compiler this checkout
+//! builds with under `vendor/`. It is pinned to one release and unpacks into
+//! `vendor/<name>-<version>-<os>-<arch>/`, which the build prefers over whatever
+//! the machine happens to have installed, so what a checkout builds with is a
+//! property of the revision rather than of the host. The runtime SDKs an app
+//! loads are vendored by `concinnity vendor` instead.
 //!
 //! Nothing here runs during `cargo build`: a build script that reached the
 //! network could not build offline, could not build on docs.rs, and would pull
@@ -17,21 +18,18 @@
 
 mod components;
 mod fetch;
-mod host;
 mod source_build;
 mod status;
 mod tools;
-mod unpack;
 
-use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::builder::PossibleValuesParser;
 use clap::{Args, Parser, Subcommand};
+use concinnity_vendor::{Component, Failure, Host, Result};
 
-use crate::components::{COMPONENTS, Component, NAMES};
-use crate::host::Host;
+use crate::components::{COMPONENTS, NAMES};
 
 #[derive(Parser)]
 #[command(bin_name = "cargo xtask", about = "Workspace setup tasks")]
@@ -42,8 +40,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Task {
-    /// Vendor the third-party binaries this checkout builds against: with no
-    /// verb, fetch what this host downloads and build what it cannot
+    /// Vendor the shader compiler this checkout builds with: with no verb,
+    /// fetch it where this host downloads it and build it where it cannot
     #[command(args_conflicts_with_subcommands = true)]
     Vendor {
         #[command(subcommand)]
@@ -82,9 +80,8 @@ enum Verb {
 #[derive(Args)]
 struct Selection {
     /// The components to act on, every one when none is named. A component the
-    /// verb does not apply to on this host is then skipped: most are
-    /// downloaded, and `dxc` is downloaded on Windows and Linux and built from
-    /// the same commit on macOS.
+    /// verb does not apply to on this host is then skipped: `dxc` is downloaded
+    /// on Windows and Linux and built from the same commit on macOS.
     #[arg(value_parser = PossibleValuesParser::new(NAMES))]
     components: Vec<String>,
 }
@@ -101,27 +98,6 @@ impl Selection {
             .filter_map(|name| components::find(name))
             .collect();
         (named, true)
-    }
-}
-
-/// Why a task stopped, as the message it prints.
-#[derive(Debug)]
-pub(crate) struct Failure(String);
-
-pub(crate) type Result<T = ()> = std::result::Result<T, Failure>;
-
-pub(crate) fn fail<T>(message: impl Into<String>) -> Result<T> {
-    Err(Failure(message.into()))
-}
-
-/// Names what was being done when an error surfaced.
-pub(crate) trait Context<T> {
-    fn context(self, what: impl Display) -> Result<T>;
-}
-
-impl<T, E: Display> Context<T> for std::result::Result<T, E> {
-    fn context(self, what: impl Display) -> Result<T> {
-        self.map_err(|e| Failure(format!("{what}: {e}")))
     }
 }
 
@@ -209,7 +185,8 @@ mod tests {
     #[test]
     fn unknown_components_are_refused() {
         assert!(Cli::try_parse_from(["xtask", "vendor", "fetch", "slang"]).is_err());
-        assert!(Cli::try_parse_from(["xtask", "vendor", "fetch", "dxc", "xess"]).is_ok());
+        assert!(Cli::try_parse_from(["xtask", "vendor", "fetch", "xess"]).is_err());
+        assert!(Cli::try_parse_from(["xtask", "vendor", "fetch", "dxc"]).is_ok());
     }
 
     fn parse(args: &[&str]) -> Task {
@@ -236,9 +213,8 @@ mod tests {
 
     #[test]
     fn vendor_skips_a_component_this_host_has_no_release_of() {
-        let mac = Some(Host::MacosArm64);
-        assert!(vendor(&components::XESS, mac, false, &options()).is_ok());
-        assert!(vendor(&components::XESS, mac, true, &options()).is_err());
+        assert!(vendor(&components::DXC, None, false, &options()).is_ok());
+        assert!(vendor(&components::DXC, None, true, &options()).is_err());
     }
 
     #[test]
@@ -251,10 +227,10 @@ mod tests {
         assert!(!named);
 
         let (chosen, named) = Selection {
-            components: vec!["xess".into()],
+            components: vec!["dxc".into()],
         }
         .resolve();
-        assert_eq!(chosen.iter().map(|c| c.name).collect::<Vec<_>>(), ["xess"]);
+        assert_eq!(chosen.iter().map(|c| c.name).collect::<Vec<_>>(), ["dxc"]);
         assert!(named);
     }
 

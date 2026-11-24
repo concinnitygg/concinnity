@@ -16,6 +16,7 @@ use windows::core::Interface;
 use crate::directx::allocator::DeviceAllocator;
 use crate::directx::context::{BACK_BUFFERS, DxHardware};
 use crate::directx::error::map_hresult;
+use crate::directx::streamline::DxStreamline;
 use crate::directx::texture::HDR_FORMAT;
 use crate::win32::display_mode::FullscreenDisplayMode;
 use crate::win32::window::create_window;
@@ -54,6 +55,11 @@ pub(super) fn setup(
         height,
         title_bar,
     } = config;
+    // The Agility runtime, when one is vendored, before the debug layer and the
+    // device, which then come from it.
+    crate::directx::agility::activate();
+    crate::directx::agility::log_outcome();
+
     // The debug layer. Without the Graphics Tools feature it is absent, which
     // looks just like a clean run, so log which one happened.
     if validation {
@@ -73,6 +79,10 @@ pub(super) fn setup(
             );
         }
     }
+
+    // Streamline loads its plugins before the device exists, so the device it
+    // is bound to below can be checked for DLSS.
+    let streamline = crate::directx::streamline::init();
 
     // Win32 window (create_window also registers raw mouse input and installs
     // the GWLP_USERDATA state pointer for the wnd_proc).
@@ -99,6 +109,7 @@ pub(super) fn setup(
     };
 
     let super::adapter::Selection { adapter, device } = super::adapter::select(&factory)?;
+    let streamline = streamline.and_then(|sl| DxStreamline::bind(sl, &device, &adapter));
     // Try to upcast to IDXGIAdapter3 for QueryVideoMemoryInfo. Optional; pre-
     // WDDM 2.0 drivers may not expose it, in which case the VRAM chip stays
     // at 0 MB and the rest of the overlay still works.
@@ -213,10 +224,19 @@ pub(super) fn setup(
         Flags: (swapchain_flags(allow_tearing).0).cast_unsigned(),
         ..Default::default()
     };
+    // Through Streamline's factory when it is bound, so the swapchain's
+    // presents reach it. A session whose factory could not be proxied never
+    // sees a present, so it is released rather than left bound.
+    let (streamline, proxy_factory) =
+        match streamline.and_then(|sl| sl.proxy_factory(&factory).map(|proxy| (sl, proxy))) {
+            Some((sl, proxy)) => (Some(sl), Some(proxy)),
+            None => (None, None),
+        };
+    let swapchain_factory = proxy_factory.as_ref().unwrap_or(&factory);
     let sc_base: IDXGISwapChain1 =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &raw const sc_desc, None, None) }
+        unsafe { swapchain_factory.CreateSwapChainForHwnd(&command_queue, hwnd, &raw const sc_desc, None, None) }
             .map_err(|e| map_hresult(e.code(), "CreateSwapChain"))?;
     let swapchain: IDXGISwapChain3 = sc_base
         .cast()
@@ -288,6 +308,7 @@ pub(super) fn setup(
     unsafe { factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER) }.ok();
 
     let hw = DxHardware {
+        streamline,
         // Built before the first resource so nothing has to fall back to a
         // committed allocation.
         alloc: DeviceAllocator::new(

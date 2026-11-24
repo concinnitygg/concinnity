@@ -1,4 +1,4 @@
-//! Unpacking a downloaded archive into its `vendor/` directory.
+//! Unpacking a downloaded archive into its vendor directory.
 
 use std::fs;
 use std::io::{self, Cursor};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
 
-use crate::tools::{remove_dir_quietly, staging_dir};
+use crate::files::{remove_dir_quietly, staging_dir};
 use crate::{Context, Result, fail};
 
 /// Extract `archive` into `target`, replacing it only once it holds `payload`.
@@ -28,10 +28,26 @@ pub(crate) fn unpack(
             return fail(format!("{url}: contains no {payload}"));
         };
         remove_dir_quietly(target);
-        fs::rename(&root, target).context(target.display())
+        rename(&root, target).context(target.display())
     });
     remove_dir_quietly(&staging);
     placed
+}
+
+// A rename that a scanner still holding a just-written file can refuse for a
+// moment on Windows, so a refusal is retried briefly before it stands.
+fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    const ATTEMPTS: u32 = 5;
+    let mut attempt = 1;
+    loop {
+        match fs::rename(from, to) {
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && attempt < ATTEMPTS => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            done => return done,
+        }
+    }
 }
 
 fn payload_root(staging: &Path, payload: &str) -> Option<PathBuf> {

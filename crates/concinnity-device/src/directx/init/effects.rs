@@ -57,7 +57,7 @@ pub(super) fn build_upscale(
         crate::directx::post::upscale::build_upscaler(
             crate::directx::post::upscale::UpscaleDevice {
                 device: &hw.device,
-                command_queue: &hw.command_queue,
+                streamline: hw.streamline.as_ref(),
             },
             (width, height),
             scale,

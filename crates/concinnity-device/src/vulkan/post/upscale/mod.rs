@@ -5,17 +5,18 @@
 //!
 //! Three interchangeable backends sit behind the `UpscaleBackend` trait:
 //!   fsr   AMD FidelityFX FSR (cross-vendor; `ffx_api` VK)
-//!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
+//!   dlss  NVIDIA DLSS via Streamline (RTX on Windows only)
 //!   xess  Intel XeSS (cross-vendor; runtime libxess)
 //! The API-independent half of each lives in `crate::upscale_sdk`; these files
 //! hold the Vulkan resources, library loading and command recording.
 //! `build_upscaler` constructs the first backend that initializes, in the shared
 //! fallback order, and `VkContext::encode_upscale` drives whichever is active.
 //!
-//! DLSS and XeSS additionally need instance / device extensions (and, for XeSS,
-//! device features) enabled before the upscaler context exists. `UpscaleSdk` is
-//! queried up front (in `init.rs`, before `create_instance`) and threaded into
-//! `device::create_logical_device`; see its docs.
+//! XeSS additionally needs instance / device extensions and device features
+//! enabled before the upscaler context exists. `UpscaleSdk` is queried up front
+//! (in `init.rs`, before `create_instance`) and threaded into
+//! `device::create_logical_device`; see its docs. DLSS's are added by
+//! Streamline itself, which the instance and device are created through.
 
 use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
@@ -41,13 +42,13 @@ use crate::vulkan::texture::{
 
 pub(in crate::vulkan) use crate::upscale_sdk::ResolvedBackend;
 
-#[cfg(ngx_sdk_bundled)]
+#[cfg(windows)]
 mod dlss;
 mod fsr;
 mod xess;
 
 // One render-resolution image handed to a backend's `dispatch`. FFX takes only
-// the image; NGX and XeSS describe each with its view, format and size.
+// the image; Streamline and XeSS describe each with its view, format and size.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct UpscaleImage {
     pub(in crate::vulkan) image: vk::Image,
@@ -82,7 +83,7 @@ pub(in crate::vulkan) trait UpscaleBackend {
     // projection so the jittered VP and the upscale agree (render pixels).
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2];
     // This frame's jitter as the offset from the sample back to the pixel
-    // center in y-down render pixels, the convention FFX, NGX and XeSS share.
+    // center in y-down render pixels, the convention FFX, DLSS and XeSS share.
     // Set on the main thread before the parallel fan-out and read back on the
     // worker in `encode_upscale`.
     fn jitter(&self) -> &Cell<[f32; 2]>;
@@ -107,8 +108,7 @@ pub(in crate::vulkan) trait UpscaleBackend {
     fn destroy(&mut self);
 }
 
-// `xess_vk_image_view_info` (`xess_vk.h`) and `NVSDK_NGX_ImageViewInfo_VK`
-// (`nvsdk_ngx_defs_vk.h`), which XeSS 3.0.1 and NGX 1.5.0 lay out identically.
+// `xess_vk_image_view_info` (`xess_vk.h`) of XeSS 3.0.1.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ImageViewInfo {
@@ -153,7 +153,7 @@ impl ImageViewInfo {
 
 // How a backend's vendor dispatch writes its output image: the stages and
 // accesses the barriers around the dispatch must declare, and the usage those
-// writes need. NGX clears the DLSS output inside `EvaluateFeature`, so that
+// writes need. DLSS clears its output inside the evaluate, so that
 // backend writes through a transfer clear as well as a storage write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::vulkan) struct OutputWrites {
@@ -173,7 +173,7 @@ impl OutputWrites {
     }
 
     // Storage writes plus a `vkCmdClearColorImage` on the output.
-    #[cfg(any(ngx_sdk_bundled, test))]
+    #[cfg(any(windows, test))]
     fn storage_and_clear() -> Self {
         Self {
             stage: vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER,
@@ -342,11 +342,23 @@ fn image_barrier(
 pub(in crate::vulkan) fn availability() -> UpscalerAvailability {
     static AVAILABILITY: OnceLock<UpscalerAvailability> = OnceLock::new();
     *AVAILABILITY.get_or_init(|| UpscalerAvailability {
-        dlss: cfg!(ngx_sdk_bundled),
+        dlss: dlss_available(),
         xess: open_library(xess::LIBRARY).is_some(),
         fsr: open_library(fsr::LIBRARY).is_some()
             && fsr::UPSCALER_LIBRARY.is_none_or(|name| open_library(name).is_some()),
     })
+}
+
+// Whether DLSS can be offered: an NVIDIA adapter, and Streamline loads.
+fn dlss_available() -> bool {
+    #[cfg(windows)]
+    {
+        crate::upscale_sdk::streamline::available()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 // Load a vendor runtime library by file name from the executable's directory
@@ -393,14 +405,14 @@ pub(in crate::vulkan) fn build_upscaler(
         output,
         |candidate,
          #[cfg_attr(
-            not(ngx_sdk_bundled),
+            not(windows),
             expect(unused_variables, reason = "only DLSS has render presets")
         )]
          preset| {
             Ok(match candidate {
                 ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(gpu, extent)?.map(boxed),
                 ResolvedBackend::Xess => xess::XessUpscaler::try_new(gpu, extent)?.map(boxed),
-                #[cfg(ngx_sdk_bundled)]
+                #[cfg(windows)]
                 ResolvedBackend::Dlss => {
                     dlss::DlssUpscaler::try_new(gpu, extent, preset)?.map(boxed)
                 }
@@ -416,8 +428,8 @@ fn boxed(backend: impl UpscaleBackend + 'static) -> Box<dyn UpscaleBackend> {
     Box::new(backend)
 }
 
-// DLSS / XeSS instance and device extension requirements, resolved before
-// `create_instance` by loading only the chosen SDK. Inert otherwise.
+// XeSS's instance and device extension requirements, resolved before
+// `create_instance` by loading its SDK. Inert for every other backend.
 pub(in crate::vulkan) struct UpscaleSdk {
     pub(in crate::vulkan) choice: ResolvedBackend,
     // Held so XeSS's SDK-owned device-feature chain stays mapped through
@@ -426,10 +438,6 @@ pub(in crate::vulkan) struct UpscaleSdk {
     // Owned instance-extension names, kept alive until `create_instance`
     // consumes the pointers `instance_extension_ptrs` hands out.
     instance_exts: Vec<CString>,
-    // DLSS device extensions, captured with the instance list (NGX yields both
-    // in one call). XeSS queries its device extensions later, from
-    // `create_logical_device`, since they need the physical device.
-    dlss_device_exts: Vec<CString>,
     // Minimum Vulkan instance `apiVersion` the chosen backend needs (XeSS 3.x
     // requires 1.3 for SPV_KHR_integer_dot_product). 0 = no requirement beyond
     // the engine default. The caller clamps to loader support.
@@ -446,45 +454,26 @@ impl UpscaleSdk {
             choice: ResolvedBackend::Native,
             xess: None,
             instance_exts: Vec::new(),
-            dlss_device_exts: Vec::new(),
             min_api_version: 0,
         };
         if !temporal_upscaling {
             return sdk;
         }
         sdk.choice = preferred(requested, availability());
-        match sdk.choice {
-            ResolvedBackend::Dlss =>
-            {
-                #[cfg(ngx_sdk_bundled)]
-                if let Some((inst, dev)) = dlss::required_extensions() {
-                    sdk.instance_exts = inst;
-                    sdk.dlss_device_exts = dev;
-                } else {
-                    tracing::warn!(
-                        "temporal upscaling: DLSS required-extensions query failed; \
-                         device creation will skip DLSS extensions (build_upscaler will \
-                         fall back to FSR / native)"
-                    );
-                    sdk.choice = ResolvedBackend::Fsr;
-                }
-            }
-            ResolvedBackend::Xess => {
-                if let Some(q) = xess::XessExtQuery::load() {
-                    let (exts, min_api) = q.instance_extensions();
-                    sdk.instance_exts = exts;
-                    sdk.min_api_version = min_api;
-                    sdk.xess = Some(q);
-                } else {
-                    tracing::warn!(
-                        "temporal upscaling: XeSS library / extension query unavailable; device \
+        if sdk.choice == ResolvedBackend::Xess {
+            if let Some(q) = xess::XessExtQuery::load() {
+                let (exts, min_api) = q.instance_extensions();
+                sdk.instance_exts = exts;
+                sdk.min_api_version = min_api;
+                sdk.xess = Some(q);
+            } else {
+                tracing::warn!(
+                    "temporal upscaling: XeSS library / extension query unavailable; device \
                      creation will skip XeSS extensions (build_upscaler will fall back to \
                      FSR / native)"
-                    );
-                    sdk.choice = ResolvedBackend::Fsr;
-                }
+                );
+                sdk.choice = ResolvedBackend::Fsr;
             }
-            _ => {}
         }
         sdk
     }
@@ -502,8 +491,8 @@ impl UpscaleSdk {
 
     // Device-extension names required by the chosen backend, filtered to those
     // the physical device actually exposes and not already requested in
-    // `already`. DLSS returns its up-front list; XeSS queries now (needs the
-    // instance + physical device).
+    // `already`. XeSS queries now, since it needs the instance and physical
+    // device.
     pub(in crate::vulkan) fn device_extensions(
         &self,
         instance: &ash::Instance,
@@ -512,7 +501,6 @@ impl UpscaleSdk {
     ) -> Vec<CString> {
         let supported = supported_device_extensions(instance, physical_device);
         let raw: Vec<CString> = match self.choice {
-            ResolvedBackend::Dlss => self.dlss_device_exts.clone(),
             ResolvedBackend::Xess => self
                 .xess
                 .as_ref()
@@ -542,7 +530,7 @@ impl UpscaleSdk {
 
 /// Copy a `const char* const*` array (`count` entries) returned by an SDK
 /// extension query into owned `CString`s, severing the dependence on the
-/// SDK-owned memory. Shared by the DLSS + XeSS extension queries.
+/// SDK-owned memory.
 ///
 /// # Safety
 ///
@@ -748,6 +736,7 @@ impl VkContext {
                 params.frame.near,
                 params.frame.fov_y_radians,
                 self.upscale_exposure.value(),
+                self.state.view.matrix,
             ),
         )?;
 
@@ -776,7 +765,7 @@ mod tests {
     use std::mem::{offset_of, size_of};
 
     #[test]
-    fn image_view_info_layout_matches_xess_v301_and_ngx_v150() {
+    fn image_view_info_layout_matches_xess_v301() {
         assert_eq!(size_of::<ImageViewInfo>(), 48);
         assert_eq!(offset_of!(ImageViewInfo, image_view), 0);
         assert_eq!(offset_of!(ImageViewInfo, image), 8);

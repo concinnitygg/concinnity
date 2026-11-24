@@ -64,6 +64,7 @@ mod set_writes;
 mod shadow_receivers;
 mod sky;
 mod spirv_inputs;
+mod streamline;
 mod swapchain;
 #[cfg(test)]
 mod test_gpu;

@@ -61,8 +61,8 @@ rustc --version
 
 ### Third-party dependencies
 
-The build uses third-party binaries that are not Rust crates. Vendor them once
-per checkout:
+The build uses one third-party binary that is not a Rust crate, the
+[shader compiler](#shader-compiler). Vendor it once per checkout:
 
 ```sh
 cargo xtask vendor
@@ -74,8 +74,8 @@ To see what is vendored and what the build would otherwise pick:
 cargo xtask vendor status
 ```
 
-[Third-party environment variables](#third-party-environment-variables)
-lists how to override vendor paths.
+The runtime SDKs an app loads on Windows are vendored separately, by
+`concinnity vendor`; see [Optional: runtime SDKs](#optional-runtime-sdks).
 
 ### Shader compiler
 
@@ -105,42 +105,13 @@ compiles alongside the engine's.
 
 ## Third-party environment variables
 
-Every third-party toolchain the build reaches for is located the same way: the
-environment variable if it is set, then `vendor/`, then nothing (the feature is
-skipped and the build says which of the two was missing). Setting one is only
-needed for an SDK installed somewhere `cargo xtask vendor` did not put it.
+| Variable     | Read at     | Default | Locates                                                                                                      |
+| ------------ | ----------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `VULKAN_SDK` | build + run | none    | The Vulkan SDK: `bin/dxc` as the last `dxc` candidate, and the loader, layers and `glslc` for a Vulkan build |
 
-### Locating an SDK
-
-| Variable            | Read at     | Default                                                                             | Locates                                                                                                          |
-| ------------------- | ----------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `VULKAN_SDK`        | build + run | none                                                                                | The Vulkan SDK: `bin/dxc` as the last `dxc` candidate, and the loader, layers and `glslc` for a Vulkan build     |
-| `CN_AGILITY_SDK`    | build       | `vendor/agility-*`                                                                  | Microsoft's D3D12 Agility SDK                                                                                    |
-| `CN_FIDELITYFX_SDK` | build       | `vendor/fidelityfx-*`                                                               | AMD FidelityFX, for FSR on DirectX and Vulkan                                                                    |
-| `CN_XESS_SDK`       | build       | `vendor/xess-*`                                                                     | Intel XeSS                                                                                                       |
-| `CN_STREAMLINE_SDK` | build       | `vendor/streamline-*`                                                               | NVIDIA Streamline, for DLSS                                                                                      |
-
-### Turning a feature off
-
-Each of these defaults to on and is disabled with `=0`. They gate whether the
-build links or bundles the SDK at all, so they take effect at build time, not at
-launch.
-
-| Variable                | Default | Effect when off                                        |
-| ----------------------- | ------- | ------------------------------------------------------ |
-| `CN_ENABLE_FFX_FSR3`    | on      | No FSR 3; upscaling falls back to native resolution    |
-| `CN_ENABLE_XESS`        | on      | No XeSS                                                |
-| `CN_ENABLE_DLSS`        | on      | No DLSS                                                |
-| `CN_ENABLE_AGILITY_SDK` | **off** | Not applicable; this one is opt-_in_, see below        |
-
-The three upscalers are loaded with `LoadLibrary` at runtime and degrade to a
-fallback when their DLL is absent, so a build that includes one still runs on a
-machine that has none. The Agility SDK is the exception in both directions: it
-is off by default, opted into with `CN_ENABLE_AGILITY_SDK=1`, and turning it on
-decides where the finished executable can run.
-
-None of these are read by a shipped game. A player resolves its upscaler DLLs
-beside its own executable, which is what `cn export` copies them there for.
+No other SDK is read by the build. The upscalers and the Agility D3D12 runtime
+are loaded when an app runs; see
+[Optional: runtime SDKs](#optional-runtime-sdks).
 
 The remaining prerequisites are platform specific. Pick the section for your OS
 below.
@@ -266,59 +237,41 @@ DirectX 12 is the default backend on Windows.
 cargo build --release
 ```
 
-### Optional: temporal upscaling SDKs
+### Optional: runtime SDKs
 
-The DirectX backend can use vendor temporal upscalers (AMD FidelityFX FSR 3,
-Intel XeSS, NVIDIA DLSS) and Microsoft's DirectX 12 Agility SDK. These are all
-**optional**: if an SDK is not present the build script prints a warning, skips
-it, and the renderer falls back to native-resolution rendering. Install one and
-point the build at it with the matching environment variable. The variables are
-listed under
-[Third-party environment variables](#third-party-environment-variables); on a
-machine that vendored them, none of them need setting.
+The DirectX and Vulkan backends can use vendor temporal upscalers (AMD
+FidelityFX FSR, Intel XeSS, NVIDIA DLSS through Streamline), and DirectX can run
+on Microsoft's D3D12 Agility SDK, which FSR on DirectX needs. None of them is
+needed to build: the renderer loads each when an app runs, and an upscaler whose
+libraries are absent falls through to the next one, then to native resolution.
 
-**The Agility SDK is the exception and is off by default**, because bundling it
-decides where the finished executable can run (see below). Ask for it with:
+Fetch them with:
 
-```powershell
-$env:CN_ENABLE_AGILITY_SDK = "1"
+```sh
+concinnity vendor
 ```
 
-FSR 3 needs it, so a build without the opt-in renders at native resolution and
-logs why when something requests FSR 3.
+It downloads the pinned releases into the workspace's `vendor/` directory (or a
+per-user one outside a workspace) and stages their libraries into
+`vendor/runtime-windows-x86_64/`, with their license notices under
+`licenses/`. `concinnity run`, `bench` and `edit`, and the examples (through
+`concinnity::dev::use_vendored_runtime`), load from there, and
+`concinnity export` copies it beside the exported player. Streamline's DLSS and
+Reflex terms are agreements, which the command shows and asks to accept;
+`--accept-licenses` accepts them without asking, and without a terminal to ask
+on, the command fails rather than skip them. `concinnity vendor --status`
+reports what is vendored.
 
-#### Why the Agility SDK is opt-in
+DLSS runs only on a machine with an NVIDIA GPU. The Agility runtime is used
+when its `D3D12/` directory sits in the runtime directory or beside the
+executable, and the system's `d3d12.dll` exposes `ID3D12SDKConfiguration1`,
+which switching runtimes at launch needs (no Developer Mode is involved);
+otherwise the app runs on the OS D3D12 runtime, without FSR on DirectX.
 
-Bundling it links `D3D12SDKVersion` / `D3D12SDKPath` into the executable, and
-Windows' `d3d12.dll` reads those exports _before any engine code runs_. If
-`D3D12Core.dll` is not in a `D3D12/` directory beside the executable, D3D12
-device creation fails outright — there is no fallback to the OS runtime, and
-every adapter then reports unsupported:
-
-```
-D3D12 init failed: no suitable D3D12 adapter found. This binary was built with
-CN_ENABLE_AGILITY_SDK=1, so it bundles Microsoft's Agility SDK and needs
-D3D12Core.dll in ...
-```
-
-So the opt-in decides _where the finished executable can run_, which is why an
-installed SDK is not enough to trigger it. `cargo build` leaves the binary in
-`target/<profile>/` with the staged directory beside it and everything works;
-`cargo install` copies only the executable, and the copy is dead. Turning the
-bundling on means committing to shipping that directory with the binary — a
-packaging step, not something `cargo install` can do.
-
-The runtime alternative, `ID3D12SDKConfiguration::SetSDKVersion`, cannot replace
-the exports: Microsoft documents it as usable "only in Windows Developer Mode"
-(it exists for tools such as PIX) and it returns `DXGI_ERROR_INVALID_CALL`
-elsewhere.
-
-So:
-
-- **Installing or redistributing a lone executable** — leave the opt-in off.
-  The binary runs anywhere on the OS D3D12 runtime, without FSR 3.
-- **Packaging a distribution that carries `D3D12/`, or a local build you run
-  out of `target/`** — set `CN_ENABLE_AGILITY_SDK=1` and get FSR 3.
+A library beside the executable is found before the runtime directory, so
+DLLs an older build left in `target/<profile>/` (or `target/<profile>/examples/`)
+take precedence over the staged ones. Delete them, or run `cargo clean`, after
+updating an SDK.
 
 ## Windows (Vulkan)
 

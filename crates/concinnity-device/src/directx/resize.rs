@@ -94,7 +94,7 @@ impl DxContext {
             let rebuilt = crate::directx::post::upscale::build_upscaler(
                 crate::directx::post::upscale::UpscaleDevice {
                     device: &self.hw.device,
-                    command_queue: &self.hw.command_queue,
+                    streamline: self.hw.streamline.as_ref(),
                 },
                 (new_w, new_h),
                 scale,

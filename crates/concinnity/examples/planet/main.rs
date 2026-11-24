@@ -39,6 +39,7 @@ use concinnity::{App, cook};
 const WORLD: &str = include_str!("planet.jsonl");
 
 fn main() {
+    concinnity::dev::use_vendored_runtime();
     let args = match concinnity::launch::from_env() {
         Ok(args) => args,
         Err(LaunchArgsError::Help) => {

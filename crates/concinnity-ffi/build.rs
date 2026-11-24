@@ -1,9 +1,5 @@
 //! Two jobs: resolve the rendering backend into the single cfg the crate gates
 //! on, and generate the C header from the extern "C" surface.
-//!
-//! This crate produces libraries a host links, not an executable, so the
-//! toolchain helper's SDK setup bundles no runtime DLLs; that belongs to
-//! whichever package owns the final binary.
 
 use std::path::Path;
 

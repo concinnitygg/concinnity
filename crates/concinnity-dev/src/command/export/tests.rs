@@ -217,56 +217,41 @@ fn info_plist_has_required_keys_and_escapes() {
 }
 
 #[test]
-fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
-    // Simulate a Windows target/<profile>/ dir: the runtime exe, sibling
-    // DLLs, a non-lib file, and the Agility D3D12/ subdir.
+fn copy_runtime_sidecars_copies_the_runtime_directory() {
+    // A staged runtime directory: the upscaler libraries and the Agility
+    // `D3D12/` subdirectory.
     let tmp = tempfile::tempdir().unwrap();
-    let src = tmp.path().join("src");
+    let src = tmp.path().join("runtime-windows-x86_64");
     fs::create_dir_all(src.join("D3D12")).unwrap();
-    fs::write(src.join("concinnity-player.exe"), b"exe").unwrap();
     fs::write(src.join("amd_fidelityfx_loader_dx12.dll"), b"x").unwrap();
-    fs::write(src.join("libconcinnity_ffi.dll"), b"x").unwrap();
-    fs::write(src.join("notes.txt"), b"x").unwrap();
+    fs::write(src.join("sl.interposer.dll"), b"x").unwrap();
     fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
+    fs::create_dir_all(src.join("licenses").join("streamline")).unwrap();
+    fs::write(src.join("licenses/streamline/license.txt"), b"x").unwrap();
 
     let dest = tmp.path().join("dest");
     fs::create_dir_all(&dest).unwrap();
-    // A DX runtime pulls in its sibling DLLs and the Agility `D3D12/` dir.
-    copy_runtime_sidecars(
-        &src.join("concinnity-player.exe"),
-        Some(Platform::DirectX.into()),
-        &dest,
-    )
-    .unwrap();
+    copy_runtime_sidecars(Some(&src), Some(Platform::DirectX.into()), &dest).unwrap();
 
     assert!(dest.join("amd_fidelityfx_loader_dx12.dll").exists());
-    assert!(dest.join("libconcinnity_ffi.dll").exists());
+    assert!(dest.join("sl.interposer.dll").exists());
     assert!(dest.join("D3D12").join("D3D12Core.dll").exists());
-    // Non-DLL siblings and the exe itself are not carried along.
-    assert!(!dest.join("notes.txt").exists());
-    assert!(!dest.join("concinnity-player.exe").exists());
+    assert!(dest.join("licenses/streamline/license.txt").exists());
 }
 
 #[test]
 fn copy_runtime_sidecars_skips_d3d12_for_a_non_dx_runtime() {
-    // A Vulkan runtime built in a target dir shared with a DX build has a
-    // stale `D3D12/` sibling; it must not land in the Vulkan bundle (the VK
-    // exe never references it), though the sibling DLLs still copy.
+    // A Vulkan player never opens the Agility runtime, so it stays out of its
+    // bundle, though the upscaler libraries still go in.
     let tmp = tempfile::tempdir().unwrap();
-    let src = tmp.path().join("src");
+    let src = tmp.path().join("runtime-windows-x86_64");
     fs::create_dir_all(src.join("D3D12")).unwrap();
-    fs::write(src.join("concinnity-player.exe"), b"exe").unwrap();
     fs::write(src.join("amd_fidelityfx_loader_vk.dll"), b"x").unwrap();
     fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
 
     let dest = tmp.path().join("dest");
     fs::create_dir_all(&dest).unwrap();
-    copy_runtime_sidecars(
-        &src.join("concinnity-player.exe"),
-        Some(Platform::Vulkan.into()),
-        &dest,
-    )
-    .unwrap();
+    copy_runtime_sidecars(Some(&src), Some(Platform::Vulkan.into()), &dest).unwrap();
 
     assert!(dest.join("amd_fidelityfx_loader_vk.dll").exists());
     assert!(!dest.join("D3D12").exists());
@@ -342,22 +327,12 @@ fn default_icon_is_a_nonempty_png() {
 }
 
 #[test]
-fn copy_runtime_sidecars_is_a_noop_without_dlls() {
-    // The macOS / Linux case: no sibling `.dll`, no `D3D12/`.
+fn copy_runtime_sidecars_is_a_noop_without_a_runtime_directory() {
+    // macOS and Linux, and a Windows project that vendored nothing.
     let tmp = tempfile::tempdir().unwrap();
-    let src = tmp.path().join("src");
-    fs::create_dir_all(&src).unwrap();
-    fs::write(src.join("concinnity-player"), b"exe").unwrap();
-    fs::write(src.join("libconcinnity_ffi.dylib"), b"x").unwrap();
-
     let dest = tmp.path().join("dest");
     fs::create_dir_all(&dest).unwrap();
-    copy_runtime_sidecars(
-        &src.join("concinnity-player"),
-        Some(Platform::Metal.into()),
-        &dest,
-    )
-    .unwrap();
+    copy_runtime_sidecars(None, Some(Platform::Metal.into()), &dest).unwrap();
     assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
 }
 

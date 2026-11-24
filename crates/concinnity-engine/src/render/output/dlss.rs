@@ -1,10 +1,5 @@
 //! What the engine fixes about NVIDIA DLSS outside any graphics backend: the
-//! render preset a user picks, and the NGX API version the integration is
-//! written against, which the build checks the vendored SDK for.
-
-/// `NVSDK_NGX_Version_API` of the NGX headers the engine's DLSS declarations
-/// are transcribed from (1.5.0).
-pub const NGX_API_VERSION: u32 = 0x15;
+//! render preset a user picks.
 
 /// The DLSS render preset every quality mode runs, named by NVIDIA's letters.
 #[derive(

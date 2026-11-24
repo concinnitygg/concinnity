@@ -21,6 +21,7 @@ concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.20" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.20" }
 concinnity-testing = { path = "crates/concinnity-testing" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.20" }
+concinnity-vendor = { path = "crates/concinnity-vendor", version = "0.20" }
 
 anstyle-query = "1"
 ash = "0.38"

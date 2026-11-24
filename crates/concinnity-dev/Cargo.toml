@@ -27,6 +27,7 @@ concinnity-cook = { workspace = true, features = ["schema"] }
 concinnity-engine = { workspace = true, features = ["schema"] }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
+concinnity-vendor = { workspace = true }
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
 rayon = { workspace = true }

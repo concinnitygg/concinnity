@@ -70,3 +70,6 @@ pub(crate) mod rt_report;
 
 mod factory;
 pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device, probe_display};
+
+mod runtime_libraries;
+pub use runtime_libraries::use_runtime_libraries;

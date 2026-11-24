@@ -2,6 +2,8 @@
 
 use std::cell::Cell;
 
+use concinnity_engine::transform::Mat4;
+
 /// One frame's temporal and camera parameters, shared with the jittered
 /// projection so the rasterized scene and the reconstruction agree.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,6 +20,8 @@ pub(crate) struct UpscaleCamera {
     /// relative to a stepped reference, so its history holds steady across
     /// exposure changes without leaving FP16's normal range.
     pub(crate) pre_exposure: f32,
+    /// The world-to-view matrix the frame drew with.
+    pub(crate) view: Mat4,
 }
 
 impl UpscaleCamera {
@@ -27,6 +31,7 @@ impl UpscaleCamera {
         near: f32,
         fov_y_radians: f32,
         pre_exposure: f32,
+        view: Mat4,
     ) -> Self {
         Self {
             jitter_offset,
@@ -34,6 +39,7 @@ impl UpscaleCamera {
             near: near.max(1e-3),
             fov_y_radians,
             pre_exposure,
+            view,
         }
     }
 }
@@ -57,6 +63,7 @@ impl FrameClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_engine::transform::IDENTITY;
 
     #[test]
     fn frame_delta_is_clamped() {
@@ -68,7 +75,13 @@ mod tests {
 
     #[test]
     fn near_plane_is_kept_off_zero() {
-        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0, 1.0).near, 1e-3);
-        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0, 1.0).near, 0.5);
+        assert_eq!(
+            UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0, 1.0, IDENTITY).near,
+            1e-3
+        );
+        assert_eq!(
+            UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0, 1.0, IDENTITY).near,
+            0.5
+        );
     }
 }

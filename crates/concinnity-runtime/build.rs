@@ -1,18 +1,9 @@
-//! The runtime crate (rlib). Two jobs behind one `setup_graphics_backends` call
-//! into the shared `concinnity-toolchain` helper:
-//!
-//! 1. Resolve the rendering backends and expose one cfg per backend the crate
-//!    gates on (`backend_metal` / `backend_dx` / `backend_vk`).
-//!
-//! 2. Detect the optional upscaler SDKs and emit the cfgs the renderer gates on.
-//!    This crate produces only an rlib (consumed by the editor and the examples)
-//!    plus its own test binaries, so it does NOT bundle runtime DLLs next to a
-//!    binary (that belongs to whichever package owns the final artifact). The one
-//!    link directive kept is the NGX import lib: the DLSS modules are
-//!    `#[cfg(ngx_sdk_bundled)]`, so when that cfg is on they compile into the lib
-//!    and must resolve their NGX symbols when this crate's test binaries link.
+//! The runtime crate (rlib). Resolves the rendering backends through the shared
+//! `concinnity-toolchain` helper's `setup_graphics_backends`, exposing one cfg
+//! per backend the crate gates on (`backend_metal` / `backend_dx` /
+//! `backend_vk`).
 
-// 3. Bake the bundled face into an SDF atlas the crate embeds, so text can draw
+// Also bake the bundled face into an SDF atlas the crate embeds, so text can draw
 //    with no compiled world data behind it: the startup error screen, which runs
 //    when loading that data is what failed, and any TextLabel or TextField naming
 //    no Font.

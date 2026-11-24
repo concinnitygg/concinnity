@@ -175,45 +175,33 @@ pub(super) fn exe_file_name(stem: &str) -> String {
     }
 }
 
-// Copy the runtime player's sibling native libraries into the bundle beside the
-// exe, so the bundle carries everything the player needs to launch. On Windows
-// the graphics-SDK runtime DLLs (FidelityFX / XeSS / DLSS / DXC) sit beside the
-// built runtime binary, and the Agility SDK D3D12 runtime lives in a `D3D12/`
-// subdir that the exe's `D3D12SDKPath` export points at (`.\D3D12\`). A strict
-// no-op on macOS and Linux, where the runtime links only system frameworks /
-// libraries (no sibling `.dll`, no `D3D12/`).
-//
-// `runtime_platforms` are the player's stamped shader platforms. The `D3D12/` dir
-// is meaningful only to a DirectX player -- its `D3D12SDKPath` export is gated
-// on the DX backend, so a Vulkan or Metal player never references it. It is
-// copied only for a DX (or unstamped, so unknown) runtime, keeping a Vulkan
-// bundle from carrying an inert Agility runtime when built in a target dir
-// shared with a DX build.
+// Copy the vendored runtime libraries into the bundle beside the exe, so the
+// bundle carries the upscalers and the Agility runtime the player loads, and
+// their license notices under `licenses/`. They come from `runtime_libraries`,
+// the runtime directory `concinnity vendor` staged (`None` when nothing is
+// staged, as on macOS and Linux, which load none).
+// The Agility SDK's `D3D12/` goes in only for a player that renders with
+// DirectX (or is unstamped, so unknown): a Vulkan or Metal player never opens it.
 pub(super) fn copy_runtime_sidecars(
-    runtime: &Path,
+    runtime_libraries: Option<&Path>,
     runtime_platforms: Option<PlatformSet>,
     dest_dir: &Path,
 ) -> io::Result<()> {
-    let Some(src_dir) = runtime.parent() else {
+    let Some(src_dir) = runtime_libraries else {
         return Ok(());
     };
-    // Sibling DLLs (the Windows graphics-SDK runtimes). Matched by extension so
-    // the set can change without export knowing backend specifics.
     for entry in fs::read_dir(src_dir)? {
         let path = entry?.path();
-        let is_dll = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("dll"));
-        if is_dll
-            && path.is_file()
+        if path.is_file()
             && let Some(name) = path.file_name()
         {
             fs::copy(&path, dest_dir.join(name))?;
         }
     }
-    // The Agility SDK D3D12 runtime, resolved by the exe relative to itself.
-    // Only a DX player looks for it (see above).
+    let licenses = src_dir.join("licenses");
+    if licenses.is_dir() {
+        copy_tree(&licenses, &dest_dir.join("licenses"))?;
+    }
     if runtime_wants_d3d12(runtime_platforms) {
         let d3d12 = src_dir.join("D3D12");
         if d3d12.is_dir() {

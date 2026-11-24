@@ -222,7 +222,8 @@ declares `AppConfig.headless`, and refuses any other. DirectX 12 can fall back t
   compiled-world format are the engine's own; none is a third-party library.
 - Third-party components are used for audio mixing and output, gamepad input,
   image and audio decoding, font rasterization, and the vendor upscaler SDKs
-  (FidelityFX, NVIDIA NGX, Intel XeSS, MetalFX).
+  (FidelityFX, NVIDIA Streamline, Intel XeSS, MetalFX). The Windows ones are
+  loaded when an app runs rather than linked, so a build needs none of them.
 - Logging uses a structured logging layer whose filter can be set from the
   standard environment variable of the logging ecosystem; it defaults to `info`
   in debug builds and `warn` in release builds.
@@ -1945,7 +1946,8 @@ remembered and not retried on later rebuilds.
 **Inputs.** Render-resolution color, the pre-pass depth (with the reversed-Z
 mapping), motion vectors, jitter, and the reactive mask where the SDK accepts it.
 
-**DLSS.** Integrated through NVIDIA's NGX interface. Presets `Default`, `K`, `L`,
+**DLSS.** Integrated through NVIDIA Streamline, on machines with an NVIDIA GPU.
+Presets `Default`, `K`, `L`,
 and `M` are a persisted setting and a launch option; a preset the installed
 library does not support recreates the feature with `Default`. DLSS runs its own
 auto-exposure, so the engine's exposure is applied after the upscale. Ray

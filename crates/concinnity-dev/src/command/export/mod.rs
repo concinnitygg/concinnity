@@ -162,7 +162,18 @@ fn export_portable(
     let exe_dst = bundle_dir.join(&exe_name);
     fs::copy(runtime, &exe_dst)?;
     make_executable(&exe_dst)?;
-    copy_runtime_sidecars(runtime, runtime_platforms, &bundle_dir)?;
+    let runtime_libraries = crate::vendor::staged_runtime();
+    if runtime_libraries.is_none() && cfg!(windows) {
+        let searched = crate::vendor::vendor_root().map_or_else(
+            || "no vendor directory".to_string(),
+            |dir| dir.display().to_string(),
+        );
+        println!(
+            "note: no runtime SDKs are staged in {searched}, so the export runs without \
+             DLSS, FSR or XeSS; `concinnity vendor` fetches them"
+        );
+    }
+    copy_runtime_sidecars(runtime_libraries.as_deref(), runtime_platforms, &bundle_dir)?;
 
     let blobs = copy_blobs(data_dir, &StateTree::at(&bundle_dir).data_dir())?;
     report_export(&meta.display_name, &bundle_dir, blobs);

@@ -40,6 +40,7 @@ mod editor;
 mod frame_hook;
 mod mcp;
 mod run;
+mod vendor;
 
 /// The `cn` command line: the arguments a run was given, and the command they
 /// name.
