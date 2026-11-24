@@ -77,11 +77,9 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     })
 }
 
-// Spot shadow resources: one array slice per shadow-casting spot plus the
-// per-slice projections. Local lights are static, so both are built once
-// here and never rebuilt. A scene with no casting spot gets the 1x1
-// fallback array (depth 1.0 = lit) and a placeholder buffer, since Metal
-// rejects zero-length buffers and the fragment binding must stay valid.
+// Spot shadows, built once since local lights are static. Without a casting
+// spot, a 1x1 fallback and a placeholder buffer, since Metal rejects empty
+// buffers.
 pub(super) fn build_spot_shadow(
     gpu: &InitGpu<'_>,
     spot_shadows: &[SpotShadowData],

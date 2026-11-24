@@ -56,9 +56,10 @@ impl Move {
 }
 
 impl Move {
-    /// The move `action` makes, or `None` when it makes none: a settings row,
-    /// group toggle, screenshot, or HUD toggle, which change no place, or a target left empty, which the
-    /// build rejects and which would put a nameless place on a map.
+    /// The move `action` makes, or `None` when it makes none: a settings row, a
+    /// change to a bound value, an emitted event, a screenshot, or a HUD
+    /// toggle, which change no place, or a target left empty, which the build
+    /// rejects and which would put a nameless place on a map.
     pub fn of(action: &NamedAction) -> Option<Self> {
         let named = |name: &str| (!name.is_empty()).then(|| name.to_string());
         match action {
@@ -69,7 +70,11 @@ impl Move {
             AuthoredAction::Toggle(name) => named(name).map(Move::Toggle),
             AuthoredAction::Hide => Some(Self::Back),
             AuthoredAction::Story(_) => Some(Self::Story),
-            AuthoredAction::GroupToggle(_)
+            AuthoredAction::Set { .. }
+            | AuthoredAction::Flip(_)
+            | AuthoredAction::Add { .. }
+            | AuthoredAction::Step { .. }
+            | AuthoredAction::Emit(_)
             | AuthoredAction::Setting { .. }
             | AuthoredAction::Screenshot(_)
             | AuthoredAction::ToggleHud => None,
@@ -123,7 +128,7 @@ mod tests {
         for value in [
             json!({"group_toggle": 3}),
             json!({"screenshot": 8}),
-            json!({"setting": {"key": "master_volume", "verb": "drag"}}),
+            json!({"setting": {"key": "window_mode", "verb": "open"}}),
             json!({"show": null}),
             json!("teleport"),
             json!(null),
@@ -161,7 +166,7 @@ mod tests {
         }
         let row = AuthoredAction::Setting {
             key: SettingKey::Vsync,
-            verb: SettingVerb::Next,
+            verb: SettingVerb::Open,
         };
         assert_eq!(Move::of(&row), None);
     }

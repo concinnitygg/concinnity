@@ -29,9 +29,11 @@ use proc_macro::TokenStream;
 /// since no schema uses one. The schema also records serde's `default`
 /// attributes, which decide what an omitted key reads as.
 ///
-/// `#[asset(owned_file)]` on a path field records it as a file the asset owns:
-/// its authored source, which belongs to that asset rather than being shared
-/// content other assets may read. `#[asset(default = ...)]` is read by
+/// `#[asset(file)]` on a path field records it as a path to a file, which a
+/// reader of the world resolves the way it resolves every path.
+/// `#[asset(owned_file)]` records it as a file the asset owns too: its authored
+/// source, which belongs to that asset rather than being shared content other
+/// assets may read. `#[asset(default = ...)]` is read by
 /// `AssetDefault`.
 ///
 /// `#[asset(section)]` on the struct also generates `<Name>Overrides`: every

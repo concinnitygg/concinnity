@@ -9,8 +9,12 @@ use serde::Deserialize;
 // Compile a Font asset's arguments into the binary blob payload format.
 //
 // When `path` is empty or absent the engine's bundled default font is used
-// instead of reading from disk, so no external file is required.
-pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, CompileError> {
+// instead of reading from disk, so no external file is required. A `path` is
+// read under `root`.
+pub(crate) fn compile_font_payload(
+    args: &serde_json::Value,
+    root: Option<&std::path::Path>,
+) -> Result<Vec<u8>, CompileError> {
     let font: Font = Deserialize::deserialize(args)
         .map_err(|e| CompileError::Invalid(format!("Font: invalid args: {e}")))?;
     let path = font.path.as_str();
@@ -18,7 +22,10 @@ pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     let ttf_bytes: Vec<u8> = if path.is_empty() {
         concinnity_engine::bake::font::BUILTIN_FONT_BYTES.to_vec()
     } else {
-        CompileError::read(path, "Font: could not read")?
+        CompileError::read(
+            concinnity_host::store::source::resolve(path, root),
+            "Font: could not read",
+        )?
     };
     let source = if path.is_empty() { "<built-in>" } else { path };
 
@@ -41,7 +48,7 @@ mod tests {
             serde_json::json!({ "size_px": 48 }),
             serde_json::json!({ "path": "", "size_px": 48 }),
         ] {
-            let payload = compile_font_payload(&args).expect("compile bundled font at 48px");
+            let payload = compile_font_payload(&args, None).expect("compile bundled font at 48px");
             let (w, h, _supersample, _size_px, rgba, metrics) = deserialize(&payload).unwrap();
             assert!(w > 0 && h > 0, "atlas has non-zero dimensions");
             assert!(!rgba.is_empty());
@@ -57,7 +64,7 @@ mod tests {
             .expect("write ttf");
 
         let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
-        let payload = compile_font_payload(&args).expect("compile font read from disk");
+        let payload = compile_font_payload(&args, None).expect("compile font read from disk");
         let (w, h, _supersample, size_px, rgba, metrics) = deserialize(&payload).unwrap();
         assert_eq!(size_px, 12);
         // Every printable ASCII glyph (32..=126) is rasterized.
@@ -77,7 +84,7 @@ mod tests {
     #[test]
     fn font_reports_a_missing_ttf() {
         let args = serde_json::json!({ "path": "/no/such/font.ttf", "size_px": 12 });
-        let err = compile_font_payload(&args).unwrap_err();
+        let err = compile_font_payload(&args, None).unwrap_err();
         assert!(err.to_string().contains("could not read"), "got: {err}");
         assert!(err.to_string().contains("/no/such/font.ttf"), "got: {err}");
     }
@@ -89,13 +96,13 @@ mod tests {
         std::fs::write(&path, b"not a font at all").expect("write junk");
 
         let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
-        let err = compile_font_payload(&args).unwrap_err();
+        let err = compile_font_payload(&args, None).unwrap_err();
         assert!(err.to_string().contains("failed to parse"), "got: {err}");
     }
 
     #[test]
     fn font_rejects_args_that_are_not_a_font() {
-        let err = compile_font_payload(&serde_json::json!({ "size_px": "big" })).unwrap_err();
+        let err = compile_font_payload(&serde_json::json!({ "size_px": "big" }), None).unwrap_err();
         assert!(err.to_string().contains("Font: invalid args"), "got: {err}");
     }
 }

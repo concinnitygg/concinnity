@@ -4,8 +4,8 @@ use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 use super::media::MediaAssets;
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, label, screen, textured_cover_sprite, title_button};
+use crate::authoring::spec::{asset, spec_to_value};
 use crate::build_only::story::model::Story;
-use crate::build_only::ui_spec::sprite;
 
 // Multiplied into the title backdrop image so the light menu text keeps its
 // contrast on a bright photo. The gray value dims the image to this fraction
@@ -39,14 +39,11 @@ pub(super) fn emit_title_screen(
                 TITLE_BACKDROP_DIM,
             ));
         }
-        None => out.push(sprite(
+        None => out.push(spec_to_value(&asset::sprite(
             &title.bg,
-            0.0,
-            0.0,
-            win_w,
-            win_h,
+            [0.0, 0.0, win_w, win_h],
             [0.05, 0.06, 0.12, 1.0],
-        )),
+        ))),
     }
     out.push(label(
         &title.heading,

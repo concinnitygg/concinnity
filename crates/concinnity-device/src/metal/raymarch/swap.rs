@@ -1,8 +1,5 @@
 // Replacing a live volume's raymarch pipelines from a hot-reloaded field.
-//
-// A Metal command buffer retains the pipelines encoded into it, so the old
-// pipelines can drop the moment the new ones are in place: a frame still in
-// flight keeps drawing with what it encoded.
+// Command buffers retain what they encoded, so the old pipelines drop at once.
 
 use concinnity_engine::render::backend::SdfVolumeShaders;
 use concinnity_engine::render::backend::error::RenderResult;

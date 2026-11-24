@@ -11,29 +11,24 @@ fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
         .color
 }
 
-// Init syncs the world's settings rows to the state it resolved before the
-// first render: the stored vsync choice shows, the master preset row names the
-// tier the detected GPU resolved `Auto` to, and the parked state holds the
-// captured rows.
+// Init publishes the world's settings rows' values from the state it resolved
+// before the first render: the stored vsync choice shows, and the master
+// preset row names the tier the detected GPU resolved `Auto` to.
 #[test]
 fn settings_rows_show_their_live_values_at_init() {
     let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.vsync = Some(true);
     let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
     let mut b = effects_scene(ResolvedGraphics::default());
-    push_settings_row(&mut b, "vsync", "next", AssetId(100));
-    push_settings_row(&mut b, "graphics_quality", "next", AssetId(121));
+    push_settings_row(&mut b, SettingKey::Vsync, AssetId(100));
+    push_settings_row(&mut b, SettingKey::GraphicsQuality, AssetId(121));
     let mut world = b.build();
     world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    assert_eq!(label_text(&mut world, AssetId(100)), "On", "stored vsync");
-    assert_eq!(label_text(&mut world, AssetId(121)), "Auto (High)");
-    assert_eq!(
-        settings_state(&world).cycle_value_label(SettingKey::Vsync),
-        Some(AssetId(100))
-    );
+    assert_eq!(shown(&world, SettingKey::Vsync), "On", "stored vsync");
+    assert_eq!(shown(&world, SettingKey::GraphicsQuality), "Auto (High)");
 }
 
 // Every element a ScrollPanel lists is mapped to its panel's content band, so
@@ -92,8 +87,8 @@ fn the_backend_capabilities_gate_the_settings_rows() {
         ..backend::DeviceCapabilities::ALL
     };
     let mut b = effects_scene(ResolvedGraphics::default());
-    push_settings_row(&mut b, "upscale_backend", "next", AssetId(600));
-    push_settings_row(&mut b, "vsync", "next", AssetId(602));
+    push_settings_row(&mut b, SettingKey::UpscaleBackend, AssetId(600));
+    push_settings_row(&mut b, SettingKey::Vsync, AssetId(602));
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -112,15 +107,7 @@ fn the_backend_capabilities_gate_the_settings_rows() {
     let disabled: Vec<bool> = world
         .context()
         .query::<HitRegion>()
-        .filter(|r| {
-            matches!(
-                r.action,
-                Some(UiAction::Setting {
-                    key: SettingKey::UpscaleBackend,
-                    ..
-                })
-            )
-        })
+        .filter(|r| r.setting() == Some(SettingKey::UpscaleBackend))
         .map(|r| r.disabled)
         .collect();
     assert_eq!(disabled, vec![true]);
@@ -136,22 +123,14 @@ fn the_dlss_preset_row_follows_whether_dlss_is_selectable() {
         profile.vendor = vendor;
         let (_, hooks) = recording_hooks_with(profile);
         let mut b = effects_scene(ResolvedGraphics::default());
-        push_settings_row(&mut b, "dlss_preset", "next", AssetId(600));
+        push_settings_row(&mut b, SettingKey::DlssPreset, AssetId(600));
         let mut world = b.build();
         let gs = init_graphics(&mut world, hooks);
         assert!(!gs.failed);
         let disabled: Vec<bool> = world
             .context()
             .query::<HitRegion>()
-            .filter(|r| {
-                matches!(
-                    r.action,
-                    Some(UiAction::Setting {
-                        key: SettingKey::DlssPreset,
-                        ..
-                    })
-                )
-            })
+            .filter(|r| r.setting() == Some(SettingKey::DlssPreset))
             .map(|r| r.disabled)
             .collect();
         disabled

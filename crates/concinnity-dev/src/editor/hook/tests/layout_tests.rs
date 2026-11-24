@@ -1,171 +1,23 @@
-//! The floating panels' geometry and stacking (`hook/layout.rs`): a title-bar
-//! drag that moves a panel and clamps it on screen, the focus order a press
-//! changes, the draw layers a publish ranks, the close button, what a hidden
-//! panel stops answering, each region's scroll, and where the secondary panels
-//! park while a drag is in flight.
+//! The floating panels' stacking and pointer feedback (`hook/layout.rs`): the
+//! focus order a press changes, the draw layers a publish ranks, the close
+//! button, the resize cursor over a panel's edge, and what a tick shows.
 
-use concinnity_engine::components::{FrameInput, Sprite, TextInput, TextLabel};
+use concinnity_engine::components::{FrameInput, Layout, ResizeEdges, UiEvent, UiState, UiValue};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
-use super::fixtures::{
-    behavior, behavior_session, close_rect_of, entry, hook, seed_tree, select_behavior, set_input,
-    title_rect_of, world_with_fields, world_with_input,
-};
-use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
-use crate::editor::hook::{Drag, FormTarget};
-use crate::editor::{behavior, hud, inject, widget};
+use super::fixtures::{entry, hook, seed_tree};
+use crate::editor::hook::{EditorHook, FormTarget};
+use crate::editor::install;
 use crate::frame_hook::FrameHook;
+use concinnity_engine::protocol::CursorShape;
 
-use crate::editor::panels::{assets_panel, form_panel, preview};
+use crate::editor::panels::{asset_tree, assets_panel};
+use crate::editor::ui::{BuiltUi, CLOSE_EVENT};
 
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::hook::tests::fixtures::entry_target;
-
-// Holding a panel's title bar drags it; the origin follows the cursor by the
-// grab offset and hard-stops at the window edges. Release ends the drag.
-#[test]
-fn title_bar_drag_moves_and_clamps_the_assets_panel() {
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Assets] = true;
-    let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Assets, vp);
-    // Press on the title bar, 10 px in from its corner.
-    let mut world = world_with_input(FrameInput {
-        viewport: vp,
-        mouse_x: start[0] + 10.0,
-        mouse_y: start[1] + 10.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    assert!(h.drag.is_some(), "the title press starts a drag");
-
-    // Hold and move: the origin follows, preserving the grab offset.
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: 400.0,
-            mouse_y: 150.0,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert_eq!(h.origin(PanelKey::Assets, vp), [390.0, 140.0]);
-
-    // Drag far past the top-left corner: the panel hard-stops at the left edge
-    // and at the top bar's lower edge, never sliding under the bar.
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: -500.0,
-            mouse_y: -500.0,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert_eq!(
-        h.origin(PanelKey::Assets, vp),
-        [0.0, hud::BAR_H],
-        "never partially off screen or under the top bar"
-    );
-
-    // Release ends the drag; the panel stays where it was dropped.
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            left_button_down: false,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert!(h.drag.is_none(), "release ends the drag");
-    assert_eq!(h.origin(PanelKey::Assets, vp), [0.0, hud::BAR_H]);
-}
-
-// The Preview panel drags by its own title bar, clamped to the window's far
-// corner by its own (smaller) footprint.
-#[test]
-fn title_bar_drag_moves_and_clamps_the_preview_panel() {
-    let mut h = hook(Vec::new());
-    let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Preview, vp);
-    let mut world = world_with_input(FrameInput {
-        viewport: vp,
-        mouse_x: start[0] + 5.0,
-        mouse_y: start[1] + 5.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    assert!(h.drag.is_some());
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: 5000.0,
-            mouse_y: 5000.0,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    let size = preview::size();
-    assert_eq!(
-        h.origin(PanelKey::Preview, vp),
-        [vp[0] - size[0], vp[1] - size[1]],
-        "stops flush with the bottom-right corner"
-    );
-}
-
-// The edit-form panel drags by its own title bar, independent of the Assets
-// panel.
-#[test]
-fn edit_panel_drags_by_its_title_bar() {
-    let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = World::new();
-    inject::editor_hud(&mut world);
-    h.open[PanelKey::Assets] = true;
-    let target = entry_target(&h, 0);
-    h.open_form(&mut world, "PointLight".to_string(), target);
-    let vp = [1280.0, 720.0];
-    let fo = h.origin(PanelKey::Edit, vp);
-    world.add_component(FrameInput {
-        viewport: vp,
-        mouse_x: fo[0] + 12.0,
-        mouse_y: fo[1] + 8.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    assert!(h.drag.is_some(), "the form title press starts a drag");
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: 112.0,
-            mouse_y: 208.0,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert_eq!(h.origin(PanelKey::Edit, vp), [100.0, 200.0]);
-    assert_eq!(
-        h.origin(PanelKey::Assets, vp),
-        assets_panel::default_origin(vp[0]),
-        "the Assets panel did not move"
-    );
-}
 
 // Focusing a panel moves it to the front of the stack (drawn on top, first
 // clicked) without duplicating it.
@@ -173,7 +25,7 @@ fn edit_panel_drags_by_its_title_bar() {
 fn focusing_a_panel_moves_it_to_the_front() {
     let mut h = hook(Vec::new());
     let panels = h.panel_order.len();
-    // Default order matches the injected draw order: the Worlds panel
+    // The default order is the registry's: the Worlds panel
     // frontmost (a session that opens on it must see it over everything), the
     // palette under it, then the Template detail (over the Templates list it
     // spawns from).
@@ -187,209 +39,125 @@ fn focusing_a_panel_moves_it_to_the_front() {
     assert_eq!(h.panel_order.len(), panels);
 }
 
-// The published HUD layers rank the panels by focus (frontmost highest) and pin
-// the top bar above them all, so the renderer occludes overlaps cleanly.
+// The focus order sets the ranks the engine stacks the panels by, frontmost
+// highest, and the top bar is a front root, which stays above them all.
 #[test]
-fn publish_layers_ranks_panels_below_the_top_bar() {
+fn the_focus_order_ranks_the_panels_under_the_top_bar() {
     let mut h = hook(Vec::new());
-    h.focus_panel(PanelKey::Edit); // Edit -> frontmost
-    let layers = h.compute_layers();
-    let layer = |id| *layers.get(&id).expect("id mapped");
-    let edit = layer(form_panel::EDIT_BG);
-    let assets = layer(assets_panel::PANEL_BG);
-    let preview = layer(preview::PANEL_BG);
+    h.open[PanelKey::Map] = true;
+    h.open[PanelKey::Behavior] = true;
+    h.focus_panel(PanelKey::Behavior);
+    h.focus_panel(PanelKey::Map);
+    let mut world = World::new();
+    install::editor_ui(&mut world);
+    h.sync_built_panels(&mut world, true, [1280.0, 720.0]);
+    let built = world.resource::<BuiltUi>().unwrap();
+    let rank = |key| {
+        world
+            .get_by_id::<Layout>(built.panel(key).unwrap().root)
+            .unwrap()
+            .rank
+    };
     assert!(
-        edit > assets && edit > preview,
+        rank(PanelKey::Map) > rank(PanelKey::Behavior),
         "the frontmost panel outranks the others"
     );
+    let bar = built.top_bar.as_ref().unwrap();
     assert!(
-        layer(hud::SAVE_BUTTON) > edit,
-        "the top bar sits above every panel"
+        world.get_by_id::<Layout>(bar.root).unwrap().front,
+        "the top bar stays in front of every panel"
     );
-    // A panel's text input shares its panel's layer (it must not sink below it).
-    assert_eq!(layer(form_panel::NAME_INPUT), edit);
 }
 
-// A press on a shown panel brings it to the front and (on its title bar) starts
-// a drag.
+// Over a resizable panel's right or bottom edge the cursor says which way a
+// drag sizes it; over its body, or nowhere near it, it is the arrow.
 #[test]
-fn a_panel_press_brings_it_to_the_front() {
-    let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = world_with_fields();
-    h.open[PanelKey::Assets] = true;
-    let vp = [1280.0, 720.0];
-    let po = h.origin(PanelKey::Assets, vp);
-    let t = widget::title_rect(po, assets_panel::PANEL_W);
-    // The title bar's interior (clear of the corner / edge resize band) drags.
-    let claimed = h.try_panel_press(
-        PanelKey::Assets,
-        t[0] + t[2] * 0.5,
-        t[1] + t[3] * 0.5,
-        vp,
+fn the_cursor_shows_the_edge_a_drag_would_size() {
+    let mut h = hook(Vec::new());
+    let mut world = World::new();
+    install::editor_ui(&mut world);
+    place_root(
+        &mut h,
         &mut world,
+        PanelKey::Behavior,
+        [100.0, 100.0, 400.0, 300.0],
     );
-    assert!(claimed, "the press was claimed by the Assets panel");
-    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Assets));
-    assert!(h.drag.is_some(), "a title-bar press starts a drag");
+    let at = |h: &EditorHook, world: &World, x, y| h.hover_cursor(world, [x, y]);
+    assert_eq!(at(&h, &world, 498.0, 200.0), CursorShape::ResizeEW);
+    assert_eq!(at(&h, &world, 300.0, 398.0), CursorShape::ResizeNS);
+    assert_eq!(at(&h, &world, 498.0, 398.0), CursorShape::ResizeNWSE);
+    assert_eq!(at(&h, &world, 300.0, 200.0), CursorShape::Default);
+    assert_eq!(at(&h, &world, 20.0, 20.0), CursorShape::Default);
+
+    // A panel in front whose body covers the edge keeps the arrow.
+    place_root(
+        &mut h,
+        &mut world,
+        PanelKey::Map,
+        [450.0, 150.0, 300.0, 200.0],
+    );
+    assert_eq!(at(&h, &world, 498.0, 200.0), CursorShape::Default);
+
+    // While a drag sizes a panel the cursor holds its shape, wherever the
+    // pointer has got to.
+    let root = root_of(&world, PanelKey::Behavior);
+    if let Some(l) = world.get_mut_by_id::<Layout>(root) {
+        l.resizing = Some(ResizeEdges {
+            right: true,
+            bottom: false,
+        });
+    }
+    assert_eq!(at(&h, &world, 20.0, 20.0), CursorShape::ResizeEW);
 }
 
-// The X in the edit form's title bar closes the form: the hook routes it before
-// the title-bar drag, so it closes rather than starting a drag.
-#[test]
-fn edit_form_title_bar_x_closes_the_form() {
-    let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = world_with_fields();
-    h.open[PanelKey::Assets] = true;
-    let target = entry_target(&h, 0);
-    h.open_form(&mut world, "PointLight".to_string(), target);
-    assert!(h.form_open());
-    let vp = [1280.0, 720.0];
-    let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp), form_panel::EDIT_W);
-    let claimed = h.try_panel_press(PanelKey::Edit, x[0] + 5.0, x[1] + 5.0, vp, &mut world);
-    assert!(claimed, "the X press was claimed");
-    assert!(!h.form_open(), "the X closed the form");
-    assert!(h.drag.is_none(), "the X did not start a drag");
+fn root_of(world: &World, key: PanelKey) -> AssetId {
+    world
+        .resource::<BuiltUi>()
+        .and_then(|b| b.panel(key))
+        .unwrap()
+        .root
 }
 
-// Every floating panel's title-bar X closes it: the press is checked before the
-// title drag, so it closes rather than starting a drag.
-#[test]
-fn every_panel_title_bar_x_closes_it() {
-    let vp = [1280.0, 720.0];
-    let mut world = world_with_fields();
-
-    // Preview starts shown; its X hides it.
-    let mut h = hook(Vec::new());
-    let px = close_rect_of(&h, PanelKey::Preview, vp);
-    assert!(h.try_panel_press(PanelKey::Preview, px[0] + 5.0, px[1] + 5.0, vp, &mut world));
-    assert!(
-        !h.open[PanelKey::Preview] && h.drag.is_none(),
-        "Preview X closed it, no drag"
-    );
-
-    // Assets.
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Assets] = true;
-    let ax = close_rect_of(&h, PanelKey::Assets, vp);
-    assert!(h.try_panel_press(PanelKey::Assets, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
-    assert!(
-        !h.open[PanelKey::Assets] && h.drag.is_none(),
-        "Assets X closed it, no drag"
-    );
-
-    // View.
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::View] = true;
-    let vx = close_rect_of(&h, PanelKey::View, vp);
-    assert!(h.try_panel_press(PanelKey::View, vx[0] + 5.0, vx[1] + 5.0, vp, &mut world));
-    assert!(
-        !h.open[PanelKey::View] && h.drag.is_none(),
-        "View X closed it, no drag"
-    );
-
-    // Templates.
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Templates] = true;
-    let tx = close_rect_of(&h, PanelKey::Templates, vp);
-    assert!(h.try_panel_press(
-        PanelKey::Templates,
-        tx[0] + 5.0,
-        tx[1] + 5.0,
-        vp,
-        &mut world
-    ));
-    assert!(
-        !h.open[PanelKey::Templates] && h.drag.is_none(),
-        "Templates X closed it, no drag"
-    );
-}
-
-// A panel toggled off (its View checkbox unticked) is not interactive: a press
-// where it would be falls through instead of being claimed.
-#[test]
-fn a_hidden_panel_is_not_interactive() {
-    let mut h = hook(Vec::new());
-    let vp = [1280.0, 720.0];
-    let mut world = world_with_fields();
-    // Preview starts shown: a title-bar press is claimed (starts a drag).
-    let pt = title_rect_of(&h, PanelKey::Preview, vp);
-    assert!(h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
-    // Hidden: the same press falls through.
-    h.drag = None;
-    h.open[PanelKey::Preview] = false;
-    assert!(!h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
-    // The View panel starts hidden: its press falls through until it is opened.
-    let vt = title_rect_of(&h, PanelKey::View, vp);
-    assert!(!h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
-    h.open[PanelKey::View] = true;
-    assert!(h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
-}
-
-// An open Behavior panel claims only presses that land on it. Its chart views
-// used to answer for the whole screen, which left every other panel unable to
-// be moved, closed, or brought forward while one of them was showing.
-#[test]
-fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
-    let (mut h, mut world) = behavior_session(vec![behavior(
-        "chase",
-        serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
-    )]);
-    let vp = [1280.0, 720.0];
-    h.open[PanelKey::View] = true;
-    // Behavior sits in front of the panels the press has to reach.
-    h.focus_panel(PanelKey::Behavior);
-
-    for mode in [ViewMode::Outline, ViewMode::Chart, ViewMode::Overview] {
-        h.behavior.mode = mode;
-        for key in [PanelKey::Preview, PanelKey::View] {
-            let title = title_rect_of(&h, key, vp);
-            let (mx, my) = (title[0] + 5.0, title[1] + 5.0);
-            assert!(
-                !h.try_panel_press(PanelKey::Behavior, mx, my, vp, &mut world),
-                "{mode:?}: Behavior swallowed a press meant for {key:?}"
-            );
-            h.drag = None;
-            assert!(
-                h.try_panel_press(key, mx, my, vp, &mut world),
-                "{mode:?}: {key:?} never saw the press"
-            );
-            h.drag = None;
-            h.focus_panel(PanelKey::Behavior);
-        }
+// Show panel `key` laid out at `rect`, in front of those placed before it.
+fn place_root(h: &mut EditorHook, world: &mut World, key: PanelKey, rect: [f32; 4]) {
+    h.open[key] = true;
+    h.focus_panel(key);
+    let root = root_of(world, key);
+    if let Some(l) = world.get_mut_by_id::<Layout>(root) {
+        l.visible = true;
+        l.rect = Some(rect);
     }
 }
 
-// The Templates panel drags by its own title bar and comes to the front on a
-// press, like the other floating panels.
+// The close button in the edit form's title bar closes the form.
 #[test]
-fn templates_panel_press_drags_and_focuses() {
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Templates] = true;
-    let vp = [1280.0, 720.0];
-    let mut world = world_with_fields();
-    let t = title_rect_of(&h, PanelKey::Templates, vp);
-    // The title bar's interior (clear of the corner / edge resize band) drags.
-    assert!(h.try_panel_press(
-        PanelKey::Templates,
-        t[0] + t[2] * 0.5,
-        t[1] + t[3] * 0.5,
-        vp,
-        &mut world
-    ));
-    assert!(h.drag.is_some(), "a title-bar press starts a drag");
-    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Templates));
+fn edit_form_close_button_closes_the_form() {
+    let mut h = hook(vec![entry("lamp", "PointLight")]);
+    let mut world = World::new();
+    install::editor_ui(&mut world);
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    h.open[PanelKey::Assets] = true;
+    let target = entry_target(&h, 0);
+    h.open_form("PointLight".to_string(), target);
+    assert!(h.form_open());
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: CLOSE_EVENT.into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(PanelKey::Edit.index()).unwrap())),
+    });
+    h.tick(&mut world);
+    assert!(!h.form_open(), "the close button closed the form");
 }
 
-// Drive `tick` against a fully injected HUD world in each panel body state,
-// exercising the real `assets_panel::place` layout path (not just the pure hit-test /
-// action logic the other tests cover).
+// A tick shows the open Assets panel in each of its states: the tree, the type
+// picker in its place, the row menu, and the edit form beside it.
 #[test]
-fn tick_lays_out_the_open_panel_in_every_state() {
-    let sprite_visible = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).unwrap().visible;
-    let label = |w: &World, id: AssetId| w.get_by_id::<TextLabel>(id).unwrap().clone();
-
+fn tick_shows_the_open_panel_in_every_state() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         mouse_x: 1200.0,
@@ -399,200 +167,61 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     let mut h = hook(vec![entry("a", "PointLight"), entry("b", "Decal")]);
     h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
+    let built = |w: &World| {
+        w.resource::<BuiltUi>()
+            .unwrap()
+            .panel(PanelKey::Assets)
+            .cloned()
+            .unwrap()
+    };
+    let shown = |w: &World| w.get_by_id::<Layout>(built(w).root).unwrap().visible;
+    let state = |w: &World| w.resource::<UiState>().unwrap().clone();
 
-    // Tree: panel drawn, first row is the World group header.
+    // Tree: the panel shows, its first row the World group header.
     h.tick(&mut world);
-    assert!(
-        sprite_visible(&world, assets_panel::PANEL_BG),
-        "panel bg shown"
-    );
-    let row0 = label(&world, assets_panel::name_label(0));
-    assert!(
-        row0.visible && row0.content.starts_with("- World"),
-        "first row is the World group header, got {:?}",
-        row0.content
-    );
+    assert!(shown(&world), "the panel shows");
+    let tree = state(&world).list(assets_panel::TREE).to_vec();
+    assert_eq!(tree[0].text, asset_tree::WORLD_GROUP);
+    assert!(tree[0].expandable && tree[0].expanded);
 
-    // Type picker: the solid backing and the search field show.
+    // Type picker: its list shows in the tree's place.
     h.assets.picker_open = true;
     h.tick(&mut world);
-    assert!(
-        sprite_visible(&world, assets_panel::PICKER_BG),
-        "picker backing shown"
-    );
-    assert!(
-        world
-            .get_by_id::<TextInput>(assets_panel::SEARCH_INPUT)
-            .unwrap()
-            .visible
-    );
+    assert!(!state(&world).list(assets_panel::PICKER).is_empty());
 
-    // Row menu: the Delete popup shows over the "a" row.
+    // Row menu: Delete is offered for the "a" row, the tree's second.
     h.assets.picker_open = false;
-    h.assets.row_menu = Some(h.handle_for("a"));
     h.tick(&mut world);
-    assert!(
-        sprite_visible(&world, assets_panel::MENU_BG),
-        "row menu shown"
-    );
-    assert_eq!(
-        label(&world, assets_panel::MENU_DELETE_LABEL).content,
-        "Delete"
-    );
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: assets_panel::CONTEXT.into(),
+        element: None,
+        value: Some(UiValue::Int(1)),
+    });
+    h.tick(&mut world);
+    let s = state(&world);
+    assert_eq!(s.get(assets_panel::MENU_OPEN), Some(&UiValue::Bool(true)));
+    assert_eq!(s.list(assets_panel::MENU_ITEMS)[0].text, "Delete");
 
-    // Form open: the edit panel shows alongside the browse list, with its
-    // title bar, name heading, and confirm button.
+    // Form open: the edit panel shows alongside the tree.
     h.assets.row_menu = None;
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
+    h.open_form("PointLight".to_string(), FormTarget::New);
     h.tick(&mut world);
-    assert!(
-        sprite_visible(&world, form_panel::APPLY_BG),
-        "confirm button shown"
-    );
-    assert_eq!(
-        label(&world, form_panel::TITLE_LABEL).content,
-        "New PointLight"
-    );
-    assert_eq!(label(&world, form_panel::APPLY_LABEL).content, "Add");
-    assert!(
-        world
-            .get_by_id::<TextInput>(form_panel::NAME_INPUT)
+    let form_shown = |w: &World| {
+        let root = w
+            .resource::<BuiltUi>()
             .unwrap()
-            .visible,
-        "the name heading shows"
-    );
-    assert!(
-        label(&world, assets_panel::name_label(0)).visible,
-        "the tree stays visible beside the form"
-    );
+            .panel(PanelKey::Edit)
+            .unwrap()
+            .root;
+        w.get_by_id::<Layout>(root).unwrap().visible
+    };
+    assert!(form_shown(&world), "the form shows");
+    assert!(shown(&world), "the tree stays beside the form");
 
-    // Closing the panel + form blanks both.
+    // Closing the panel and the form hides both.
     h.open[PanelKey::Assets] = false;
     h.form.close();
     h.tick(&mut world);
-    assert!(
-        !sprite_visible(&world, assets_panel::PANEL_BG),
-        "panel bg hidden"
-    );
-    assert!(
-        !sprite_visible(&world, form_panel::EDIT_BG),
-        "form panel hidden"
-    );
-}
-
-#[test]
-fn scroll_moves_each_regions_offset() {
-    let world = world_with_fields();
-    // A tree longer than the row window, so its scroll can advance.
-    let mut h = hook(
-        (0..20)
-            .map(|i| entry(&format!("log{i}"), "TextLabel"))
-            .collect(),
-    );
-    seed_tree(&mut h, Vec::new());
-    h.assets.row_menu = Some(h.handle_for("log0"));
-    h.scroll_tree(1.0, &world);
-    assert!(h.assets.scroll > 0, "a closed picker scrolls the tree");
-    assert!(
-        h.assets.row_menu.is_none(),
-        "scrolling dismisses an open row menu"
-    );
-    h.scroll_tree(-1.0, &world);
-    assert_eq!(h.assets.scroll, 0, "scrolling back up clamps at the top");
-
-    // An open picker scrolls its own option list instead of the tree.
-    h.assets.picker_open = true;
-    let before = h.assets.scroll;
-    h.scroll_tree(1.0, &world);
-    assert_eq!(
-        h.assets.scroll, before,
-        "the tree stays put while the picker is open"
-    );
-    assert!(h.assets.picker_scroll > 0, "the picker's own list scrolled");
-    h.assets.picker_open = false;
-
-    // A picked template detail scrolls its own asset list.
-    h.templates.detail = Some(0);
-    h.scroll_template_list(1.0);
-}
-
-#[test]
-fn drive_drag_parks_each_secondary_panel() {
-    let vp = [1280.0, 720.0];
-    let held = FrameInput {
-        left_button_down: true,
-        mouse_x: 220.0,
-        mouse_y: 160.0,
-        ..Default::default()
-    };
-
-    let mut h = hook(Vec::new());
-    h.drag = Some(Drag {
-        key: PanelKey::View,
-        grab: [10.0, 10.0],
-    });
-    h.drive_drag(&held, vp);
-    assert!(
-        h.positions[PanelKey::View].is_some(),
-        "the View panel follows the cursor"
-    );
-
-    let mut h = hook(Vec::new());
-    h.drag = Some(Drag {
-        key: PanelKey::Templates,
-        grab: [10.0, 10.0],
-    });
-    h.drive_drag(&held, vp);
-    assert!(
-        h.positions[PanelKey::Templates].is_some(),
-        "the Templates panel follows"
-    );
-
-    let mut h = hook(Vec::new());
-    h.templates.detail = Some(0);
-    h.drag = Some(Drag {
-        key: PanelKey::TemplateDetail,
-        grab: [10.0, 10.0],
-    });
-    h.drive_drag(&held, vp);
-    assert!(
-        h.positions[PanelKey::TemplateDetail].is_some(),
-        "the Template detail panel follows"
-    );
-}
-
-// An open overlay draws above its own panel but still below the panel in front
-// of it. This is what lets an opaque backing occlude what it covers, instead of
-// each panel blanking the elements it happens to sit over.
-#[test]
-fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
-    let (mut h, mut world) = behavior_session(vec![behavior(
-        "chase",
-        serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
-    )]);
-    // Nothing open: the palette sits at its panel's own layer.
-    let flat = h.compute_layers();
-    let panel_layer = flat[&behavior::panel::PANEL_BG];
-    assert_eq!(flat[&behavior::panel::DROP_BG], panel_layer);
-
-    select_behavior(&mut h, &mut world, "do");
-    h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
-    let open = h.compute_layers();
-    for id in behavior::panel::palette_ids() {
-        assert!(
-            open[&id] > open[&behavior::panel::PANEL_BG],
-            "{id:?} does not draw above its own panel",
-        );
-        assert!(
-            open[&id] > open[&behavior::panel::row_label(0)],
-            "{id:?} does not draw above the rows it covers",
-        );
-    }
-    // A panel focused in front still clears the whole band, overlay included.
-    h.focus_panel(PanelKey::Preview);
-    let stacked = h.compute_layers();
-    let front = stacked[&preview::PANEL_BG];
-    for id in behavior::panel::palette_ids() {
-        assert!(stacked[&id] < front, "{id:?} escaped above the front panel");
-    }
+    assert!(!shown(&world));
+    assert!(!form_shown(&world));
 }

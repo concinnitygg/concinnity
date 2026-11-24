@@ -26,7 +26,13 @@ use crate::build_status::{BuildStatus, Verbosity};
 // validation and asset fetching behave identically. The `cn cook` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(source: WorldSource<'_>) -> std::io::Result<LoadedWorld> {
-    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
+    // A world named without a root builds under the open project's.
+    let root = crate::project::content_root();
+    let source = WorldSource {
+        root: source.root.or(root.as_deref()),
+        ..source
+    };
+    let loaded = concinnity_cook::prepare_world(source)
         .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     Ok(loaded)
@@ -96,7 +102,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 
     let mut result = build_compiled(
         loaded.assets,
-        crate::project::assets_dir().as_deref(),
+        crate::project::content_root().as_deref(),
         crate::cook_platform().into(),
     )?;
 
@@ -166,7 +172,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     Ok(world)
 }
 
-/// Run the full in-memory pipeline on a world.jsonl string, returning a
+/// Run the full in-memory pipeline on .jsonl text, returning a
 /// ready-to-run World without touching any blob files on disk. The editor uses
 /// this to boot an empty (or otherwise non-renderable) world from a seeded
 /// Window so one still opens.
@@ -188,18 +194,19 @@ pub(crate) fn build_world_and_shadows<'a>(
     Ok((world_from_loaded(loaded)?, shadowed))
 }
 
-/// Read a world.jsonl file from disk and run the full in-memory pipeline on it,
+/// Read a .jsonl file from disk and run the full in-memory pipeline on it,
 /// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
 /// loads its world through here; it is the file-backed counterpart of `prepare`
 /// + `world_from_loaded`.
 pub(crate) fn build_world_from_path(world_path: &Path) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
-    build_world_from_str(WorldSource::file(&content, world_path))
+    let root = crate::project::content_root();
+    build_world_from_str(WorldSource::file(&content, world_path, root.as_deref()))
 }
 
-// Compile the world file at `json_path` into the project's state tree, showing
+// Compile the file at `json_path` into the project's state tree, showing
 // the build's status as it runs and printing every validation error before
-// failing. The CLI commands that rebuild a world file go through here.
+// failing. The CLI commands that rebuild a .jsonl file go through here.
 pub(crate) fn build_world_file(json_path: &Path) -> std::io::Result<()> {
     build_world_file_as(json_path, json_path, Verbosity::Normal)
 }
@@ -232,8 +239,8 @@ fn build_world(
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
     let status = BuildStatus::start(&shown.display().to_string(), targets, verbosity);
-    let source = WorldSource::file(&content, json_path);
-    let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
+    let source = WorldSource::file(&content, json_path, Some(tree.content_root()));
+    let loaded = match concinnity_cook::prepare_world(source) {
         Ok(loaded) => loaded,
         Err(errs) => {
             status.fail_validation(errs.diagnostics());
@@ -254,8 +261,8 @@ fn build_world(
     }
 }
 
-// Compile world content and write the blobs + world-lock.json to the open
-// project's build root, without reading (or writing) a world.jsonl, so the
+// Compile world content and write the blobs + cook-lock.json to the open
+// project's build root, without reading (or writing) a .jsonl file, so the
 // editor's cook workers compile the in-memory entries as they stand, saved or
 // not. `progress` feeds their operation card.
 pub(crate) fn build_world_str_to_disk(
@@ -265,7 +272,7 @@ pub(crate) fn build_world_str_to_disk(
     let loaded = prepare(content.into())?;
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
-        crate::project::assets_dir().as_deref(),
+        crate::project::content_root().as_deref(),
         crate::cook_targets(),
         progress,
     )?;
@@ -486,7 +493,7 @@ mod tests {
         // Opening the session's project is a process-global write.
         let _guard = crate::test_support::lock();
         let dir = concinnity_testing::TempTree::new();
-        let build_root = dir.path().join(".concinnity");
+        let build_root = dir.path().join("build");
         crate::project::open(
             concinnity_host::store::paths::StateTree::at(dir.path()).with_build(&build_root),
         );
@@ -507,13 +514,14 @@ mod tests {
             .exists(),
             "data/0 blob written"
         );
-        assert!(
-            build_root.join("world-lock.json").exists(),
-            "world-lock.json written under the build root"
-        );
-        assert!(
-            !dir.path().join("world-lock.json").exists(),
-            "the lock must not land beside the authored world"
+        let lock = crate::project::tree()
+            .expect("the test opened a project")
+            .cook_lock_path();
+        assert!(lock.exists(), "the lock is written");
+        assert_eq!(
+            lock.parent(),
+            Some(build_root.as_path()),
+            "the lock lands under the build root, not beside the authored file"
         );
     }
 }

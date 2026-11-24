@@ -27,6 +27,7 @@ pub mod rows;
 pub mod stored;
 pub mod system;
 pub mod user;
+mod values;
 
 pub use binding::{SettingField, SettingGroup};
 pub use key::{SettingKey, SettingKind};
@@ -37,6 +38,7 @@ pub use resolve::{
 };
 pub use stored::{SettingsRevision, StoredSettings};
 pub use user::{GraphicsApiTrial, UserGraphicsSettings};
+pub use values::SettingValues;
 
 /// Setting rows disabled at runtime (e.g. `show_fps` while "Display
 /// performance stats" is off), published by the settings system whenever

@@ -57,12 +57,8 @@ impl CullReadback for DxContext {
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
 
-        // No barrier either side of the copy. Buffers decay to COMMON when the
-        // submission that promoted them retires, so by this one-shot list the
-        // status buffer is COMMON however the frame's cull left it, and
-        // `CopyBufferRegion` promotes it to COPY_SOURCE implicitly. Declaring a
-        // transition out of the cull's UNORDERED_ACCESS would name a state the
-        // resource is no longer in.
+        // No barriers: the status buffer has decayed to COMMON by this one-shot
+        // list, and the copy promotes it implicitly.
         // SAFETY: the command list is in the recording state, and every resource these commands
         // name is live for the call.
         one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {

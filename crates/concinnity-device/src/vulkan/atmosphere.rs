@@ -963,6 +963,26 @@ fn cube_barrier(
         })
 }
 
+impl AtmosphereState {
+    // What the transparent pass hazes through in frame slot `frame_idx`, once a
+    // frame carries the atmosphere's inputs: the slot's constant block, the
+    // two tables and the aerial volume, which rest in `GENERAL`.
+    pub(in crate::vulkan) fn transparent_air(
+        &self,
+        frame_idx: usize,
+    ) -> Option<super::transparent::AirWire> {
+        self.params?;
+        Some(super::transparent::AirWire {
+            block: self.params_ubos.get(frame_idx)?.buffer(),
+            transmittance: self.tables[TRANSMITTANCE].view,
+            multiscatter: self.tables[MULTISCATTER].view,
+            aerial: self.tables[AERIAL].view,
+            layout: vk::ImageLayout::GENERAL,
+            sampler: self.sampler.handle(),
+        })
+    }
+}
+
 impl VkContext {
     // This frame's atmosphere constants for `view`, written into the frame
     // slot's ring.

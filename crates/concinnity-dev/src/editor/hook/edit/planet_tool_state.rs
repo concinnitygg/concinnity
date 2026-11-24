@@ -6,7 +6,7 @@ use concinnity_engine::environment::planet::{GeoPosition, GroundPick};
 
 use crate::editor::planet_tools::ring::RING_POINTS;
 use crate::editor::planet_tools::stroke::Spacer;
-use crate::editor::planet_tools::{Setting, Tool, Tools};
+use crate::editor::planet_tools::{Tool, Tools};
 
 /// A drag laying points for `tool`.
 #[derive(Debug, Clone, Copy)]
@@ -26,7 +26,6 @@ pub(in crate::editor::hook) struct PlanetToolState {
     pub(in crate::editor::hook) stroke: Option<Stroke>,
     /// The points the stroke laid this frame, its storage kept between frames.
     pub(in crate::editor::hook) points: Vec<GeoPosition>,
-    pub(in crate::editor::hook) sliding: Option<Setting>,
 }
 
 impl Default for PlanetToolState {
@@ -38,7 +37,6 @@ impl Default for PlanetToolState {
             inner: None,
             stroke: None,
             points: Vec::new(),
-            sliding: None,
         }
     }
 }
@@ -46,7 +44,7 @@ impl Default for PlanetToolState {
 impl PlanetToolState {
     /// Whether a drag of the tool's is under way.
     pub(in crate::editor::hook) fn busy(&self) -> bool {
-        self.stroke.is_some() || self.sliding.is_some()
+        self.stroke.is_some()
     }
 
     /// Put the tool down, ending any stroke. The brush is kept.
@@ -54,7 +52,6 @@ impl PlanetToolState {
         self.tools.active = None;
         self.hover = None;
         self.stroke = None;
-        self.sliding = None;
     }
 }
 
@@ -67,7 +64,10 @@ mod tests {
         let mut s = PlanetToolState::default();
         s.tools.toggle(Tool::Lower);
         s.tools.brush.radius = 40.0;
-        s.sliding = Some(Setting::Radius);
+        s.stroke = Some(Stroke {
+            tool: Tool::Lower,
+            spacer: Spacer::new(1.0, 1.0),
+        });
         assert!(s.busy());
         s.put_down();
         assert!(!s.busy());

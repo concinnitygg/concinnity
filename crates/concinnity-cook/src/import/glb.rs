@@ -15,7 +15,6 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
 use concinnity_engine::simulation::animation::skeleton::JointPose;
 use concinnity_engine::transform::euler_yxz_from_quat;
-use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -93,8 +92,7 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
 }
 
 /// Parse the `.glb` or `.gltf` an authored `source` names, with every buffer
-/// resolved. A bare `source` filename is searched for under `assets_dir` first;
-/// a path with a directory component is read as written. Shared by the skinned
+/// resolved, read under `root`. Shared by the skinned
 /// and static importers; the desugar pass uses this directly so it can memoize
 /// one document across many primitive/material/image lookups.
 ///
@@ -102,8 +100,8 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
 ///
 /// Returns an error if the file cannot be read, is not a valid glTF, or a
 /// buffer cannot be resolved.
-pub fn parse_glb(source: &str, assets_dir: Option<&Path>) -> Result<GltfDoc, String> {
-    GltfDoc::parse_file(&resolve_source(source, assets_dir))
+pub fn parse_glb(source: &str, root: Option<&Path>) -> Result<GltfDoc, String> {
+    GltfDoc::parse_file(&resolve_source(source, root))
 }
 
 // Import the indexed primitive (flattened across glTF meshes in declaration
@@ -286,13 +284,9 @@ pub(crate) fn split_into_u16_chunks(
     chunks
 }
 
-// Resolve a `SkinnedMesh.source` to an on-disk path against the build's asset
-// search root. A bare filename (no directory component) is searched for under
-// that root (the same resolution `ColorLut` and `EnvironmentMap` sources use)
-// while a path with a directory component is taken as-is, so a relative or
-// absolute path still works for local test worlds.
-pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> std::path::PathBuf {
-    resolve_source_path(source, assets_dir)
+// Resolve a model `source` to an on-disk path against the build's content root.
+pub(crate) fn resolve_source(source: &str, root: Option<&Path>) -> std::path::PathBuf {
+    concinnity_host::store::source::resolve(source, root)
 }
 
 // A skeleton reordered into parents-before-children order, plus the lookup
@@ -2074,32 +2068,23 @@ mod tests {
     }
 
     #[test]
-    fn resolve_source_keeps_paths_with_a_directory_component() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let assets = Some(dir.path());
-        assert_eq!(resolve_source("sub/f.glb", assets), Path::new("sub/f.glb"));
-        assert_eq!(resolve_source("./f.glb", assets), Path::new("./f.glb"));
+    fn resolve_source_joins_a_relative_path_onto_the_root() {
+        let root = Path::new("/p");
         assert_eq!(
-            resolve_source("/abs/f.glb", assets),
+            resolve_source("sub/f.glb", Some(root)),
+            root.join("sub/f.glb")
+        );
+        assert_eq!(resolve_source("f.glb", Some(root)), root.join("f.glb"));
+        assert_eq!(
+            resolve_source("/abs/f.glb", Some(root)),
             Path::new("/abs/f.glb")
         );
     }
 
+    // With no root there is nowhere to anchor a relative path, so it comes back
+    // untouched rather than joined onto a guessed directory.
     #[test]
-    fn resolve_source_anchors_a_bare_filename_under_the_assets_dir() {
-        // Nothing by this name exists to be found, so the fallback is the
-        // asset search root joined with the filename.
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(
-            resolve_source("cn_test_no_such_model.glb", Some(dir.path())),
-            dir.path().join("cn_test_no_such_model.glb")
-        );
-    }
-
-    // With no asset search root there is nowhere to anchor a bare filename, so
-    // it comes back untouched rather than joined onto a guessed directory.
-    #[test]
-    fn resolve_source_without_an_assets_dir_returns_the_bare_name() {
+    fn resolve_source_without_a_root_returns_the_path() {
         assert_eq!(
             resolve_source("cn_test_no_such_model.glb", None),
             Path::new("cn_test_no_such_model.glb")

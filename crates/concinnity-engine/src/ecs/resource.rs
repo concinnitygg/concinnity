@@ -1,10 +1,5 @@
-// Type-keyed singleton store: each type has at most one instance, fetched by
-// type. The home for engine-wide singletons (frame input, the render backend,
-// the profiler) that would otherwise be faked as one-element collections.
-//
-// Values are required to be `Send` so the world that owns the store can move
-// to a simulation thread. Thread-affine state (a GPU backend) is stored behind
-// a handle that only lets its own thread reach it.
+// Type-keyed singleton store. Values must be `Send` so the world can move
+// threads; thread-affine state sits behind a handle only its thread can reach.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;

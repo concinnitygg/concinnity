@@ -1,151 +1,91 @@
-//! The editor's add / edit form, in its own floating panel (separate from the
-//! Assets browse panel, which stays on its list while this is open). Spawned by
-//! clicking an asset in the browse list (or picking a type from the "+" picker):
-//! a draggable title bar ("Edit `<type>`" / "New `<type>`") with an "X" close button
-//! in its top-right corner, then a header row with the asset's editable NAME as a
-//! large heading and the Apply button pinned to the panel's top-right, then the
-//! scrollable arg-field area. Like the rest of the editor HUD it is plain
-//! `Sprite` / `TextLabel` / `TextInput` components at reserved ids driven each
-//! frame by the hook; the field model itself lives in `form.rs` and the hook owns
-//! all state.
-//!
-//! The field area renders a scrolling window over ALL of the type's fields into
-//! a fixed pool of `form::FIELD_POOL` control slots: visible slot `r` shows
-//! logical field `form_scroll + r`, and hit-test actions carry the LOGICAL index.
-//! An enum / ref field with a large variant set opens a floating value dropdown
-//! below the field (its own row pool here, so it can coexist with the Assets
-//! panel's combo).
+//! The editor's add / edit form, in its own floating panel beside the panel it
+//! opened from: the asset's editable name and the Apply button, the override
+//! summary of a template-derived asset, a status line, and a scrolling column
+//! of the type's arg fields and extra rows. The field model is `form.rs` and
+//! the hook owns all state; this module builds the widgets, rebuilds the rows
+//! when the fields change shape, and shows the hook's model in them.
 
-use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::components::TextAlign;
+use concinnity_engine::components::{
+    Binding, Button, Checkbox, Layout, LayoutChild, LayoutDirection, LayoutSize, Menu, Sprite,
+    TextAlign, TextField, TextLabel, UiEvent, UiItem, UiState, UiValue,
+};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
-use super::form_extras::{self, ExtraRow};
+use super::form_extras::{ExtraControl, ExtraRow};
 use super::registry::PanelKey;
-use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::overrides::FieldOrigin;
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::ui::build::{emit, fill, fit, fixed};
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
-// An enum / ref field with this many variants or fewer cycles in place on click
-// (fast for small sets); more than this opens a floating value dropdown anchored
-// below the field (a long list is tedious to cycle through). A reference field's
-// count includes its `(none)` option.
+// An enum / ref field with this many variants or fewer cycles in place on
+// click; more opens a menu of them under the field. A reference field's count
+// includes its `(none)` option.
 pub(crate) const CYCLE_MAX: usize = 5;
 
-// Visible rows in an open field-value dropdown before it scrolls.
-pub(crate) const MAX_DROP_ROWS: usize = 8;
-// A field-value dropdown option row's height.
-const DROP_ROW_H: f32 = 28.0;
-// The most options an override / entity menu holds (Revert-all, Apply-all,
-// Materialize, Minimize).
-pub(crate) const MAX_OVR_ROWS: usize = 4;
-const OVR_ROW_H: f32 = 26.0;
-const OVR_MENU_W: f32 = 340.0;
-
-// Background, title, buttons, per-slot chrome, then the floating overlays
-// (scrollbar, value dropdown, override menu) which must sit above the slot
-// chrome; among labels the dropdown's option captions come last so they draw
-// above the slot captions the dropdown floats over.
-//
-// Per slot (`form::FIELD_POOL_MAX` of each): `form_row_label(r)` is the caption
-// of visible slot `r`; `form_input(r)` its text control; `form_toggle_bg(r)` its
-// checkbox / cycle-button / array-add background; `form_swatch(r)` its color
-// swatch / array-remove button; `form_enum_label(r)` its enum-value /
-// array-count caption. A template-derived asset adds override chrome: a per-slot
-// accent bar + action button on overridden rows, a header summary chip +
-// entity-menu button, and a floating Revert / Apply menu. The name heading is a
-// real editable TextInput drawn a step larger.
-hud_ids! {
-    base: panel_base(PanelKey::Edit);
-    sprites: [
-        pub(crate) EDIT_BG,
-        pub(crate) CLOSE_BG,
-        pub(crate) APPLY_BG,
-        pub(crate) OVR_CHIP_BG,
-        pub(crate) ENT_BTN_BG,
-        pub(crate) form_toggle_bg[form::FIELD_POOL_MAX],
-        pub(crate) form_swatch[form::FIELD_POOL_MAX],
-        pub(crate) ovr_bar[form::FIELD_POOL_MAX],
-        pub(crate) ovr_btn_bg[form::FIELD_POOL_MAX],
-        pub(crate) FORM_TRACK,
-        pub(crate) FORM_THUMB,
-        pub(crate) DROP_BG,
-        pub(crate) drop_row_bg[MAX_DROP_ROWS],
-        pub(crate) DROP_TRACK,
-        pub(crate) DROP_THUMB,
-        pub(crate) OVR_MENU_BG,
-        pub(crate) ovr_menu_row_bg[MAX_OVR_ROWS],
-    ];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        pub(crate) APPLY_LABEL,
-        pub(crate) FORM_STATUS,
-        pub(crate) OVR_CHIP_LABEL,
-        pub(crate) ENT_BTN_LABEL,
-        pub(crate) form_row_label[form::FIELD_POOL_MAX],
-        pub(crate) form_enum_label[form::FIELD_POOL_MAX],
-        pub(crate) ovr_btn_label[form::FIELD_POOL_MAX],
-        pub(crate) drop_row_label[MAX_DROP_ROWS],
-        pub(crate) ovr_menu_row_label[MAX_OVR_ROWS],
-    ];
-    fields: [pub(crate) NAME_INPUT = "name", pub(crate) form_input[form::FIELD_POOL_MAX] = ""];
-}
-
-// Which of the form's inputs holds keyboard focus (re-asserted each frame so the
-// opening click cannot blur it; only the focused input re-asserts, so N text
-// fields do not fight).
+// Which of the form's inputs holds keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FormFocus {
     Name,
     Field(usize),
 }
 
-// Geometry, in window pixels. A wider column than the Assets panel so field
-// names and values read comfortably; every rect derives from the panel origin
-// `o` (the title bar's top-left), so dragging the title bar moves the panel.
 pub(crate) const EDIT_W: f32 = 480.0;
-const PAD: f32 = 10.0;
 const GAP: f32 = 8.0;
-// The header row: the name heading and the Apply button.
-const NAME_H: f32 = 34.0;
+const NAME_H: f32 = 30.0;
 const BTN_W: f32 = 84.0;
-// The validation status line reserved under the header row.
 const STATUS_H: f32 = 22.0;
-// One arg-field row; the caption column on its left.
-const FIELD_H: f32 = 34.0;
-const LABEL_COL: f32 = 190.0;
-// Left inset per nesting level for a flattened nested (dotted-path) leaf caption.
+const FIELD_H: f32 = 32.0;
+const LABEL_COL: f32 = 180.0;
+// Left inset per nesting level for a flattened nested (dotted-path) leaf.
 const NEST_INDENT: f32 = 10.0;
-const SCROLLBAR_W: f32 = 5.0;
-// The name heading draws larger than the body text.
-const NAME_SCALE: f32 = 1.05;
+const BAR_W: f32 = 3.0;
+const SMALL_BTN: f32 = 26.0;
+const SWATCH_W: f32 = 26.0;
+// Space between the rows of the scrolling column.
+const ROW_GAP: f32 = 2.0;
+// A heading or note row's caption runs the width of the column, short of the
+// panel's padding and the scrollbar.
+const EXTRA_LABEL_W: f32 = EDIT_W - 2.0 * crate::editor::ui::build::BODY_PAD - BAR_W - 16.0;
 
-const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
-const BTN_TINT_DISABLED: [f32; 4] = [0.20, 0.24, 0.30, 1.0];
-const CYCLE_TINT: [f32; 4] = theme::BUTTON_TINT;
-const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 0.0];
-const OPTION_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
-const OPTION_TINT_SELECTED: [f32; 4] = theme::SELECTED_TINT;
-const DROP_BG_TINT: [f32; 4] = [0.09, 0.09, 0.12, 1.0];
-const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
-const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
-const CHECK_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
-const CHECK_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
-const ADD_BTN_TINT: [f32; 4] = [0.24, 0.52, 0.32, 1.0];
-const REMOVE_BTN_TINT: [f32; 4] = [0.52, 0.26, 0.26, 1.0];
-const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
-const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
-const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
-// Override chrome: the accent marks an overridden row; instance-only fields
-// (no template counterpart) read dimmer.
 const OVERRIDE_LABEL: [f32; 3] = [0.62, 0.76, 1.0];
+const OVERRIDE_TINT: [f32; 4] = [0.62, 0.76, 1.0, 1.0];
+// Instance-only fields (no template counterpart) mark dimmer.
 const INSTANCE_ONLY_TINT: [f32; 4] = [0.55, 0.58, 0.68, 1.0];
+const NO_SWATCH: [f32; 4] = [0.15, 0.15, 0.18, 1.0];
+
+// The state the panel shows, and the events its controls send.
+const TITLE: &str = "editor.form.title";
+const APPLY_TEXT: &str = "editor.form.apply_text";
+const STATUS: &str = "editor.form.status";
+const CHIP: &str = "editor.form.chip";
+const MENU_OPEN: &str = "editor.form.menu_open";
+const MENU_ITEMS: &str = "editor.form.menu_items";
+const APPLY: &str = "editor.form.apply";
+const JUMP: &str = "editor.form.jump";
+const ENTITY: &str = "editor.form.entity";
+const MENU_PICK: &str = "editor.form.menu_pick";
+const CHOICE: &str = "editor.form.choice";
+const ADD: &str = "editor.form.add";
+const REMOVE: &str = "editor.form.remove";
+const EXPAND: &str = "editor.form.expand";
+const OVERRIDE: &str = "editor.form.override";
+const EXTRA: &str = "editor.form.extra";
+// Each checkbox sends its own event, the field's index or the extra row's id
+// after the prefix: a checkbox's event carries its new value, not its row.
+const CHECK: &str = "editor.form.check.";
+const EXTRA_CHECK: &str = "editor.form.extra_check.";
+
+// The panel's slots.
+const NAME_SLOT: usize = 0;
+const APPLY_SLOT: usize = 1;
+const OVERRIDES_SLOT: usize = 2;
+const STATUS_SLOT: usize = 3;
+const ROWS_SLOT: usize = 4;
+const MENU_SLOT: usize = 5;
 
 // Where the panel sits until the user drags it: to the left of the Assets
 // panel's default anchor, below the top bar.
@@ -156,253 +96,254 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     ]
 }
 
-// The chrome height around the field band (title bar + header row + status line
-// + pads); the field rows stack below it.
-const CHROME_H: f32 = widget::TITLE_H + PAD + NAME_H + 4.0 + STATUS_H + PAD;
-
-fn panel_height(rows: usize) -> f32 {
-    CHROME_H + rows as f32 * FIELD_H
-}
-
-// The default (minimum) on-screen field slots: the field count capped at the
-// default window.
-fn visible_rows(n_fields: usize) -> usize {
-    n_fields.clamp(1, form::FIELD_POOL)
-}
-
-// The number of field slots that fit panel height `h`, capped at the pool.
-pub(crate) fn rows_for_height(h: f32) -> usize {
-    usize::saturating_from(((h - CHROME_H) / FIELD_H).floor()).clamp(1, form::FIELD_POOL_MAX)
-}
-
-// The panel footprint for `n_fields` total fields (the field area tracks the
-// count, capped at the default window; a wider form scrolls). Origin-independent;
-// the hook's drag clamp uses this, and it is the minimum resize size.
-pub(crate) fn size(n_fields: usize) -> [f32; 2] {
-    [EDIT_W, panel_height(visible_rows(n_fields))]
-}
-
-// The tallest the panel resizes to for a form of `n_fields`: its fields shown in
-// full, capped at the injected pool. Width is unbounded (capped by the screen).
-pub(crate) fn max_size(n_fields: usize) -> [f32; 2] {
+// The panel's size for a form of `rows` fields and extra rows: all of them, up
+// to the default window; a longer form scrolls.
+pub(crate) fn size(rows: usize) -> [f32; 2] {
+    let shown = rows.clamp(1, form::FIELD_POOL);
     [
-        f32::INFINITY,
-        panel_height(n_fields.clamp(1, form::FIELD_POOL_MAX)),
+        EDIT_W,
+        panel_height(NAME_H + GAP + STATUS_H + shown as f32 * FIELD_H),
     ]
 }
 
-// The "X" close button, a square flush in the title bar's top-right corner. The
-// hook checks this before the title-bar drag, so clicking the X closes the form
-// rather than starting a drag.
-pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    widget::close_rect(widget::title_rect(o, w))
+// What the user asked of the form. Field actions carry the field's index,
+// extra-row actions the row's id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FormAction {
+    // Toggle the bool arg field `i`.
+    ToggleField(usize),
+    // Advance the enum / ref arg field `i` to its next variant (small sets).
+    CycleField(usize),
+    // Open (or, if already open, close) the value menu for field `i`.
+    OpenFieldDropdown(usize),
+    // Pick option `i` from the open field-value menu.
+    PickFieldOption(usize),
+    // Press the type's extra row with this id.
+    PressExtra(usize),
+    // Append / drop the last element of array arg field `i`.
+    AddArrayElement(usize),
+    RemoveArrayElement(usize),
+    // Expand / collapse the per-element leaves of non-color vector field `i`.
+    ToggleVecExpand(usize),
+    // Open (or close) the override menu of the marked field `i`.
+    OpenOverrideMenu(usize),
+    // Pick option `i` from the open per-field override menu.
+    PickOverrideOption(usize),
+    // Open (or close) the entity-level override menu in the header.
+    OpenEntityMenu,
+    // Pick option `i` from the open entity-level menu.
+    PickEntityOption(usize),
+    // The override summary: scroll to the next overridden field.
+    JumpOverride,
+    // The Apply / Add button: validate + commit.
+    Confirm,
+    // Close the panel, discarding the form.
+    Close,
 }
 
-// The header row under the title bar: name heading + the pinned Apply button.
-pub(crate) fn name_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + PAD,
-        widget::header_y(o, PAD),
-        w - 2.0 * PAD - (BTN_W + GAP),
-        NAME_H,
-    ]
-}
-pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - BTN_W,
-        widget::header_y(o, PAD),
-        BTN_W,
-        NAME_H,
-    ]
+// Which menu the form has open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FormMenu {
+    // The value menu of field `i`.
+    Field(usize),
+    // The override menu of field `i`.
+    Override(usize),
+    // The entity-level override menu.
+    Entity,
 }
 
-// Where the scrollable field area begins (below the header + status line).
-fn fields_top(o: [f32; 2]) -> f32 {
-    widget::header_y(o, PAD) + NAME_H + 4.0 + STATUS_H
+// The index after `prefix` in an event's name.
+fn suffix(name: &str, prefix: &str) -> Option<usize> {
+    name.strip_prefix(prefix)?.parse().ok()
 }
 
-// The full-width rect of visible field slot `r` at the effective width `w`.
-fn field_row_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    [o[0], fields_top(o) + r as f32 * FIELD_H, w, FIELD_H]
-}
-// The control (text field / checkbox area) on the right of slot `r`; it widens
-// with the panel while the caption column stays fixed.
-pub(crate) fn form_control_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    let row = field_row_rect(o, w, r);
-    [
-        row[0] + LABEL_COL,
-        row[1] + 3.0,
-        w - LABEL_COL - PAD - 2.0,
-        FIELD_H - 8.0,
-    ]
-}
-// The checkbox box for a bool field on slot `r`.
-pub(crate) fn form_toggle_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    let c = form_control_rect(o, w, r);
-    let s = FIELD_H - 12.0;
-    [c[0], c[1], s, s]
-}
-// The `[+]` add and `[-]` remove buttons of an array header on slot `r`.
-fn array_add_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    let c = form_control_rect(o, w, r);
-    let s = FIELD_H - 12.0;
-    [c[0] + c[2] - s, c[1], s, s]
-}
-fn array_remove_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    let a = array_add_rect(o, w, r);
-    [a[0] - a[2] - 4.0, a[1], a[2], a[3]]
-}
-
-// An open value dropdown for the enum / ref field on slot `r`: it floats
-// directly below that field's control, aligned to it.
-fn field_option_rect(o: [f32; 2], w: f32, slot: usize, r: usize) -> [f32; 4] {
-    let c = form_control_rect(o, w, slot);
-    [c[0], c[1] + c[3] + r as f32 * DROP_ROW_H, c[2], DROP_ROW_H]
-}
-// The dropdown's opaque backing. Its height is rounded out to a field-row
-// boundary: an overlay whose edge lands mid-row leaves that row's control half
-// drawn, which reads as the two clashing rather than as one sitting over the
-// other.
-fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f32; 4] {
-    let c = form_control_rect(o, w, slot);
-    let top = c[1] + c[3];
-    let h = shown as f32 * DROP_ROW_H + 4.0;
-    let rows = ((top + h - fields_top(o)) / FIELD_H).ceil();
-    [
-        c[0],
-        top,
-        c[2],
-        (fields_top(o) + rows * FIELD_H - top).max(h),
-    ]
+// The action a form event asks for, if `event` is one: a choice resolved
+// against `fields`, a menu pick against the menu that is open.
+pub(crate) fn action(
+    event: &UiEvent,
+    fields: &[FormField],
+    menu: Option<FormMenu>,
+) -> Option<FormAction> {
+    let name = event.name.as_str();
+    if let Some(j) = suffix(name, CHECK) {
+        return Some(FormAction::ToggleField(j));
+    }
+    if let Some(id) = suffix(name, EXTRA_CHECK) {
+        return Some(FormAction::PressExtra(id));
+    }
+    match name {
+        APPLY => return Some(FormAction::Confirm),
+        JUMP => return Some(FormAction::JumpOverride),
+        ENTITY => return Some(FormAction::OpenEntityMenu),
+        _ => {}
+    }
+    let i = match event.value {
+        Some(UiValue::Int(i)) => usize::try_from(i).ok()?,
+        _ => return None,
+    };
+    Some(match name {
+        CHOICE => {
+            let field = fields.get(i)?;
+            if field.variants.len() <= CYCLE_MAX {
+                FormAction::CycleField(i)
+            } else {
+                FormAction::OpenFieldDropdown(i)
+            }
+        }
+        ADD => FormAction::AddArrayElement(i),
+        REMOVE => FormAction::RemoveArrayElement(i),
+        EXPAND => FormAction::ToggleVecExpand(i),
+        OVERRIDE => FormAction::OpenOverrideMenu(i),
+        EXTRA => FormAction::PressExtra(i),
+        MENU_PICK => match menu? {
+            FormMenu::Field(_) => FormAction::PickFieldOption(i),
+            FormMenu::Override(_) => FormAction::PickOverrideOption(i),
+            FormMenu::Entity => FormAction::PickEntityOption(i),
+        },
+        _ => return None,
+    })
 }
 
-// How many slots are on screen at effective size `s`: the fields and the
-// type's extra rows, capped at the height-derived window.
-fn visible_field_count(view: &FormView<'_>, s: [f32; 2]) -> usize {
-    view.row_count().min(rows_for_height(s[1]))
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let name = ui.text_field(TextField {
+        placeholder: "name".to_string(),
+        height: NAME_H,
+        scale: 1.05 * theme::TEXT_SCALE,
+        ..Default::default()
+    })?;
+    let name_id = name.item?.id();
+    let apply = ui.button_with(
+        Button {
+            label: "Add".to_string(),
+            text_binding: Some(Binding::State(APPLY_TEXT.to_string())),
+            action: Some(emit(APPLY, None)),
+            ..Default::default()
+        },
+        [BTN_W, NAME_H],
+    )?;
+    let apply_id = apply.item?.id();
+    let header = ui.row(vec![name, apply], NAME_H)?;
+    let chip = ui.button_with(
+        Button {
+            text_binding: Some(Binding::State(CHIP.to_string())),
+            action: Some(emit(JUMP, None)),
+            ..Default::default()
+        },
+        [0.0, SMALL_BTN],
+    )?;
+    let chip = LayoutChild {
+        width: LayoutSize::Fill(1.0),
+        ..chip
+    };
+    let entity = ui.button("...", ENTITY, None, [SMALL_BTN * 1.5, SMALL_BTN])?;
+    let overrides = ui.stack(LayoutDirection::Row, vec![chip, entity], 4.0, 0.0)?;
+    let overrides_row = LayoutChild {
+        height: LayoutSize::Fixed(SMALL_BTN),
+        ..fill(overrides)
+    };
+    let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
+    let status_id = status.item?.id();
+    let status = ui.row(vec![status], STATUS_H)?;
+    let rows = ui.scroll_column(Vec::new(), ROW_GAP)?;
+    let menu = ui.menu(Menu {
+        open: Some(Binding::State(MENU_OPEN.to_string())),
+        items: MENU_ITEMS.to_string(),
+        on_pick: MENU_PICK.to_string(),
+        width: 300.0,
+        ..Default::default()
+    })?;
+    let spec = PanelSpec {
+        key: PanelKey::Edit,
+        title: "New asset",
+        title_state: Some(TITLE),
+        size: size(form::FIELD_POOL),
+        min_size: Some(size(1)),
+    };
+    let body = vec![header, overrides_row, status, fill(rows)];
+    let mut panel = ui.panel(&spec, body)?;
+    panel.slots = vec![name_id, apply_id, overrides, status_id, rows, menu];
+    Some(panel)
 }
 
-// The rects of slot `r`, for an extra row drawn into it.
-fn extra_slot(o: [f32; 2], w: f32, r: usize) -> form_extras::Slot {
-    form_extras::Slot {
-        row: field_row_rect(o, w, r),
-        control: form_control_rect(o, w, r),
-        toggle: form_toggle_rect(o, w, r),
+// The ids of what one field's row holds, for the parts the form changes as it
+// runs.
+#[derive(Debug, Clone, Default)]
+struct FieldRow {
+    text: Option<AssetId>,
+    swatch: Option<AssetId>,
+    choice: Option<String>,
+    check: Option<String>,
+    bar: Option<AssetId>,
+    marker: Option<AssetId>,
+    // The control a value menu opens under.
+    anchor: Option<AssetId>,
+}
+
+// The ids and state names of an extra row's parts the form changes as it
+// runs: its caption, its control, and its detail.
+#[derive(Debug, Clone, Default)]
+struct ExtraRowIds {
+    caption: Option<AssetId>,
+    check: Option<(String, AssetId)>,
+    choice: Option<String>,
+    detail: Option<AssetId>,
+}
+
+// The rows built for one shape of the form.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ShownForm {
+    // The fields' derivation the rows were built for.
+    pub(crate) rev: u64,
+    // The form the rows were first built for, so rows rebuilt for the same
+    // form keep their scroll.
+    pub(crate) opened: u64,
+    fields: Vec<FieldRow>,
+    extras: Vec<ExtraRowIds>,
+    // The extra rows' shape: each row's id, control kind, and whether it draws
+    // a detail label.
+    extra_shape: Vec<ExtraShape>,
+}
+
+type ExtraShape = (usize, std::mem::Discriminant<ExtraControl>, bool);
+
+fn extra_shape(row: &ExtraRow) -> ExtraShape {
+    (
+        row.id,
+        std::mem::discriminant(&row.control),
+        // A check shows its detail as the checkbox's note, which takes new
+        // text in place; the other rows draw it as a label of their own.
+        row.detail.is_some() && !matches!(row.control, ExtraControl::Check { .. }),
+    )
+}
+
+impl ShownForm {
+    // Whether the extra rows still have the shape they were built for.
+    pub(crate) fn extras_match(&self, extras: &[ExtraRow]) -> bool {
+        self.extra_shape.len() == extras.len()
+            && self
+                .extra_shape
+                .iter()
+                .zip(extras)
+                .all(|(shape, row)| *shape == extra_shape(row))
     }
 }
 
-// The accent bar down an overridden row's left edge.
-fn ovr_bar_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    let row = field_row_rect(o, w, r);
-    [row[0] + 3.0, row[1] + 5.0, 3.0, FIELD_H - 10.0]
-}
-
-// The per-row override-menu button, tucked into the caption column's right
-// edge (never under a control, so a text field's opaque background cannot
-// cover it).
-fn ovr_btn_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
-    let row = field_row_rect(o, w, r);
-    let side = 16.0;
-    [
-        row[0] + LABEL_COL - side - 6.0,
-        row[1] + (FIELD_H - side) * 0.5,
-        side,
-        side,
-    ]
-}
-
-// The entity-menu button on the status line's right end.
-fn ent_btn_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - 18.0,
-        widget::header_y(o, PAD) + NAME_H + 4.0,
-        18.0,
-        18.0,
-    ]
-}
-
-// The "N overridden" summary chip to the entity button's left.
-fn ovr_chip_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    let ent = ent_btn_rect(o, w);
-    [ent[0] - GAP - 110.0, ent[1], 110.0, 18.0]
-}
-
-// One option row of the floating override / entity menu anchored at `anchor`
-// (a row button or the entity button), clamped inside the panel.
-fn ovr_menu_option_rect(o: [f32; 2], w: f32, anchor: [f32; 4], r: usize) -> [f32; 4] {
-    let menu_w = OVR_MENU_W.min(w - 2.0 * PAD);
-    let x = (anchor[0]).min(o[0] + w - PAD - menu_w).max(o[0] + PAD);
-    [
-        x,
-        anchor[1] + anchor[3] + 2.0 + r as f32 * OVR_ROW_H,
-        menu_w,
-        OVR_ROW_H,
-    ]
-}
-
-// The menu's opaque backing behind `shown` option rows.
-fn ovr_menu_backing(o: [f32; 2], w: f32, anchor: [f32; 4], shown: usize) -> [f32; 4] {
-    let first = ovr_menu_option_rect(o, w, anchor, 0);
-    [
-        first[0] - 2.0,
-        first[1] - 2.0,
-        first[2] + 4.0,
-        shown as f32 * OVR_ROW_H + 4.0,
-    ]
-}
-
-// Where the open override / entity menu anchors this frame, if any: the field
-// menu hangs off its row's button (gone when its row scrolls out), the entity
-// menu off the header button.
-fn ovr_menu_anchor(view: &FormView<'_>, o: [f32; 2], w: f32, window: usize) -> Option<[f32; 4]> {
-    let ovr = view.overrides.as_ref()?;
-    if let Some((field, _)) = ovr.field_menu {
-        let slot = field_slot(view, window, field)?;
-        return Some(ovr_btn_rect(o, w, slot));
-    }
-    ovr.entity_menu.is_some().then(|| ent_btn_rect(o, w))
-}
-
-// The open override / entity menu's option labels, if any.
-fn ovr_menu_options<'a>(view: &'a FormView<'_>) -> Option<&'a [String]> {
-    let ovr = view.overrides.as_ref()?;
-    if let Some((_, options)) = ovr.field_menu {
-        return Some(options);
-    }
-    ovr.entity_menu
-}
-
-// The slot showing logical field `j`, if it is inside the scroll window of
-// `window` rows.
-fn field_slot(view: &FormView<'_>, window: usize, j: usize) -> Option<usize> {
-    let scroll = view.form_scroll;
-    (j >= scroll && j < scroll + window).then(|| j - scroll)
-}
-
-// The element count of a vector field (0 for any other kind).
-fn vec_len(kind: FieldKind) -> usize {
-    match kind {
-        FieldKind::Vec { len, .. } => len,
-        _ => 0,
-    }
-}
-
-// Whether the non-color vector at logical field `j` is currently disclosed: its
-// element leaves (`key.0` ..) follow it directly in the field list, so the next
-// field carrying that prefix means it is expanded.
+// Whether the non-color vector at field `j` is disclosed: its element leaves
+// (`key.0` ..) follow it directly.
 fn vec_expanded(fields: &[FormField], j: usize) -> bool {
     let Some(field) = fields.get(j) else {
         return false;
     };
-    let prefix = format!("{}.", field.key);
-    fields
-        .get(j + 1)
-        .is_some_and(|next| next.key.starts_with(&prefix))
+    fields.get(j + 1).is_some_and(|next| {
+        next.key
+            .strip_prefix(field.key.as_str())
+            .is_some_and(|rest| rest.starts_with('.'))
+    })
 }
 
-// The display caption for a field: a disclosed vector element (`position.0`) reads
-// as its axis (x / y / z / w); every other field keeps its leaf name. An unset
-// leaf of a sparse type is tagged, since the value it shows is its default.
+// The display caption for a field: a disclosed vector element (`position.0`)
+// reads as its axis; every other field keeps its leaf name. An unset leaf of a
+// sparse type is tagged, since the value it shows is its default.
 fn field_caption(fields: &[FormField], field: &FormField) -> String {
     let caption = element_axis_label(fields, &field.key).unwrap_or_else(|| {
         field
@@ -419,8 +360,7 @@ fn field_caption(fields: &[FormField], field: &FormField) -> String {
     }
 }
 
-// The axis label for `key` when it is an element leaf of a non-color vector
-// (`parent.<idx>` with `parent` a non-color vector field), else `None`.
+// The axis label for `key` when it is an element leaf of a non-color vector.
 fn element_axis_label(fields: &[FormField], key: &str) -> Option<String> {
     let (parent, last) = key.rsplit_once('.')?;
     let idx: usize = last.parse().ok()?;
@@ -435,1642 +375,482 @@ fn element_axis_label(fields: &[FormField], key: &str) -> Option<String> {
 // index in a longer one, whose elements are not axes.
 fn axis_letter(i: usize, len: usize) -> String {
     match ["x", "y", "z", "w"].get(i) {
-        Some(axis) if len <= 4 => axis.to_string(),
+        Some(axis) if len <= 4 => (*axis).to_string(),
         _ => format!("[{i}]"),
     }
 }
 
-// A resolved form-panel click. Field actions carry the LOGICAL field index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FormAction {
-    // Focus the name heading, or arg text field `i`.
-    FocusName,
-    FocusField(usize),
-    // Toggle the bool arg field `i`.
-    ToggleField(usize),
-    // Advance the enum / ref arg field `i` to its next variant (small sets).
-    CycleField(usize),
-    // Open (or, if already open, close) the value dropdown for field `i`.
-    OpenFieldDropdown(usize),
-    // Pick option `i` from the open field-value dropdown.
-    PickFieldOption(usize),
-    // Press the type's extra row with this id.
-    PressExtra(usize),
-    // Append / drop the last element of array arg field `i`.
-    AddArrayElement(usize),
-    RemoveArrayElement(usize),
-    // Expand / collapse the disclosure of non-color vector arg field `i` (its
-    // per-element leaves).
-    ToggleVecExpand(usize),
-    // Open (or close) the override menu of the marked field `i`.
-    OpenOverrideMenu(usize),
-    // Pick option `i` from the open per-field override menu.
-    PickOverrideOption(usize),
-    // Open (or close) the entity-level override menu in the header.
-    OpenEntityMenu,
-    // Pick option `i` from the open entity-level menu.
-    PickEntityOption(usize),
-    // The header summary chip: scroll to the next overridden field.
-    JumpOverride,
-    // The Apply / Add button: validate + commit.
-    Confirm,
-    // The Cancel button: close the panel, discarding the form.
-    Close,
-    // Dismiss the open value dropdown without picking.
-    CloseOverlays,
-    // A click inside the panel that hits no control (swallowed).
-    Consume,
-}
-
-// Override state for a template-derived asset's form, borrowed from the
-// hook's per-tick data.
-pub(crate) struct OverridesView<'a> {
-    // Per-field origin, parallel to `form_fields`.
-    pub marks: &'a [FieldOrigin],
-    // How many fields diverge from the template.
-    pub count: usize,
-    // The open per-field menu: (logical field index, option labels).
-    pub field_menu: Option<(usize, &'a [String])>,
-    // The open entity-level menu's option labels.
-    pub entity_menu: Option<&'a [String]>,
-}
-
-// The per-frame data the hook hands to `place` / `hit_test`.
-pub(crate) struct FormView<'a> {
-    // The title-bar heading ("Edit Camera3D" / "New PointLight").
-    pub title: &'a str,
-    // Whether an existing entry is being edited (confirm says "Apply", and the
-    // hook highlights the entry's browse row) vs a new asset ("Add").
-    pub editing: bool,
-    // The editable arg fields; the panel renders a `form::FIELD_POOL` window.
-    pub form_fields: &'a [FormField],
-    // First visible field of the scroll window.
-    pub form_scroll: usize,
-    // Which input holds keyboard focus.
-    pub form_focus: FormFocus,
-    // The field whose value dropdown is open, and its scroll offset.
-    pub field_dropdown: Option<usize>,
-    pub field_dropdown_scroll: usize,
-    // A validation error from the last rejected commit.
-    pub form_error: Option<&'a str>,
-    // Per-field override state when the form edits a template-derived asset.
-    pub overrides: Option<OverridesView<'a>>,
-    // The type's rows after the fields.
-    pub extras: &'a [ExtraRow],
-    // Why confirming is unavailable right now, when it is.
-    pub blocked: Option<&'a str>,
-    pub mouse: [f32; 2],
-}
-
-impl FormView<'_> {
-    // The fields and the extra rows: what the scroll window runs over.
-    pub(crate) fn row_count(&self) -> usize {
-        self.form_fields.len() + self.extras.len()
-    }
-}
-
-// Whether the cursor is over the panel (for wheel-scrolling the field window).
-pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    point_in(mx, my, widget::outer_rect(o, s))
-}
-
-// Resolve a click against the open form panel at origin `o`, effective size `s`.
-// `None` means the click missed the panel (the caller lets it fall through).
-// Title-bar presses never reach this: the hook intercepts them first to drag.
-pub(crate) fn hit_test(
-    view: &FormView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<FormAction> {
-    let w = s[0];
-    let window = rows_for_height(s[1]);
-    // An open override / entity menu is modal over the panel: its option rows
-    // pick, anything else dismisses it.
-    if let (Some(anchor), Some(options)) =
-        (ovr_menu_anchor(view, o, w, window), ovr_menu_options(view))
-    {
-        let picking_field = view
-            .overrides
-            .as_ref()
-            .is_some_and(|ovr| ovr.field_menu.is_some());
-        for k in 0..options.len().min(MAX_OVR_ROWS) {
-            if point_in(mx, my, ovr_menu_option_rect(o, w, anchor, k)) {
-                return Some(if picking_field {
-                    FormAction::PickOverrideOption(k)
-                } else {
-                    FormAction::PickEntityOption(k)
-                });
-            }
-        }
-        return Some(FormAction::CloseOverlays);
-    }
-    // An open value dropdown is modal over the panel: its option rows pick,
-    // anything else dismisses it.
-    if let Some(open) = view.field_dropdown
-        && let Some(field) = view.form_fields.get(open)
-        && let Some(slot) = field_slot(view, window, open)
-    {
-        let total = field.variants.len();
-        let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
-        for r in 0..MAX_DROP_ROWS {
-            let idx = scroll + r;
-            if idx >= total {
-                break;
-            }
-            if point_in(mx, my, field_option_rect(o, w, slot, r)) {
-                return Some(FormAction::PickFieldOption(idx));
-            }
-        }
-        return Some(FormAction::CloseOverlays);
-    }
-
-    if !point_in(mx, my, widget::outer_rect(o, s)) {
-        return None;
-    }
-    // The "X" in the title bar closes the form. (The hook checks this before the
-    // title-bar drag; resolved here too so the pure hit test stays complete.)
-    if point_in(mx, my, close_rect(o, w)) {
-        return Some(FormAction::Close);
-    }
-    if point_in(mx, my, apply_rect(o, w)) {
-        return Some(FormAction::Confirm);
-    }
-    if point_in(mx, my, name_rect(o, w)) {
-        return Some(FormAction::FocusName);
-    }
-    // The override chrome of a template-derived asset: the entity-menu button,
-    // the summary chip, and each marked row's menu button (in the caption
-    // column, so it never contends with a control).
-    if let Some(ovr) = &view.overrides {
-        if point_in(mx, my, ent_btn_rect(o, w)) {
-            return Some(FormAction::OpenEntityMenu);
-        }
-        if ovr.count > 0 && point_in(mx, my, ovr_chip_rect(o, w)) {
-            return Some(FormAction::JumpOverride);
-        }
-        for r in 0..visible_field_count(view, s) {
-            let j = view.form_scroll + r;
-            let marked = ovr
-                .marks
-                .get(j)
-                .is_some_and(|m| *m != FieldOrigin::Inherited);
-            if marked && point_in(mx, my, ovr_btn_rect(o, w, r)) {
-                return Some(FormAction::OpenOverrideMenu(j));
-            }
-        }
-    }
-
-    // Arg field controls over the visible window: slot `r` is logical field
-    // `form_scroll + r`. A bool toggles, an enum cycles / opens a dropdown, an
-    // array grows / shrinks, a text field takes focus.
-    let scroll = view.form_scroll;
-    for r in 0..visible_field_count(view, s) {
-        let j = scroll + r;
-        let Some(f) = view.form_fields.get(j) else {
-            if let Some(row) = view.extras.get(j - view.form_fields.len())
-                && form_extras::hits(row, &extra_slot(o, w, r), mx, my)
-            {
-                return Some(FormAction::PressExtra(row.id));
-            }
-            continue;
-        };
-        match f.kind {
-            FieldKind::Bool => {
-                if point_in(mx, my, form_toggle_rect(o, w, r)) {
-                    return Some(FormAction::ToggleField(j));
-                }
-            }
-            FieldKind::Enum | FieldKind::Ref { .. } | FieldKind::Action { .. } => {
-                if point_in(mx, my, form_control_rect(o, w, r)) {
-                    // A small variant set cycles in place; a large one opens a
-                    // floating dropdown instead of forcing many clicks.
-                    if f.variants.len() > CYCLE_MAX {
-                        return Some(FormAction::OpenFieldDropdown(j));
-                    }
-                    return Some(FormAction::CycleField(j));
-                }
-            }
-            FieldKind::Array => {
-                if point_in(mx, my, array_add_rect(o, w, r)) {
-                    return Some(FormAction::AddArrayElement(j));
-                }
-                if point_in(mx, my, array_remove_rect(o, w, r)) {
-                    return Some(FormAction::RemoveArrayElement(j));
-                }
-            }
-            FieldKind::Vec { color: false, .. } => {
-                // The disclosure button toggles the per-element leaves.
-                if point_in(mx, my, form_control_rect(o, w, r)) {
-                    return Some(FormAction::ToggleVecExpand(j));
-                }
-            }
-            _ => {
-                if point_in(mx, my, form_control_rect(o, w, r)) {
-                    return Some(FormAction::FocusField(j));
-                }
-            }
-        }
-    }
-    // Empty panel space: swallow so it does not fall through to the world.
-    Some(FormAction::Consume)
-}
-
-// Position + show the panel's elements for this frame at origin `o`, effective
-// size `s`.
-pub(crate) fn place(world: &mut World, view: &FormView<'_>, o: [f32; 2], s: [f32; 2]) {
-    // Blank everything, then re-show what this frame needs.
-    ids().hide(world);
-
-    let w = s[0];
-    let window = rows_for_height(s[1]);
-    widget::place_panel(world, EDIT_BG, widget::outer_rect(o, s));
-    widget::place_heading(world, TITLE_LABEL, widget::title_rect(o, w), view.title);
-
-    // The "X" close button in the title bar's top-right corner (blends into the
-    // title bar until hovered; shared look across every panel).
-    let close_hover = point_in(view.mouse[0], view.mouse[1], close_rect(o, w));
-    widget::place_close(
-        world,
-        CLOSE_BG,
-        CLOSE_LABEL,
-        widget::title_rect(o, w),
-        close_hover,
-    );
-
-    // The header row: the asset-name heading (drawn larger) and the pinned Apply
-    // button at the panel's top right.
-    show_name_heading(world, o, w, view.form_focus == FormFocus::Name);
-    let apply_btn = apply_rect(o, w);
-    let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
-    let (tint, caption) = match (view.blocked.is_some(), hover) {
-        (true, _) => (BTN_TINT_DISABLED, LABEL_DIM),
-        (false, true) => (BTN_TINT_HOVER, LABEL_WHITE),
-        (false, false) => (BTN_TINT, LABEL_WHITE),
-    };
-    place_rounded(
-        world,
-        APPLY_BG,
-        apply_btn,
-        tint,
-        theme::CONTROL_RADIUS,
-        true,
-    );
-    let confirm = if view.editing { "Apply" } else { "Add" };
-    place_center_label(world, APPLY_LABEL, apply_btn, confirm, caption, true);
-
-    // A validation error, if the last commit was rejected, else why confirming
-    // is unavailable (a reserved line, so showing it never shifts the fields
-    // below).
-    let status = match (view.form_error, view.blocked) {
-        (Some(err), _) => Some((err, ERROR_LABEL)),
-        (None, Some(reason)) => Some((reason, LABEL_DIM)),
-        (None, None) => None,
-    };
-    if let Some((text, color)) = status {
-        widget::place_left_label(
-            world,
-            FORM_STATUS,
-            [o[0] + PAD, widget::header_y(o, PAD) + NAME_H + 6.0],
-            text,
-            color,
-            true,
-        );
-    }
-
-    // The arg fields over the visible window, drawn into the slot-indexed pool.
-    let scroll = view.form_scroll;
-    for r in 0..visible_field_count(view, s) {
-        let j = scroll + r;
-        let Some(field) = view.form_fields.get(j) else {
-            if let Some(row) = view.extras.get(j - view.form_fields.len()) {
-                let ids = form_extras::SlotIds {
-                    caption: form_row_label(r),
-                    control: form_toggle_bg(r),
-                    text: form_enum_label(r),
-                };
-                form_extras::place(world, row, &extra_slot(o, w, r), ids, view.mouse);
-            }
-            continue;
-        };
-        let row = field_row_rect(o, w, r);
-        // A nested (dotted-path) field shows its indented caption; a disclosed
-        // vector element reads as its axis (x / y / z / w).
-        let depth = field.key.matches('.').count();
-        let caption = field_caption(view.form_fields, field);
-        widget::place_left_label(
-            world,
-            form_row_label(r),
-            [
-                row[0] + PAD + depth as f32 * NEST_INDENT,
-                row[1] + FIELD_H * 0.5 - theme::TEXT_HALF,
-            ],
-            &caption,
-            LABEL,
-            true,
-        );
-        match field.kind {
-            FieldKind::Bool => {
-                let t = form_toggle_rect(o, w, r);
-                let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
-                place_rounded(world, form_toggle_bg(r), t, tint, 4.0, true);
-            }
-            FieldKind::Enum | FieldKind::Ref { .. } | FieldKind::Action { .. } => {
-                // A cycling button spanning the control, captioned with the
-                // current selection.
-                let c = form_control_rect(o, w, r);
-                let hover = point_in(view.mouse[0], view.mouse[1], c);
-                let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
-                place_rounded(
-                    world,
-                    form_toggle_bg(r),
-                    c,
-                    tint,
-                    theme::CONTROL_RADIUS,
-                    true,
-                );
-                let value = field
-                    .variants
-                    .get(field.variant_idx)
-                    .map_or("", String::as_str);
-                place_center_label(world, form_enum_label(r), c, value, LABEL, true);
-            }
-            FieldKind::Array => {
-                // A header for a variable-length array: its element count and a
-                // red `[-]` remove + green `[+]` add button.
-                let c = form_control_rect(o, w, r);
-                widget::place_left_label(
-                    world,
-                    form_enum_label(r),
-                    [c[0], c[1] + c[3] * 0.5 - theme::TEXT_HALF],
-                    &format!("({})", field.variant_idx),
-                    LABEL_DIM,
-                    true,
-                );
-                place_rounded(
-                    world,
-                    form_swatch(r),
-                    array_remove_rect(o, w, r),
-                    REMOVE_BTN_TINT,
-                    4.0,
-                    true,
-                );
-                place_rounded(
-                    world,
-                    form_toggle_bg(r),
-                    array_add_rect(o, w, r),
-                    ADD_BTN_TINT,
-                    4.0,
-                    true,
-                );
-            }
-            FieldKind::Vec { color: false, .. } => {
-                // A disclosure button spanning the control, captioned with the
-                // element count and a caret (`>` collapsed, `v` expanded). Clicking
-                // it toggles the per-element leaves below.
-                let c = form_control_rect(o, w, r);
-                let hover = point_in(view.mouse[0], view.mouse[1], c);
-                let tint = if hover { OPTION_TINT_HOVER } else { CYCLE_TINT };
-                place_rounded(
-                    world,
-                    form_toggle_bg(r),
-                    c,
-                    tint,
-                    theme::CONTROL_RADIUS,
-                    true,
-                );
-                let open = vec_expanded(view.form_fields, j);
-                let caption = format!("[{}] {}", vec_len(field.kind), if open { "v" } else { ">" });
-                widget::place_left_label(
-                    world,
-                    form_enum_label(r),
-                    [c[0] + 8.0, c[1] + c[3] * 0.5 - theme::TEXT_HALF],
-                    &caption,
-                    LABEL_DIM,
-                    true,
-                );
-            }
-            kind => {
-                let control = form_control_rect(o, w, r);
-                // A color vector reserves a right-hand strip for a live preview
-                // swatch and narrows its field to clear it. The swatch must sit
-                // OUTSIDE the field rect: a `TextInput`'s opaque background box
-                // is synthesized after every authored sprite (the swatch
-                // included), so a swatch drawn under the field would be painted
-                // over.
-                let swatch = matches!(kind, FieldKind::Vec { color: true, .. }).then(|| {
-                    let s = FIELD_H - 14.0;
-                    [
-                        control[0] + control[2] - s,
-                        control[1] + (control[3] - s) * 0.5,
-                        s,
-                        s,
-                    ]
-                });
-                let rect = match swatch {
-                    Some(sw) => [control[0], control[1], sw[0] - control[0] - 4.0, control[3]],
-                    None => control,
-                };
-                widget::show_field(
-                    world,
-                    form_input(r),
-                    rect,
-                    view.form_focus == FormFocus::Field(j),
-                );
-                if let Some(sw) = swatch {
-                    let rgb = swatch_rgb(&widget::field_text(world, form_input(r)));
-                    place_rounded(world, form_swatch(r), sw, rgb, 4.0, true);
-                }
-            }
-        }
-    }
-
-    // Override chrome for a template-derived asset: per-row accent bars +
-    // menu buttons, and the header summary chip + entity-menu button.
-    if let Some(ovr) = &view.overrides {
-        for r in 0..visible_field_count(view, s) {
-            let j = scroll + r;
-            let Some(mark) = ovr.marks.get(j) else {
-                break;
-            };
-            if *mark == FieldOrigin::Inherited {
-                continue;
-            }
-            let tint = match mark {
-                FieldOrigin::InstanceOnly => INSTANCE_ONLY_TINT,
-                _ => theme::ACCENT_TINT,
-            };
-            place_rounded(world, ovr_bar(r), ovr_bar_rect(o, w, r), tint, 1.5, true);
-            let btn = ovr_btn_rect(o, w, r);
-            let hover = point_in(view.mouse[0], view.mouse[1], btn);
-            let open_here = view
-                .overrides
-                .as_ref()
-                .and_then(|v| v.field_menu)
-                .is_some_and(|(f, _)| f == j);
-            let bg = if hover || open_here {
-                theme::HOVER_TINT
-            } else {
-                CYCLE_TINT
-            };
-            place_rounded(world, ovr_btn_bg(r), btn, bg, 4.0, true);
-            place_center_label(world, ovr_btn_label(r), btn, "*", OVERRIDE_LABEL, true);
-        }
-
-        let ent = ent_btn_rect(o, w);
-        let hover = point_in(view.mouse[0], view.mouse[1], ent);
-        let bg = if hover || ovr.entity_menu.is_some() {
-            theme::HOVER_TINT
-        } else {
-            CYCLE_TINT
-        };
-        place_rounded(world, ENT_BTN_BG, ent, bg, 4.0, true);
-        place_center_label(world, ENT_BTN_LABEL, ent, "...", LABEL, true);
-        if ovr.count > 0 {
-            let chip = ovr_chip_rect(o, w);
-            let hover = point_in(view.mouse[0], view.mouse[1], chip);
-            let bg = if hover { theme::HOVER_TINT } else { CYCLE_TINT };
-            place_rounded(world, OVR_CHIP_BG, chip, bg, 4.0, true);
-            let caption = format!("{} overridden", ovr.count);
-            place_center_label(world, OVR_CHIP_LABEL, chip, &caption, OVERRIDE_LABEL, true);
-        }
-    }
-
-    // A scrollbar down the field region's right edge when the form overflows the
-    // visible window.
-    layout_form_scrollbar(world, view.row_count(), scroll, o, w, window);
-
-    // The open value dropdown draws last so it floats over the slots below it.
-    if let Some(open) = view.field_dropdown {
-        layout_field_dropdown(world, view, o, w, window, open);
-    }
-
-    // The open override / entity menu draws over everything else.
-    if let (Some(anchor), Some(options)) =
-        (ovr_menu_anchor(view, o, w, window), ovr_menu_options(view))
-    {
-        let shown = options.len().min(MAX_OVR_ROWS);
-        place_rounded(
-            world,
-            OVR_MENU_BG,
-            ovr_menu_backing(o, w, anchor, shown),
-            DROP_BG_TINT,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        for (k, option) in options.iter().take(MAX_OVR_ROWS).enumerate() {
-            let rect = ovr_menu_option_rect(o, w, anchor, k);
-            let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-            let tint = if hovered {
-                OPTION_TINT_HOVER
-            } else {
-                OPTION_TINT
-            };
-            place_rounded(
-                world,
-                ovr_menu_row_bg(k),
-                theme::highlight_rect(rect),
-                tint,
-                theme::CONTROL_RADIUS,
-                true,
-            );
-            widget::place_left_label(
-                world,
-                ovr_menu_row_label(k),
-                [rect[0] + PAD, rect[1] + OVR_ROW_H * 0.5 - theme::TEXT_HALF],
-                option,
-                LABEL,
-                true,
-            );
-        }
-    }
-}
-
-// The name heading: the editable TextInput under the title bar, drawn larger
-// than the body text.
-fn show_name_heading(world: &mut World, o: [f32; 2], w: f32, focused: bool) {
-    widget::show_field(world, NAME_INPUT, name_rect(o, w), focused);
-    if let Some(t) = widget::input_mut(world, NAME_INPUT) {
-        t.scale = NAME_SCALE;
-    }
-}
-
-// The form's scrollbar thumb, sizing the visible window against the total field
-// count. Shown only when the form overflows the visible window of `window` rows.
-fn layout_form_scrollbar(
-    world: &mut World,
-    total: usize,
-    scroll: usize,
-    o: [f32; 2],
-    w: f32,
-    window: usize,
-) {
-    if total <= window {
-        return;
-    }
-    let region_top = fields_top(o);
-    let track_h = window as f32 * FIELD_H;
-    let track = [o[0] + w - SCROLLBAR_W, region_top, SCROLLBAR_W, track_h];
-    place_rounded(
-        world,
-        FORM_TRACK,
-        track,
-        TRACK_TINT,
-        SCROLLBAR_W * 0.5,
-        true,
-    );
-    let frac_visible = window as f32 / total as f32;
-    let thumb_h = (track_h * frac_visible).max(20.0);
-    let max_scroll = (total - window) as f32;
-    let t = if max_scroll > 0.0 {
-        scroll.min(total - window) as f32 / max_scroll
-    } else {
-        0.0
-    };
-    let thumb_y = region_top + t * (track_h - thumb_h);
-    place_rounded(
-        world,
-        FORM_THUMB,
-        [track[0], thumb_y, SCROLLBAR_W, thumb_h],
-        THUMB_TINT,
-        SCROLLBAR_W * 0.5,
-        true,
-    );
-}
-
-// The floating value dropdown for an open enum / ref field: an opaque backing
-// plus its option rows (the current selection highlighted) and, when it
-// overflows, its own thin scrollbar.
-fn layout_field_dropdown(
-    world: &mut World,
-    view: &FormView<'_>,
-    o: [f32; 2],
-    w: f32,
-    window: usize,
-    open: usize,
-) {
-    let Some(field) = view.form_fields.get(open) else {
-        return;
-    };
-    let Some(slot) = field_slot(view, window, open) else {
-        return;
-    };
-    let total = field.variants.len();
-    let scroll = view.field_dropdown_scroll.min(total.saturating_sub(1));
-    let shown = total.saturating_sub(scroll).clamp(1, MAX_DROP_ROWS);
-    place_rounded(
-        world,
-        DROP_BG,
-        field_dropdown_backing(o, w, slot, shown),
-        DROP_BG_TINT,
-        theme::CONTROL_RADIUS,
-        true,
-    );
-    for r in 0..MAX_DROP_ROWS {
-        let idx = scroll + r;
-        if idx >= total {
-            break;
-        }
-        let rect = field_option_rect(o, w, slot, r);
-        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        let tint = if hovered {
-            OPTION_TINT_HOVER
-        } else if idx == field.variant_idx {
-            OPTION_TINT_SELECTED
-        } else {
-            OPTION_TINT
-        };
-        place_rounded(
-            world,
-            drop_row_bg(r),
-            theme::highlight_rect(rect),
-            tint,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        widget::place_left_label(
-            world,
-            drop_row_label(r),
-            [rect[0] + PAD, rect[1] + DROP_ROW_H * 0.5 - theme::TEXT_HALF],
-            &field.variants[idx],
-            LABEL,
-            true,
-        );
-    }
-    if total > MAX_DROP_ROWS {
-        let back = field_dropdown_backing(o, w, slot, shown);
-        let track = [
-            back[0] + back[2] - SCROLLBAR_W,
-            back[1],
-            SCROLLBAR_W,
-            back[3],
-        ];
-        place_rounded(
-            world,
-            DROP_TRACK,
-            track,
-            TRACK_TINT,
-            SCROLLBAR_W * 0.5,
-            true,
-        );
-        let frac = MAX_DROP_ROWS as f32 / total as f32;
-        let thumb_h = (back[3] * frac).max(20.0);
-        let max_scroll = (total - MAX_DROP_ROWS) as f32;
-        let t = if max_scroll > 0.0 {
-            scroll as f32 / max_scroll
-        } else {
-            0.0
-        };
-        let thumb_y = back[1] + t * (back[3] - thumb_h);
-        place_rounded(
-            world,
-            DROP_THUMB,
-            [track[0], thumb_y, SCROLLBAR_W, thumb_h],
-            THUMB_TINT,
-            SCROLLBAR_W * 0.5,
-            true,
-        );
-    }
-}
-
-// Parse a color field's live text ("r, g, b" / "r, g, b, a") into an opaque RGB
-// tint for its preview swatch, clamped to the displayable 0..=1 range. Falls
-// back to a neutral dark swatch until three components parse.
-fn swatch_rgb(text: &str) -> [f32; 4] {
-    let nums: Vec<f32> = text
+// The color a color field's text describes: its first three numbers, clamped,
+// or a neutral placeholder while it holds fewer.
+pub(crate) fn swatch_rgb(text: &str) -> [f32; 4] {
+    let mut rgb = [0.0_f32; 3];
+    let mut n = 0;
+    for part in text
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<f32>().ok())
-        .take(3)
-        .collect();
-    if nums.len() < 3 {
-        return [0.15, 0.15, 0.18, 1.0];
+    {
+        let Ok(v) = part.parse::<f32>() else {
+            continue;
+        };
+        rgb[n] = v.clamp(0.0, 1.0);
+        n += 1;
+        if n == 3 {
+            return [rgb[0], rgb[1], rgb[2], 1.0];
+        }
     }
-    [
-        nums[0].clamp(0.0, 1.0),
-        nums[1].clamp(0.0, 1.0),
-        nums[2].clamp(0.0, 1.0),
-        1.0,
-    ]
+    NO_SWATCH
 }
 
-fn place_center_label(
+// One field's row: its override bar, caption, control, and override marker.
+fn field_row(
+    ui: &mut UiBuilder<'_>,
+    fields: &[FormField],
+    j: usize,
+) -> Option<(LayoutChild, FieldRow)> {
+    let field = &fields[j];
+    let index = Some(UiValue::Int(i32::try_from(j).unwrap_or(i32::MAX)));
+    let mut ids = FieldRow::default();
+    let bar = ui.sprite(Sprite {
+        tint: OVERRIDE_TINT,
+        corner_radius: 1.5,
+        visible: false,
+        ..Default::default()
+    })?;
+    ids.bar = Some(bar);
+    let depth = field.key.matches('.').count() as f32;
+    let indent = ui.sprite(Sprite {
+        tint: [0.0; 4],
+        ..Default::default()
+    })?;
+    let caption = ui.clipped_label(
+        &field_caption(fields, field),
+        theme::LABEL,
+        LABEL_COL - depth * NEST_INDENT,
+    )?;
+    let mut row = vec![
+        fixed(bar, [BAR_W, FIELD_H - 8.0]),
+        fixed(indent, [depth * NEST_INDENT, 1.0]),
+        LayoutChild {
+            width: LayoutSize::Fixed(LABEL_COL - depth * NEST_INDENT),
+            ..caption
+        },
+    ];
+    match field.kind {
+        FieldKind::Bool => {
+            let key = format!("{CHECK}{j}");
+            let check = ui.checkbox(
+                Checkbox {
+                    checked: Some(Binding::State(key.clone())),
+                    on_change: key.clone(),
+                    width: 0.0,
+                    ..Default::default()
+                },
+                FIELD_H - 6.0,
+            )?;
+            ids.check = Some(key);
+            row.push(check);
+        }
+        FieldKind::Enum | FieldKind::Ref { .. } | FieldKind::Action { .. } => {
+            let key = format!("editor.form.choice.{j}");
+            let choice = ui.button_with(
+                Button {
+                    text_binding: Some(Binding::State(key.clone())),
+                    action: Some(emit(CHOICE, index.clone())),
+                    ..Default::default()
+                },
+                [0.0, FIELD_H - 6.0],
+            )?;
+            ids.anchor = choice.item.map(concinnity_engine::ecs::Ref::id);
+            ids.choice = Some(key);
+            row.push(LayoutChild {
+                width: LayoutSize::Fill(1.0),
+                ..choice
+            });
+        }
+        FieldKind::Array => {
+            let count = ui.label(&format!("({})", field.variant_idx), theme::LABEL_DIM)?;
+            row.push(LayoutChild {
+                width: LayoutSize::Fill(1.0),
+                ..count
+            });
+            row.push(ui.button("+", ADD, index.clone(), [SMALL_BTN, SMALL_BTN])?);
+            row.push(ui.button("-", REMOVE, index.clone(), [SMALL_BTN, SMALL_BTN])?);
+        }
+        FieldKind::Vec { color: false, len } => {
+            // A disclosure: its elements edit one at a time once it opens.
+            let open = vec_expanded(fields, j);
+            let caption = format!("[{len}] {}", if open { "v" } else { ">" });
+            let toggle = ui.button(&caption, EXPAND, index.clone(), [0.0, FIELD_H - 6.0])?;
+            row.push(LayoutChild {
+                width: LayoutSize::Fill(1.0),
+                ..toggle
+            });
+        }
+        kind => {
+            let text = ui.text_field(TextField {
+                height: FIELD_H - 6.0,
+                ..Default::default()
+            })?;
+            ids.text = text.item.map(concinnity_engine::ecs::Ref::id);
+            row.push(text);
+            if let FieldKind::Vec { color: true, .. } = kind {
+                let swatch = ui.sprite(Sprite {
+                    tint: NO_SWATCH,
+                    corner_radius: 4.0,
+                    ..Default::default()
+                })?;
+                ids.swatch = Some(swatch);
+                row.push(fixed(swatch, [SWATCH_W, FIELD_H - 10.0]));
+            }
+        }
+    }
+    let marker = ui.button("*", OVERRIDE, index, [SMALL_BTN, SMALL_BTN])?;
+    ids.marker = marker.item.map(concinnity_engine::ecs::Ref::id);
+    row.push(marker);
+    Some((ui.row(row, FIELD_H)?, ids))
+}
+
+// One extra row: its caption, its control, and its detail.
+fn extra_row(ui: &mut UiBuilder<'_>, row: &ExtraRow) -> Option<(LayoutChild, ExtraRowIds)> {
+    let mut ids = ExtraRowIds::default();
+    let indent = if row.indent { NEST_INDENT } else { 0.0 };
+    let pad = ui.sprite(Sprite {
+        tint: [0.0; 4],
+        ..Default::default()
+    })?;
+    let mut children = vec![fixed(pad, [BAR_W + indent, 1.0])];
+    match &row.control {
+        ExtraControl::Label => {
+            let color = if row.indent {
+                theme::LABEL_DIM
+            } else {
+                theme::HEADING
+            };
+            let caption = ui.clipped_label(&row.caption, color, EXTRA_LABEL_W - indent)?;
+            ids.caption = caption.item.map(concinnity_engine::ecs::Ref::id);
+            children.push(caption);
+        }
+        ExtraControl::Check { .. } => {
+            let key = format!("{EXTRA_CHECK}{}", row.id);
+            let check = ui.checkbox(
+                Checkbox {
+                    label: row.caption.clone(),
+                    note: row.detail.clone().unwrap_or_default(),
+                    checked: Some(Binding::State(key.clone())),
+                    on_change: key.clone(),
+                    ..Default::default()
+                },
+                FIELD_H - 6.0,
+            )?;
+            let id = check.item?.id();
+            ids.check = Some((key, id));
+            children.push(check);
+        }
+        ExtraControl::Choice { .. } => {
+            let caption = ui.clipped_label(&row.caption, theme::LABEL, LABEL_COL - indent)?;
+            ids.caption = caption.item.map(concinnity_engine::ecs::Ref::id);
+            children.push(LayoutChild {
+                width: LayoutSize::Fixed(LABEL_COL - indent),
+                ..caption
+            });
+            let key = format!("editor.form.extra_choice.{}", row.id);
+            let id = Some(UiValue::Int(i32::try_from(row.id).unwrap_or(i32::MAX)));
+            let choice = ui.button_with(
+                Button {
+                    text_binding: Some(Binding::State(key.clone())),
+                    action: Some(emit(EXTRA, id)),
+                    ..Default::default()
+                },
+                [0.0, FIELD_H - 6.0],
+            )?;
+            ids.choice = Some(key);
+            children.push(LayoutChild {
+                width: LayoutSize::Fill(1.0),
+                ..choice
+            });
+        }
+    }
+    if let (Some(detail), false) = (
+        &row.detail,
+        matches!(row.control, ExtraControl::Check { .. }),
+    ) {
+        let detail = ui.label(detail, theme::LABEL_DIM)?.item?.id();
+        ids.detail = Some(detail);
+        children.push(fit(detail));
+    }
+    Some((ui.row(children, FIELD_H)?, ids))
+}
+
+// Build the rows of a form of `fields` and `extras` into the scrolling
+// column of `panel`, despawning the rows it held: for the fields' derivation
+// `rev` of the form `opened`, replacing the rows `was`.
+pub(crate) fn rebuild_rows(
     world: &mut World,
-    id: AssetId,
-    rect: [f32; 4],
-    content: &str,
-    color: [f32; 3],
-    visible: bool,
-) {
-    if let Some(l) = widget::label_mut(world, id) {
-        l.x = rect[0] + rect[2] * 0.5;
-        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = color;
-        l.visible = visible;
-        l.content = content.to_string();
+    panel: &mut BuiltPanel,
+    fields: &[FormField],
+    extras: &[ExtraRow],
+    (rev, opened): (u64, u64),
+    was: Option<&ShownForm>,
+) -> ShownForm {
+    let mut shown = ShownForm {
+        rev,
+        opened,
+        extra_shape: extras.iter().map(extra_shape).collect(),
+        ..ShownForm::default()
+    };
+    let Some(host) = panel.slots.get(ROWS_SLOT).copied() else {
+        return shown;
+    };
+    crate::editor::ui::rows::rebuild(world, panel, host, |ui| {
+        let mut rows = Vec::with_capacity(fields.len() + extras.len());
+        for j in 0..fields.len() {
+            let (row, ids) = field_row(ui, fields, j)?;
+            rows.push(row);
+            shown.fields.push(ids);
+        }
+        for extra in extras {
+            let (row, ids) = extra_row(ui, extra)?;
+            rows.push(row);
+            shown.extras.push(ids);
+        }
+        Some(rows)
+    });
+    // A form opened afresh starts at its top; the same form rebuilt keeps
+    // its place.
+    if was.is_none_or(|w| w.opened != opened)
+        && let Some(layout) = world.get_mut_by_id::<Layout>(host)
+    {
+        layout.scrolled = 0.0;
+    }
+    shown
+}
+
+// What the form shows this frame.
+pub(crate) struct FormView<'a> {
+    pub title: &'a str,
+    // Whether an existing entry is being edited (Apply) or a new asset (Add).
+    pub editing: bool,
+    pub fields: &'a [FormField],
+    pub texts: &'a [String],
+    pub name: &'a str,
+    pub focus: Option<FormFocus>,
+    pub error: Option<&'a str>,
+    pub blocked: Option<&'a str>,
+    // Each field's origin, and how many differ, for a template-derived asset.
+    pub marks: Option<(&'a [FieldOrigin], usize)>,
+    pub extras: &'a [ExtraRow],
+    // The open menu and its options.
+    pub menu: Option<(FormMenu, &'a [String])>,
+    // A row to scroll into view.
+    pub reveal: Option<usize>,
+}
+
+// Write `text` into the field `id` when it holds something else.
+fn set_field_text(world: &mut World, id: Option<AssetId>, text: &str, focused: bool) {
+    if let Some(f) = id.and_then(|id| world.get_mut_by_id::<TextField>(id)) {
+        if f.content != text {
+            f.content.clear();
+            f.content.push_str(text);
+            f.caret = text.chars().count();
+        }
+        state::set_if_changed(&mut f.focused, focused);
     }
 }
 
-// The value dropdown's own elements, which draw above the rest of the panel
-// while it is open so its backing occludes the field rows it covers.
-pub(crate) fn dropdown_ids() -> Vec<AssetId> {
-    let mut ids = vec![DROP_BG, DROP_TRACK, DROP_THUMB];
-    ids.extend((0..MAX_DROP_ROWS).map(drop_row_bg));
-    ids.extend((0..MAX_DROP_ROWS).map(drop_row_label));
-    ids
+pub(crate) fn sync(view: &FormView<'_>, shown: &ShownForm, world: &mut World, built: &BuiltPanel) {
+    let slot = |i: usize| built.slots.get(i).copied();
+    state::set_text(world, TITLE, format_args!("{}", view.title));
+    let apply = if view.editing { "Apply" } else { "Add" };
+    state::set_text(world, APPLY_TEXT, format_args!("{apply}"));
+    if let Some(b) = slot(APPLY_SLOT).and_then(|id| world.get_mut_by_id::<Button>(id)) {
+        state::set_if_changed(&mut b.disabled, view.blocked.is_some());
+    }
+    let (status, color) = match (view.error, view.blocked) {
+        (Some(e), _) => (e, ERROR_LABEL),
+        (None, Some(b)) => (b, theme::LABEL_DIM),
+        (None, None) => ("", theme::LABEL_DIM),
+    };
+    state::set_text(world, STATUS, format_args!("{status}"));
+    if let Some(l) = slot(STATUS_SLOT).and_then(|id| world.get_mut_by_id::<TextLabel>(id)) {
+        state::set_if_changed(&mut l.color, color);
+    }
+    if let Some(l) = slot(OVERRIDES_SLOT).and_then(|id| world.get_mut_by_id::<Layout>(id)) {
+        state::set_if_changed(&mut l.visible, view.marks.is_some());
+    }
+    if let Some((_, count)) = view.marks {
+        state::set_text(world, CHIP, format_args!("{count} overridden"));
+    }
+    set_field_text(
+        world,
+        slot(NAME_SLOT),
+        view.name,
+        view.focus == Some(FormFocus::Name),
+    );
+    for (j, (field, row)) in view.fields.iter().zip(&shown.fields).enumerate() {
+        let text = view.texts.get(j).map_or("", String::as_str);
+        if row.text.is_some() {
+            set_field_text(
+                world,
+                row.text,
+                text,
+                view.focus == Some(FormFocus::Field(j)),
+            );
+        }
+        if let Some(sprite) = row.swatch.and_then(|id| world.get_mut_by_id::<Sprite>(id)) {
+            state::set_if_changed(&mut sprite.tint, swatch_rgb(text));
+        }
+        if let Some(key) = &row.check {
+            state::set_bool(world, key, field.boolval);
+        }
+        if let Some(key) = &row.choice {
+            let value = field
+                .variants
+                .get(field.variant_idx)
+                .map_or("", String::as_str);
+            state::set_text(world, key, format_args!("{value}"));
+        }
+        let mark = view
+            .marks
+            .and_then(|(marks, _)| marks.get(j))
+            .copied()
+            .unwrap_or(FieldOrigin::Inherited);
+        let marked = mark != FieldOrigin::Inherited;
+        if let Some(bar) = row.bar.and_then(|id| world.get_mut_by_id::<Sprite>(id)) {
+            state::set_if_changed(&mut bar.visible, marked);
+            let tint = if mark == FieldOrigin::InstanceOnly {
+                INSTANCE_ONLY_TINT
+            } else {
+                OVERRIDE_TINT
+            };
+            state::set_if_changed(&mut bar.tint, tint);
+        }
+        if let Some(b) = row.marker.and_then(|id| world.get_mut_by_id::<Button>(id)) {
+            state::set_if_changed(&mut b.visible, marked);
+            state::set_if_changed(&mut b.style.text, OVERRIDE_LABEL);
+        }
+    }
+    for (row, ids) in view.extras.iter().zip(&shown.extras) {
+        for (id, text) in [
+            (ids.caption, Some(&row.caption)),
+            (ids.detail, row.detail.as_ref()),
+        ] {
+            if let (Some(text), Some(l)) =
+                (text, id.and_then(|id| world.get_mut_by_id::<TextLabel>(id)))
+                && l.content != *text
+            {
+                l.content.clone_from(text);
+            }
+        }
+        match &row.control {
+            ExtraControl::Check { on, enabled } => {
+                if let Some((key, id)) = &ids.check {
+                    state::set_bool(world, key, *on);
+                    if let Some(c) = world.get_mut_by_id::<Checkbox>(*id) {
+                        state::set_if_changed(&mut c.disabled, !enabled);
+                        if c.label != row.caption {
+                            c.label.clone_from(&row.caption);
+                        }
+                        let note = row.detail.as_deref().unwrap_or("");
+                        if c.note != note {
+                            c.note.clear();
+                            c.note.push_str(note);
+                        }
+                    }
+                }
+            }
+            ExtraControl::Choice { options, selected } => {
+                if let Some(key) = &ids.choice {
+                    let value = options.get(*selected).map_or("", String::as_str);
+                    state::set_text(world, key, format_args!("{value}"));
+                }
+            }
+            ExtraControl::Label => {}
+        }
+    }
+    sync_menu(view, shown, world, built);
+    if let (Some(row), Some(host)) = (view.reveal, slot(ROWS_SLOT))
+        && let Some(layout) = world.get_mut_by_id::<Layout>(host)
+    {
+        layout.scrolled = row as f32 * (FIELD_H + ROW_GAP);
+    }
 }
 
-// The open override / entity menu's elements, raised above the rest of the
-// panel while one is open (same contract as `dropdown_ids`).
-pub(crate) fn override_menu_ids() -> Vec<AssetId> {
-    let mut ids = vec![OVR_MENU_BG];
-    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_bg));
-    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_label));
-    ids
+// The open menu's items, placed under the control it belongs to.
+fn sync_menu(view: &FormView<'_>, shown: &ShownForm, world: &mut World, built: &BuiltPanel) {
+    let options = view.menu.map_or(&[][..], |(_, options)| options);
+    let anchor = view.menu.and_then(|(menu, _)| match menu {
+        FormMenu::Field(j) => shown.fields.get(j).and_then(|r| r.anchor),
+        FormMenu::Override(j) => shown.fields.get(j).and_then(|r| r.marker),
+        FormMenu::Entity => built.slots.get(OVERRIDES_SLOT).copied(),
+    });
+    let at = anchor.and_then(|id| control_rect(world, id));
+    state::with_state(world, |s| {
+        let listed = s.list(MENU_ITEMS);
+        let same =
+            listed.len() == options.len() && listed.iter().zip(options).all(|(a, b)| a.text == *b);
+        if !same {
+            s.set_list(MENU_ITEMS, options.iter().map(|o| UiItem::new(o)).collect());
+        }
+        s.set(MENU_OPEN, UiValue::Bool(!options.is_empty()));
+    });
+    if let (Some(rect), Some(menu)) = (at, built.slots.get(MENU_SLOT).copied())
+        && let Some(m) = world.get_mut_by_id::<Menu>(menu)
+    {
+        state::set_if_changed(&mut m.x, rect[0]);
+        state::set_if_changed(&mut m.y, rect[1] + rect[3]);
+    }
+}
+
+// Where the control `id` was last laid out.
+fn control_rect(world: &World, id: AssetId) -> Option<[f32; 4]> {
+    if let Some(b) = world.get_by_id::<Button>(id) {
+        return Some([b.x, b.y, b.width, b.height]);
+    }
+    world.get_by_id::<Layout>(id).and_then(|l| l.rect)
+}
+
+// Whether the menu the hook keeps open is still open: a press off it, or
+// Escape, closes it.
+pub(crate) fn menu_open(world: &World) -> bool {
+    world
+        .resource::<UiState>()
+        .is_some_and(|s| s.get(MENU_OPEN) == Some(&UiValue::Bool(true)))
+}
+
+// What the user typed, read back from the panel's fields: the name, each
+// field's text, and which of them holds the keyboard.
+pub(crate) fn observe(
+    world: &World,
+    built: &BuiltPanel,
+    shown: &ShownForm,
+    name: &mut String,
+    texts: &mut [String],
+) -> (bool, Option<FormFocus>) {
+    let mut changed = false;
+    let mut focus = None;
+    let mut take = |id: Option<AssetId>, into: &mut String| -> bool {
+        let Some(f) = id.and_then(|id| world.get_by_id::<TextField>(id)) else {
+            return false;
+        };
+        if f.content != *into {
+            into.clone_from(&f.content);
+            changed = true;
+        }
+        f.focused
+    };
+    if take(built.slots.get(NAME_SLOT).copied(), name) {
+        focus = Some(FormFocus::Name);
+    }
+    for (j, row) in shown.fields.iter().enumerate() {
+        if row.text.is_some()
+            && let Some(text) = texts.get_mut(j)
+            && take(row.text, text)
+        {
+            focus = Some(FormFocus::Field(j));
+        }
+    }
+    (changed, focus)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{label, sprite};
-    use concinnity_engine::components::TextInput;
-
-    fn test_origin() -> [f32; 2] {
-        default_origin(1280.0)
-    }
-
-    fn field(key: &str, kind: FieldKind) -> FormField {
-        FormField {
-            key: key.into(),
-            kind,
-            initial: "0".into(),
-            boolval: false,
-            variants: Vec::new(),
-            variant_idx: 0,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }
-    }
-
-    fn float_fields(n: usize) -> Vec<FormField> {
-        (0..n)
-            .map(|i| field(&format!("f{i}"), FieldKind::Float))
-            .collect()
-    }
-
-    // A ref field with `n` options past `(none)`. With `n > CYCLE_MAX` it opens
-    // a dropdown rather than cycling.
-    fn ref_field(n: usize) -> FormField {
-        let mut variants = vec![form::NONE_LABEL.to_string()];
-        variants.extend((0..n).map(|i| format!("tex_{i}")));
-        FormField {
-            key: "texture".into(),
-            kind: FieldKind::Ref {
-                targets: &["Texture"],
-            },
-            initial: String::new(),
-            boolval: false,
-            variants,
-            variant_idx: 0,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }
-    }
-
-    fn view(fields: &[FormField]) -> FormView<'_> {
-        FormView {
-            title: "New PointLight",
-            editing: false,
-            form_fields: fields,
-            form_scroll: 0,
-            form_focus: FormFocus::Name,
-            field_dropdown: None,
-            field_dropdown_scroll: 0,
-            form_error: None,
-            overrides: None,
-            extras: &[],
-            blocked: None,
-            mouse: [0.0, 0.0],
-        }
-    }
-
-    fn injected_world() -> World {
-        ids().test_world()
-    }
-
-    fn sprite_visible(world: &World, id: AssetId) -> bool {
-        sprite(world, id).visible
-    }
-    fn input(world: &World, id: AssetId) -> TextInput {
-        world
-            .get_by_id::<TextInput>(id)
-            .cloned()
-            .expect("input present")
-    }
-
-    // The X close sits in the title bar's top-right corner; the header row pins the
-    // name heading and the Apply button under the title bar.
-    #[test]
-    fn header_pins_name_and_button_under_the_title_bar() {
-        let o = test_origin();
-        let title = widget::title_rect(o, EDIT_W);
-        assert_eq!(title, [o[0], o[1], EDIT_W, widget::TITLE_H]);
-        let close = close_rect(o, EDIT_W);
-        assert_eq!(close[1], o[1], "the X sits in the title bar");
-        assert_eq!(
-            close[0] + close[2],
-            o[0] + EDIT_W,
-            "the X is flush to the panel's right edge"
-        );
-        let name = name_rect(o, EDIT_W);
-        let apply_btn = apply_rect(o, EDIT_W);
-        assert_eq!(name[1], o[1] + widget::TITLE_H + PAD, "under the title bar");
-        assert_eq!(
-            name[1], apply_btn[1],
-            "the name and Apply share the header row"
-        );
-        assert!(
-            name[0] + name[2] <= apply_btn[0],
-            "the name heading ends left of Apply"
-        );
-        assert_eq!(
-            apply_btn[0] + apply_btn[2],
-            o[0] + EDIT_W - PAD,
-            "Apply flush to the panel's right pad"
-        );
-        // The whole panel follows its origin.
-        let v = view(&[]);
-        let moved = widget::outer_rect([40.0, 60.0], size(v.form_fields.len()));
-        assert_eq!((moved[0], moved[1]), (40.0, 60.0));
-    }
-
-    // The panel height tracks the field count up to the pool cap; `size` is what
-    // the hook's drag clamp uses.
-    #[test]
-    fn panel_height_tracks_fields_and_caps_at_the_pool() {
-        let short = size(2);
-        let tall = size(form::FIELD_POOL + 20);
-        assert!(short[1] < tall[1]);
-        assert_eq!(
-            tall[1],
-            size(form::FIELD_POOL)[1],
-            "a form past the pool scrolls instead of growing"
-        );
-        let fields = float_fields(2);
-        let v = view(&fields);
-        assert_eq!(
-            widget::outer_rect(test_origin(), size(v.form_fields.len()))[3],
-            short[1]
-        );
-    }
-
-    // Growing the panel taller reveals more field rows (up to the pool); a short
-    // form is height-locked; growing it wider stretches the control column while
-    // the caption column stays fixed.
-    #[test]
-    fn taller_reveals_more_fields_and_wider_grows_the_control_column() {
-        // A form past the default window: the default height shows FIELD_POOL rows,
-        // taller reveals more up to FIELD_POOL_MAX.
-        assert_eq!(rows_for_height(size(40)[1]), form::FIELD_POOL);
-        assert_eq!(
-            rows_for_height(size(40)[1] + 5.0 * FIELD_H),
-            form::FIELD_POOL + 5
-        );
-        assert_eq!(rows_for_height(max_size(40)[1]), form::FIELD_POOL_MAX);
-        assert_eq!(
-            rows_for_height(10_000.0),
-            form::FIELD_POOL_MAX,
-            "capped at the pool"
-        );
-        // A short form's height is locked (max == default): no vertical grab.
-        assert_eq!(max_size(3)[1], size(3)[1]);
-        // Wider widens the control column; the caption column start is fixed.
-        let o = [40.0, 60.0];
-        let narrow = form_control_rect(o, EDIT_W, 0);
-        let wide = form_control_rect(o, EDIT_W + 200.0, 0);
-        assert_eq!(narrow[0], wide[0], "the control column starts at a fixed x");
-        assert!(
-            wide[2] > narrow[2] + 150.0,
-            "the control widens with the panel"
-        );
-    }
-
-    // A taller panel draws field rows past the default window that a default one
-    // would never show.
-    #[test]
-    fn taller_panel_draws_fields_past_the_default_window() {
-        let mut world = injected_world();
-        let fields = float_fields(form::FIELD_POOL_MAX);
-        let tall = [EDIT_W, max_size(fields.len())[1]];
-        place(&mut world, &view(&fields), [20.0, 20.0], tall);
-        assert!(
-            input(&world, form_input(form::FIELD_POOL)).visible,
-            "a row past the default window shows only because we grew"
-        );
-    }
-
-    #[test]
-    fn buttons_and_name_hit_test() {
-        let fields = float_fields(1);
-        let v = view(&fields);
-        let o = test_origin();
-        let a = apply_rect(o, EDIT_W);
-        let x = close_rect(o, EDIT_W);
-        let n = name_rect(o, EDIT_W);
-        assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::Confirm)
-        );
-        assert_eq!(
-            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::Close),
-            "the title-bar X closes the form"
-        );
-        assert_eq!(
-            hit_test(&v, n[0] + 5.0, n[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::FocusName)
-        );
-        // A title-bar click off the X is consumed (the hook grabs drags before this).
-        let t = widget::title_rect(o, EDIT_W);
-        assert_eq!(
-            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::Consume)
-        );
-        // A miss falls through.
-        assert_eq!(
-            hit_test(&v, 10.0, 700.0, o, size(v.form_fields.len())),
-            None
-        );
-    }
-
-    // The title bar carries the heading, the confirm button is captioned "Apply"
-    // while editing and "Add" for a new asset, and the name heading draws larger.
-    #[test]
-    fn place_shows_title_confirm_caption_and_scaled_name() {
-        let fields = float_fields(1);
-        let mut world = injected_world();
-        let o = test_origin();
-        place(&mut world, &view(&fields), o, size(fields.len()));
-        assert_eq!(label(&world, TITLE_LABEL).content, "New PointLight");
-        assert_eq!(label(&world, APPLY_LABEL).content, "Add");
-        assert_eq!(
-            label(&world, CLOSE_LABEL).content,
-            "X",
-            "the title-bar close"
-        );
-        let name = input(&world, NAME_INPUT);
-        assert!(name.visible);
-        assert!(name.scale > 1.0, "the name heading draws larger");
-        let mut editing = view(&fields);
-        editing.editing = true;
-        editing.title = "Edit Camera3D";
-        place(&mut world, &editing, o, size(editing.form_fields.len()));
-        assert_eq!(label(&world, TITLE_LABEL).content, "Edit Camera3D");
-        assert_eq!(label(&world, APPLY_LABEL).content, "Apply");
-    }
-
-    // Field slots map logical fields through the scroll window; a form past the
-    // pool shows its scrollbar and keeps the buttons pinned in the header.
-    #[test]
-    fn a_form_past_the_pool_scrolls_a_window() {
-        let o = test_origin();
-        let fields = float_fields(form::FIELD_POOL + 4);
-        let mut world = injected_world();
-        let v = view(&fields);
-        place(&mut world, &v, o, size(v.form_fields.len()));
-        assert!(
-            sprite_visible(&world, FORM_THUMB),
-            "the form scrollbar shows"
-        );
-        // Slot 0 resolves to logical field 0.
-        let c0 = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::FocusField(0))
-        );
-        // Scrolled by three: slot 0 shows logical field 3; the last slot shows
-        // the window's last field.
-        let mut vs = view(&fields);
-        vs.form_scroll = 3;
-        assert_eq!(
-            hit_test(&vs, c0[0] + 5.0, c0[1] + 5.0, o, size(vs.form_fields.len())),
-            Some(FormAction::FocusField(3))
-        );
-        let last = form_control_rect(o, EDIT_W, form::FIELD_POOL - 1);
-        assert_eq!(
-            hit_test(
-                &vs,
-                last[0] + 5.0,
-                last[1] + 5.0,
-                o,
-                size(vs.form_fields.len())
-            ),
-            Some(FormAction::FocusField(3 + form::FIELD_POOL - 1))
-        );
-        // The Apply button stays pinned in the header regardless.
-        let a = apply_rect(o, EDIT_W);
-        assert_eq!(
-            hit_test(&vs, a[0] + 5.0, a[1] + 5.0, o, size(vs.form_fields.len())),
-            Some(FormAction::Confirm)
-        );
-    }
-
-    #[test]
-    fn a_form_within_the_pool_has_no_scrollbar() {
-        let fields = float_fields(1);
-        let mut world = injected_world();
-        place(
-            &mut world,
-            &view(&fields),
-            test_origin(),
-            size(fields.len()),
-        );
-        assert!(!sprite_visible(&world, FORM_THUMB));
-    }
-
-    // A color-vector arg field renders its text control plus a live preview
-    // swatch tinted from the field's current text; the swatch sits outside the
-    // field rect (a TextInput's opaque background box is synthesized after every
-    // authored sprite, so a swatch under the field would be painted over).
-    #[test]
-    fn color_vector_field_shows_a_live_swatch() {
-        let mut world = injected_world();
-        if let Some(t) = world.get_mut_by_id::<TextInput>(form_input(0)) {
-            t.content = "1, 0, 0".into();
-        }
-        let fields = [FormField {
-            key: "color".into(),
-            kind: FieldKind::Vec {
-                len: 3,
-                color: true,
-            },
-            initial: "1, 0, 0".into(),
-            boolval: false,
-            variants: Vec::new(),
-            variant_idx: 0,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }];
-        place(
-            &mut world,
-            &view(&fields),
-            test_origin(),
-            size(fields.len()),
-        );
-        let sw = sprite(&world, form_swatch(0));
-        assert!(sw.visible, "the color field draws a swatch");
-        assert_eq!(sw.tint, [1.0, 0.0, 0.0, 1.0], "swatch tint is the RGB text");
-        let ti = input(&world, form_input(0));
-        assert!(ti.visible, "the editable text field still shows");
-        assert!(
-            sw.x >= ti.x + ti.width,
-            "the swatch sits outside the field's opaque background box"
-        );
-    }
-
-    // A plain (non-color) vector renders as a collapsed disclosure button, not an
-    // editable text field or a swatch; clicking it toggles its per-element leaves.
-    #[test]
-    fn plain_vector_field_is_a_disclosure() {
-        let o = test_origin();
-        let mut world = injected_world();
-        let fields = [FormField {
-            key: "position".into(),
-            kind: FieldKind::Vec {
-                len: 3,
-                color: false,
-            },
-            initial: "0, 0, 0".into(),
-            boolval: false,
-            variants: Vec::new(),
-            variant_idx: 0,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }];
-        let v = view(&fields);
-        place(&mut world, &v, o, size(v.form_fields.len()));
-        assert!(!sprite_visible(&world, form_swatch(0)), "no color swatch");
-        assert!(
-            !input(&world, form_input(0)).visible,
-            "a collapsed vector has no editable comma field"
-        );
-        assert!(
-            sprite_visible(&world, form_toggle_bg(0)),
-            "the disclosure button shows"
-        );
-        let cap = label(&world, form_enum_label(0));
-        assert!(
-            cap.visible && cap.content == "[3] >",
-            "collapsed count + caret"
-        );
-        let c = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::ToggleVecExpand(0))
-        );
-    }
-
-    // Elements of a vector longer than four are not axes, so they read by index.
-    #[test]
-    fn a_long_vector_labels_its_elements_by_index() {
-        assert_eq!(axis_letter(0, 3), "x");
-        assert_eq!(axis_letter(3, 4), "w");
-        assert_eq!(axis_letter(2, 8), "[2]");
-        assert_eq!(axis_letter(7, 8), "[7]");
-    }
-
-    // An expanded vector shows its element leaves labeled by axis (x / y / z), each
-    // an editable field, and the header caret flips to `v`.
-    #[test]
-    fn expanded_vector_shows_axis_labeled_element_fields() {
-        let o = test_origin();
-        let mut world = injected_world();
-        let elem = |axis: &str| FormField {
-            key: format!("position.{axis}"),
-            kind: FieldKind::Float,
-            initial: "0".into(),
-            boolval: false,
-            variants: Vec::new(),
-            variant_idx: 0,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        };
-        let fields = [
-            FormField {
-                key: "position".into(),
-                kind: FieldKind::Vec {
-                    len: 3,
-                    color: false,
-                },
-                initial: String::new(),
-                boolval: false,
-                variants: Vec::new(),
-                variant_idx: 0,
-                choices: Vec::new(),
-                sparse: false,
-                unset: false,
-            },
-            elem("0"),
-            elem("1"),
-            elem("2"),
-        ];
-        let v = view(&fields);
-        place(&mut world, &v, o, size(v.form_fields.len()));
-        // The header caret is now `v` (its element leaves follow it).
-        assert_eq!(label(&world, form_enum_label(0)).content, "[3] v");
-        // Slots 1..=3 are the axis-labeled element fields.
-        assert_eq!(label(&world, form_row_label(1)).content, "x");
-        assert_eq!(label(&world, form_row_label(2)).content, "y");
-        assert_eq!(label(&world, form_row_label(3)).content, "z");
-        assert!(
-            input(&world, form_input(1)).visible,
-            "an element leaf is an editable field"
-        );
-        // Clicking an element focuses it; clicking the header collapses again.
-        let c1 = form_control_rect(o, EDIT_W, 1);
-        assert_eq!(
-            hit_test(&v, c1[0] + 5.0, c1[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::FocusField(1))
-        );
-        let c0 = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, c0[0] + 5.0, c0[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::ToggleVecExpand(0))
-        );
-    }
-
-    // An enum / ref field renders as a cycling button captioned with the current
-    // variant and hit-tests to a cycle; a large variant set opens a dropdown.
-    #[test]
-    fn choice_fields_cycle_or_open_a_dropdown() {
-        let o = test_origin();
-        let mut world = injected_world();
-        let small = [FormField {
-            key: "align".into(),
-            kind: FieldKind::Enum,
-            initial: String::new(),
-            boolval: false,
-            variants: vec!["left".into(), "center".into(), "right".into()],
-            variant_idx: 1,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }];
-        let v = view(&small);
-        place(&mut world, &v, o, size(v.form_fields.len()));
-        assert!(
-            sprite_visible(&world, form_toggle_bg(0)),
-            "cycle button shows"
-        );
-        let cap = label(&world, form_enum_label(0));
-        assert!(cap.visible && cap.content == "center");
-        assert!(
-            !input(&world, form_input(0)).visible,
-            "an enum has no editable text field"
-        );
-        let c = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::CycleField(0))
-        );
-        let big = [ref_field(CYCLE_MAX + 1)];
-        let vb = view(&big);
-        assert_eq!(
-            hit_test(&vb, c[0] + 5.0, c[1] + 5.0, o, size(vb.form_fields.len())),
-            Some(FormAction::OpenFieldDropdown(0)),
-            "a large variant set opens a dropdown"
-        );
-    }
-
-    // An open value dropdown is modal: its option rows pick (through the scroll
-    // offset), anything else closes it.
-    #[test]
-    fn open_field_dropdown_picks_options_and_is_modal() {
-        let o = test_origin();
-        let fields = [ref_field(CYCLE_MAX + 3)];
-        let mut v = view(&fields);
-        v.field_dropdown = Some(0);
-        let opt = field_option_rect(o, EDIT_W, 0, 2);
-        assert_eq!(
-            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::PickFieldOption(2))
-        );
-        let n = name_rect(o, EDIT_W);
-        assert_eq!(
-            hit_test(&v, n[0] + 5.0, n[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::CloseOverlays),
-            "a click off the option list dismisses it"
-        );
-        v.field_dropdown_scroll = 3;
-        let r0 = field_option_rect(o, EDIT_W, 0, 0);
-        assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::PickFieldOption(3)),
-            "visible row 0 is option `scroll + 0`"
-        );
-    }
-
-    // Laying out an open dropdown shows its backing + option rows and hides the
-    // slots it floats over (their opaque TextInput boxes would paint over it).
-    #[test]
-    fn open_dropdown_draws_over_the_slots_it_covers() {
-        let mut world = injected_world();
-        let fields = [
-            ref_field(CYCLE_MAX + 2),
-            field("intensity", FieldKind::Float),
-        ];
-        let mut v = view(&fields);
-        v.field_dropdown = Some(0);
-        place(&mut world, &v, test_origin(), size(v.form_fields.len()));
-        assert!(sprite_visible(&world, DROP_BG), "dropdown backing shows");
-        assert!(sprite_visible(&world, drop_row_bg(0)), "option row shows");
-        let opt0 = label(&world, drop_row_label(0));
-        assert!(opt0.visible && opt0.content == form::NONE_LABEL);
-        assert!(
-            sprite_visible(&world, form_toggle_bg(0)),
-            "the open field's button stays"
-        );
-        // The covered rows keep drawing: the dropdown is on its own layer (see
-        // `overlay_ids`) and its opaque backing hides them.
-        assert!(
-            label(&world, form_row_label(1)).visible,
-            "the covered slot was blanked instead of being drawn under the dropdown"
-        );
-        let declared = dropdown_ids();
-        for id in [DROP_BG, drop_row_bg(0), drop_row_label(0)] {
-            assert!(declared.contains(&id), "{id:?} is not declared an overlay");
-        }
-    }
-
-    // An overlay that stops mid-row leaves the row under it half drawn, which
-    // reads as clashing text rather than as one thing sitting over another.
-    #[test]
-    fn the_dropdown_backing_ends_on_a_field_row_boundary() {
-        let o = test_origin();
-        let w = EDIT_W;
-        for slot in 0..4 {
-            for shown in 1..=MAX_DROP_ROWS {
-                let b = field_dropdown_backing(o, w, slot, shown);
-                let bottom = b[1] + b[3];
-                let rows = (bottom - fields_top(o)) / FIELD_H;
-                assert!(
-                    (rows - rows.round()).abs() < 0.01,
-                    "slot {slot} shown {shown}: bottom {bottom} is {rows} rows down",
-                );
-                // Still tall enough for every option it draws.
-                assert!(b[3] >= shown as f32 * DROP_ROW_H, "{b:?}");
-            }
-        }
-    }
-
-    // An array header renders its element count + red remove / green add buttons,
-    // and the buttons hit-test to the add / remove actions.
-    #[test]
-    fn array_header_renders_count_and_buttons_and_hit_tests() {
-        let o = test_origin();
-        let mut world = injected_world();
-        let fields = [FormField {
-            key: "waves".into(),
-            kind: FieldKind::Array,
-            initial: String::new(),
-            boolval: false,
-            variants: Vec::new(),
-            variant_idx: 3,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }];
-        let v = view(&fields);
-        place(&mut world, &v, o, size(v.form_fields.len()));
-        assert!(
-            sprite_visible(&world, form_toggle_bg(0)),
-            "add button shows"
-        );
-        assert!(
-            sprite_visible(&world, form_swatch(0)),
-            "remove button shows"
-        );
-        let cap = label(&world, form_enum_label(0));
-        assert!(cap.visible && cap.content == "(3)");
-        assert!(!input(&world, form_input(0)).visible);
-        let add = array_add_rect(o, EDIT_W, 0);
-        let rem = array_remove_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, add[0] + 3.0, add[1] + 3.0, o, size(v.form_fields.len())),
-            Some(FormAction::AddArrayElement(0))
-        );
-        assert_eq!(
-            hit_test(&v, rem[0] + 3.0, rem[1] + 3.0, o, size(v.form_fields.len())),
-            Some(FormAction::RemoveArrayElement(0))
-        );
-    }
-
-    // A validation error shows on the reserved status line.
-    #[test]
-    fn error_line_shows_on_the_status_line() {
-        let fields = float_fields(1);
-        let mut world = injected_world();
-        let mut v = view(&fields);
-        v.form_error = Some("Invalid argument");
-        place(&mut world, &v, test_origin(), size(v.form_fields.len()));
-        let status = label(&world, FORM_STATUS);
-        assert!(status.visible);
-        assert_eq!(status.content, "Invalid argument");
-    }
-
-    // The floating value dropdown draws above the slot chrome (insertion order).
-    #[test]
-    fn dropdown_is_injected_after_the_slot_chrome() {
-        let sprites = &ids().sprites;
-        let spos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        let last_slot = (0..form::FIELD_POOL_MAX)
-            .map(form_toggle_bg)
-            .chain((0..form::FIELD_POOL_MAX).map(form_swatch))
-            .map(spos)
-            .max()
-            .unwrap();
-        assert!(
-            spos(DROP_BG) > last_slot,
-            "dropdown backing above the slots"
-        );
-        let first_drop_row = (0..MAX_DROP_ROWS).map(drop_row_bg).map(spos).min().unwrap();
-        assert!(spos(DROP_BG) < first_drop_row, "backing under its rows");
-        let labels = &ids().labels;
-        let lpos = |id: AssetId| labels.iter().position(|&x| x == id).unwrap();
-        let last_slot_label = (0..form::FIELD_POOL_MAX)
-            .map(form_row_label)
-            .chain((0..form::FIELD_POOL_MAX).map(form_enum_label))
-            .map(lpos)
-            .max()
-            .unwrap();
-        for r in 0..MAX_DROP_ROWS {
-            assert!(lpos(drop_row_label(r)) > last_slot_label);
-        }
-    }
-
-    // A FormView with the value dropdown for logical field `open` disclosed.
-    fn view_with_dropdown(fields: &[FormField], open: usize, mouse: [f32; 2]) -> FormView<'_> {
-        FormView {
-            field_dropdown: Some(open),
-            mouse,
-            ..view(fields)
-        }
-    }
-
-    // An enum field with a small (cycle-in-place) variant set.
-    fn enum_field(key: &str, variants: &[&str]) -> FormField {
-        FormField {
-            key: key.into(),
-            kind: FieldKind::Enum,
-            initial: String::new(),
-            boolval: false,
-            variants: variants.iter().map(ToString::to_string).collect(),
-            variant_idx: 0,
-            choices: Vec::new(),
-            sparse: false,
-            unset: false,
-        }
-    }
-
-    #[test]
-    fn open_dropdown_renders_its_options_and_a_scrollbar() {
-        // 11 variants ((none) + tex_0..tex_9) overflow the 8-row window, so the
-        // dropdown draws its scrollbar too.
-        let fields = vec![ref_field(10)];
-        let mut world = injected_world();
-        let o = test_origin();
-        place(
-            &mut world,
-            &view_with_dropdown(&fields, 0, [0.0, 0.0]),
-            o,
-            size(fields.len()),
-        );
-        assert!(sprite_visible(&world, DROP_BG));
-        assert_eq!(label(&world, drop_row_label(0)).content, form::NONE_LABEL);
-        assert!(sprite_visible(&world, DROP_TRACK), "scrollbar track shows");
-        assert!(sprite_visible(&world, DROP_THUMB), "scrollbar thumb shows");
-    }
-
-    #[test]
-    fn open_dropdown_hit_test_picks_or_dismisses() {
-        // A short (non-scrolling) dropdown so the option scan reaches its end.
-        let fields = vec![ref_field(2)];
-        let o = test_origin();
-        let v = view_with_dropdown(&fields, 0, [0.0, 0.0]);
-        // Clicking an option row picks that variant.
-        let opt = field_option_rect(o, EDIT_W, 0, 1);
-        assert_eq!(
-            hit_test(&v, opt[0] + 5.0, opt[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::PickFieldOption(1))
-        );
-        // Clicking off every option dismisses the dropdown.
-        assert_eq!(
-            hit_test(&v, 0.0, 0.0, o, size(v.form_fields.len())),
-            Some(FormAction::CloseOverlays)
-        );
-    }
-
-    #[test]
-    fn control_click_opens_a_large_variant_dropdown() {
-        // A ref field with more than CYCLE_MAX options opens a dropdown rather
-        // than cycling in place.
-        let fields = vec![ref_field(10)];
-        let o = test_origin();
-        let v = view(&fields);
-        let c = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::OpenFieldDropdown(0))
-        );
-    }
-
-    #[test]
-    fn bool_enum_and_array_controls_hit_test() {
-        let o = test_origin();
-
-        // A bool field toggles from its checkbox rect.
-        let bools = vec![field("flag", FieldKind::Bool)];
-        let vb = view(&bools);
-        let t = form_toggle_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&vb, t[0] + 3.0, t[1] + 3.0, o, size(vb.form_fields.len())),
-            Some(FormAction::ToggleField(0))
-        );
-
-        // A small enum cycles in place from its control rect.
-        let enums = vec![enum_field("mode", &["a", "b"])];
-        let ve = view(&enums);
-        let c = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&ve, c[0] + 5.0, c[1] + 5.0, o, size(ve.form_fields.len())),
-            Some(FormAction::CycleField(0))
-        );
-
-        // An array header grows / shrinks from its + / - buttons.
-        let arrays = vec![field("waves", FieldKind::Array)];
-        let va = view(&arrays);
-        let add = array_add_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(
-                &va,
-                add[0] + 3.0,
-                add[1] + 3.0,
-                o,
-                size(va.form_fields.len())
-            ),
-            Some(FormAction::AddArrayElement(0))
-        );
-        let rem = array_remove_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(
-                &va,
-                rem[0] + 3.0,
-                rem[1] + 3.0,
-                o,
-                size(va.form_fields.len())
-            ),
-            Some(FormAction::RemoveArrayElement(0))
-        );
-    }
-
-    fn extra_rows() -> Vec<ExtraRow> {
-        vec![
-            ExtraRow::label("Stages", None),
-            ExtraRow {
-                id: 4,
-                caption: "vertex".into(),
-                indent: true,
-                control: form_extras::ExtraControl::Check {
-                    on: false,
-                    enabled: true,
-                },
-                detail: None,
-            },
-        ]
-    }
-
-    // A type's extra rows follow its fields in the same window: a press on one
-    // reports its id, and each draws into the slot it lands in.
-    #[test]
-    fn extra_rows_follow_the_fields_and_report_their_id() {
-        let fields = float_fields(1);
-        let extras = extra_rows();
-        let v = FormView {
-            extras: &extras,
-            ..view(&fields)
-        };
-        let o = test_origin();
-        let s = size(v.row_count());
-        let t = form_toggle_rect(o, EDIT_W, 2);
-        assert_eq!(
-            hit_test(&v, t[0] + 3.0, t[1] + 3.0, o, s),
-            Some(FormAction::PressExtra(4))
-        );
-        let heading = form_control_rect(o, EDIT_W, 1);
-        assert_eq!(
-            hit_test(&v, heading[0] + 3.0, heading[1] + 3.0, o, s),
-            Some(FormAction::Consume),
-            "a label row presses nothing"
-        );
-        let mut world = injected_world();
-        place(&mut world, &v, o, s);
-        assert_eq!(label(&world, form_row_label(1)).content, "Stages");
-        assert_eq!(label(&world, form_row_label(2)).content, "vertex");
-        assert!(sprite_visible(&world, form_toggle_bg(2)));
-    }
-
-    // A blocked form says why on its status line, under an error when there is
-    // one, and dims its confirm button.
-    #[test]
-    fn a_blocked_form_says_why_and_dims_its_confirm() {
-        let fields = float_fields(1);
-        let v = FormView {
-            blocked: Some("name taken"),
-            ..view(&fields)
-        };
-        let o = test_origin();
-        let mut world = injected_world();
-        place(&mut world, &v, o, size(1));
-        assert_eq!(label(&world, FORM_STATUS).content, "name taken");
-        assert_eq!(sprite(&world, APPLY_BG).tint, BTN_TINT_DISABLED);
-        let v = FormView {
-            form_error: Some("bad"),
-            ..v
-        };
-        place(&mut world, &v, o, size(1));
-        assert_eq!(label(&world, FORM_STATUS).content, "bad");
-    }
-
-    #[test]
-    fn hit_test_consumes_a_click_past_the_scrolled_field_window() {
-        // A scroll offset past the only field leaves the visible slot empty, so a
-        // click there is swallowed rather than resolving to a control.
-        let fields = float_fields(1);
-        let v = FormView {
-            form_scroll: 1,
-            ..view(&fields)
-        };
-        let o = test_origin();
-        let c = form_control_rect(o, EDIT_W, 0);
-        assert_eq!(
-            hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
-            Some(FormAction::Consume)
-        );
-    }
-
-    #[test]
-    fn swatch_rgb_falls_back_and_clamps() {
-        // Fewer than three parsed components yields the neutral placeholder.
-        assert_eq!(swatch_rgb("1"), [0.15, 0.15, 0.18, 1.0]);
-        assert_eq!(swatch_rgb("nope"), [0.15, 0.15, 0.18, 1.0]);
-        // Three components clamp into the displayable range.
-        assert_eq!(swatch_rgb("2, -1, 0.5"), [1.0, 0.0, 0.5, 1.0]);
-    }
-}
+mod tests;

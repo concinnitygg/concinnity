@@ -86,8 +86,9 @@ impl EnvironmentMapTable {
 #[serde(default)]
 pub struct EnvironmentMap {
     /// Path to the source equirectangular panorama -- a Radiance `.hdr`, or a
-    /// panorama-sphere `.glb` / `.gltf` -- relative to the project root.
-    /// Mutually exclusive with `generator`.
+    /// panorama-sphere `.glb` / `.gltf` -- relative to the root of the file
+    /// holding the line. Mutually exclusive with `generator`.
+    #[asset(file)]
     pub source: String,
     /// Built-in source name, `sky` or `stars`. Mutually exclusive with
     /// `source`.

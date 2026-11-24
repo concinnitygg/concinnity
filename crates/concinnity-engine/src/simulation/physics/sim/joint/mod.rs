@@ -1,19 +1,7 @@
-// Joints: the constraints a caller builds between two bodies, and the rows the
-// solver holds them with.
-//
-// They live beside the contact path rather than after it because that is the
-// only place they can work. A joint solved once the contacts are done fights
-// whatever the contacts just decided and shows up as a hinge that hums, so a
-// joint is prepared with the contacts, warm started with them, and solved in
-// the same substep loop.
-//
-// The split here is by what each part needs. `frame` reduces an authored spec
-// to something the solver can read and needs no bodies at all; `rows` is the
-// linear algebra a constraint row is solved through and names no joint kind;
-// `constraint` is the only part that touches the solver's dense arrays. The
-// storage below is the fourth part: a flat list, ordered by the slot a joint
-// was given, so the solve visits joints in an order nothing about the scene
-// can change.
+// Joints, prepared, warm started and solved in the same substep loop as the
+// contacts so the two never fight. `frame` reduces an authored spec, `rows` is
+// the algebra, `constraint` touches the solver arrays, and storage is a flat
+// list ordered by slot.
 
 mod constraint;
 mod frame;

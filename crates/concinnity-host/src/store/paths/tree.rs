@@ -7,12 +7,18 @@
 
 use std::path::{Path, PathBuf};
 
+/// The `assets/` directory under the content root `content`: where a preset is
+/// looked up by name.
+pub fn assets_dir_of(content: &Path) -> PathBuf {
+    content.join(ASSETS_DIR)
+}
+
 // The tree's layout, spelled once. Private: a caller asks the tree for a path
 // rather than for a segment's name, so nothing outside this module has to know
 // that a build's cache is `cache/1`.
 const ASSETS_DIR: &str = "assets";
 const DATA_DIR: &str = "data";
-const WORLD_LOCK_FILE: &str = "world-lock.json";
+const COOK_LOCK_FILE: &str = "cook-lock.json";
 const SAVES_DIR: &str = "saves";
 const PREVIEW_SAVES_DIR: &str = "preview-saves";
 const SETTINGS_FILE: &str = "settings";
@@ -32,8 +38,8 @@ const BUILD_CACHE_SEGMENT: &str = "1";
 /// Four roots, because the four fall apart on real installs:
 ///
 /// - the **content** root holds what a person authors (`assets/` and the
-///   world files beside it),
-/// - the **build** root holds what a build produces (`data/`, the world lock),
+///   .jsonl files beside it),
+/// - the **build** root holds what a build produces (`data/`, the cook lock),
 ///   split away when the authored content should stay visible and the output
 ///   should not,
 /// - the **writable** root holds what the running application writes
@@ -76,8 +82,7 @@ impl StateTree {
     }
 
     /// Move what a build produces to `dir`, leaving the authored content where
-    /// it is: a dev project keeps `assets/` and its worlds in sight and its
-    /// blobs, lock, and caches out of the way.
+    /// it is: for a host that keeps authored content apart from build output.
     #[must_use]
     pub fn with_build<P: Into<PathBuf>>(mut self, dir: P) -> Self {
         self.build = Some(dir.into());
@@ -130,7 +135,7 @@ impl StateTree {
 
     /// The content root's `assets/` directory, holding authored source files.
     pub fn assets_dir(&self) -> PathBuf {
-        self.content.join(ASSETS_DIR)
+        assets_dir_of(&self.content)
     }
 
     /// The build root's `data/` directory, holding the blobs a build writes
@@ -141,8 +146,8 @@ impl StateTree {
 
     /// The record a build writes beside its blobs: what went into them, and
     /// what the build injected that no authored line asked for.
-    pub fn world_lock_path(&self) -> PathBuf {
-        self.build_root().join(WORLD_LOCK_FILE)
+    pub fn cook_lock_path(&self) -> PathBuf {
+        self.build_root().join(COOK_LOCK_FILE)
     }
 
     /// Directory holding the runtime save files. Created on first write by the
@@ -200,6 +205,20 @@ impl StateTree {
             .join(BUILD_CACHE_SEGMENT)
     }
 
+    /// The directories a build or a run writes into, none of which holds
+    /// authored content: the blobs, both cache directories, the saves, the
+    /// preview saves and the crash reports.
+    pub fn output_dirs(&self) -> [PathBuf; 6] {
+        [
+            self.data_dir(),
+            self.cache_root_for_build().join(CACHE_DIR),
+            self.cache_root_for_runtime().join(CACHE_DIR),
+            self.saves_dir(),
+            self.preview_saves_dir(),
+            self.crashes_dir(),
+        ]
+    }
+
     // Without a cache root the runtime segment follows what the application
     // writes, which is what keeps it writable on a read-only install.
     fn cache_root_for_runtime(&self) -> &Path {
@@ -232,7 +251,7 @@ mod tests {
         assert_eq!(tree.writable_root(), root);
         assert_eq!(tree.assets_dir(), root.join("assets"));
         assert_eq!(tree.data_dir(), root.join("data"));
-        assert_eq!(tree.world_lock_path(), root.join("world-lock.json"));
+        assert_eq!(tree.cook_lock_path(), root.join(COOK_LOCK_FILE));
         assert_eq!(tree.saves_dir(), root.join("saves"));
         assert_eq!(tree.preview_saves_dir(), root.join("preview-saves"));
         assert_eq!(tree.settings_path(), root.join("settings"));
@@ -240,6 +259,27 @@ mod tests {
         assert_eq!(tree.editor_session_path(), root.join("editor"));
         assert_eq!(tree.runtime_cache_path(), root.join("cache").join("0"));
         assert_eq!(tree.build_cache_path(), root.join("cache").join("1"));
+    }
+
+    // What a build or run writes, wherever each root went, and nothing authored.
+    #[test]
+    fn the_output_dirs_follow_their_roots() {
+        let tree = StateTree::at("/content")
+            .with_build("/build")
+            .with_writable("/state")
+            .with_cache("/caches");
+        assert_eq!(
+            tree.output_dirs()
+                .map(|d| d.to_string_lossy().replace('\\', "/")),
+            [
+                "/build/data",
+                "/caches/cache",
+                "/caches/cache",
+                "/state/saves",
+                "/state/preview-saves",
+                "/state/crashes",
+            ]
+        );
     }
 
     // A read-only install: only what the application writes moves. The content
@@ -260,7 +300,7 @@ mod tests {
         assert_eq!(tree.runtime_cache_path(), writable.join("cache").join("0"));
 
         assert_eq!(tree.data_dir(), content.join("data"));
-        assert_eq!(tree.world_lock_path(), content.join("world-lock.json"));
+        assert_eq!(tree.cook_lock_path(), content.join(COOK_LOCK_FILE));
         assert_eq!(tree.assets_dir(), content.join("assets"));
         assert_eq!(tree.build_cache_path(), content.join("cache").join("1"));
     }
@@ -299,27 +339,25 @@ mod tests {
         assert_eq!(tree.build_cache_path(), Path::new("/var/cache/app/cache/1"));
     }
 
-    // The dev layout: authored content in sight at the project root, every
-    // derived byte under one hidden directory beside it.
+    // Authored content stays at the project root while every derived byte moves
+    // to one directory beside it.
     #[test]
-    fn a_build_root_hides_the_output_and_leaves_the_authored_content_visible() {
+    fn a_build_root_moves_the_output_and_leaves_the_authored_content() {
         let project = Path::new("/proj");
-        let hidden = Path::new("/proj/.concinnity");
-        let tree = StateTree::at(project)
-            .with_writable(hidden)
-            .with_build(hidden);
+        let out = Path::new("/proj/out");
+        let tree = StateTree::at(project).with_writable(out).with_build(out);
 
         assert_eq!(tree.assets_dir(), project.join("assets"));
 
-        assert_eq!(tree.data_dir(), hidden.join("data"));
-        assert_eq!(tree.world_lock_path(), hidden.join("world-lock.json"));
-        assert_eq!(tree.settings_path(), hidden.join("settings"));
-        assert_eq!(tree.saves_dir(), hidden.join("saves"));
-        assert_eq!(tree.editor_session_path(), hidden.join("editor"));
+        assert_eq!(tree.data_dir(), out.join("data"));
+        assert_eq!(tree.cook_lock_path(), out.join(COOK_LOCK_FILE));
+        assert_eq!(tree.settings_path(), out.join("settings"));
+        assert_eq!(tree.saves_dir(), out.join("saves"));
+        assert_eq!(tree.editor_session_path(), out.join("editor"));
         // Both segments follow without a cache root of their own, which is what
         // keeps a `cache/` out of the project root.
-        assert_eq!(tree.runtime_cache_path(), hidden.join("cache").join("0"));
-        assert_eq!(tree.build_cache_path(), hidden.join("cache").join("1"));
+        assert_eq!(tree.runtime_cache_path(), out.join("cache").join("0"));
+        assert_eq!(tree.build_cache_path(), out.join("cache").join("1"));
     }
 
     // A cache root still outranks the build root for the segment a build
@@ -327,11 +365,11 @@ mod tests {
     #[test]
     fn a_cache_root_outranks_the_build_root() {
         let tree = StateTree::at("/proj")
-            .with_build("/proj/.concinnity")
+            .with_build("/proj/out")
             .with_cache("/var/cache/app");
 
         assert_eq!(tree.build_cache_path(), Path::new("/var/cache/app/cache/1"));
-        assert_eq!(tree.data_dir(), Path::new("/proj/.concinnity/data"));
+        assert_eq!(tree.data_dir(), Path::new("/proj/out/data"));
     }
 
     // The builders are independent: setting one leaves the others resolving at

@@ -14,11 +14,8 @@ use concinnity_engine::render::output::upscaler::UpscalerAvailability;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily};
 
-// Probe the system default GPU's profile and capabilities without building the
-// renderer, for the quality ceiling and the capability clamp that resolve before
-// the backend (and its render targets) are created. Creates only the cheap
-// default-device handle, which is dropped immediately. `None` when the machine
-// exposes no Metal device at all, which is what resolves a run to headless.
+// Probe the default GPU's profile and capabilities before the backend exists.
+// `None` without a Metal device, which resolves the run to headless.
 pub(crate) fn probe_device() -> Option<DeviceProbe> {
     MTLCreateSystemDefaultDevice().map(|device| {
         let capabilities = device_capabilities(&device);

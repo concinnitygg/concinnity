@@ -1,34 +1,51 @@
-// World text together with the file it was read from, which is what an
-// `Include` line in it resolves against.
+// World text together with the file it was read from and the root its paths
+// resolve against.
 
 use std::path::Path;
 
-/// World file text, and the file it was read from when there is one.
+/// World file text, the file it was read from, and the root its relative
+/// paths resolve against.
 ///
-/// A world built from a string alone has no file, so an `Include` in it can
-/// only name an absolute path; [`WorldSource::file`] lets a relative one
-/// resolve beside the world file, as it does in a build from disk.
+/// The root is the build's: every file path in the world is rebased onto it,
+/// and it is the fallback for a file with no library root of its own. A world
+/// with neither can only name absolute paths.
 #[derive(Debug, Clone, Copy)]
 pub struct WorldSource<'a> {
-    /// The world file's text.
+    /// The file's text.
     pub text: &'a str,
     /// The file the text was read from.
     pub file: Option<&'a Path>,
+    /// The build's root.
+    pub root: Option<&'a Path>,
 }
 
 impl<'a> WorldSource<'a> {
-    /// Text read from `file`.
-    pub fn file(text: &'a str, file: &'a Path) -> Self {
+    /// Text read from `file`, built under `root`.
+    pub fn file(text: &'a str, file: &'a Path, root: Option<&'a Path>) -> Self {
         Self {
             text,
             file: Some(file),
+            root,
+        }
+    }
+
+    /// Text held in memory, built under `root`.
+    pub fn text(text: &'a str, root: Option<&'a Path>) -> Self {
+        Self {
+            text,
+            file: None,
+            root,
         }
     }
 }
 
 impl<'a> From<&'a str> for WorldSource<'a> {
     fn from(text: &'a str) -> Self {
-        Self { text, file: None }
+        Self {
+            text,
+            file: None,
+            root: None,
+        }
     }
 }
 

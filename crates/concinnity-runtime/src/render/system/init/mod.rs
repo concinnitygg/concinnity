@@ -27,6 +27,7 @@ use super::streaming::StreamingSetup;
 use super::{FrameCounter, GraphicsSystem, RenderInitFailure, flow, maps};
 use crate::live_edit::hot_reload_sources::{procedural_mesh_snapshot, resolve_sdf_fields};
 use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::presentation::text_edit::HostClipboard;
 use concinnity_engine::render::frame::extract::gather_lights;
 use concinnity_engine::render::world_load::blob_release::{blobs_to_release, retained_blobs};
 use concinnity_engine::render::world_load::draw_geometry::probe_placements;
@@ -43,7 +44,7 @@ use concinnity_engine::render::world_load::texture_payloads::{
 };
 use concinnity_engine::render::world_load::world_fx::drain_world_fx;
 use concinnity_engine::render::world_load::world_scan::{
-    capture_hud_chips, color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
+    color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
 };
 use concinnity_engine::settings::quality::{ceiling_preset, resolve_ceiling};
 use concinnity_engine::settings::system::{
@@ -356,7 +357,6 @@ impl GraphicsSystem {
             .cloned()
             .unwrap_or_default();
         let quality = self.detect_quality(ctx, &launch, &persisted);
-        (self.debug_hud_chips, self.stat_hud_chips) = capture_hud_chips(ctx);
         let (
             ResolvedRenderConfig {
                 launch: render_launch,
@@ -433,7 +433,7 @@ impl GraphicsSystem {
         self.extractor
             .set_reflection_layers(core::mem::take(&mut fx.reflection_layers));
         let sdf_fields = if capture_sources {
-            resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
+            resolve_sdf_fields(&fx.sdf_volumes, self.content_root().as_deref())
         } else {
             concinnity_engine::render::world_load::source_maps::SdfFieldMap::default()
         };
@@ -564,6 +564,13 @@ impl GraphicsSystem {
         self.finalize_display_modes(ctx, &mut settings);
 
         if let Some(backend) = crate::render::system::reach(&mut self.backend) {
+            // Text editors reach the window's clipboard, whichever thread
+            // steps them.
+            if ctx.resource::<HostClipboard>().is_none()
+                && let Some(clipboard) = backend.shared_clipboard()
+            {
+                ctx.insert_resource(HostClipboard(clipboard));
+            }
             // What the settings take as built, for restarts and the planet's
             // horizon reach.
             settings.set_built_shadow_maps(backend.built_shadow_maps());

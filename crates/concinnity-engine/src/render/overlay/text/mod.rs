@@ -16,6 +16,7 @@ mod load;
 mod runs;
 
 use lines::laid_out;
+pub(in crate::render::overlay) use lines::{ellipsize_into, wrap_into};
 pub use load::{FontAtlas, load_face};
 use runs::RunColors;
 
@@ -160,11 +161,8 @@ fn baseline_offset(font: &LoadedFont, scale: f32) -> f32 {
     f32::midpoint(line_height, font.cap_px * scale)
 }
 
-// The visible glyphs' vertical extent above and below the first line's baseline,
-// in scaled pixels: how far the tallest glyph rises (ascent) and the lowest
-// glyph drops (descent). A tight background box and the layout measurement both
-// hug this, so the box wraps the ink with `padding` on every side instead of the
-// full em line box.
+// The visible glyphs' ascent and descent from the first baseline, in scaled
+// pixels, which the background box hugs.
 fn content_v_extent(content: &str, font: &LoadedFont, scale: f32) -> (f32, f32) {
     let mut top_above = 0.0_f32;
     let mut bot_below = 0.0_f32;
@@ -188,9 +186,9 @@ fn content_v_extent(content: &str, font: &LoadedFont, scale: f32) -> (f32, f32) 
 /// glyphs grown by the label's padding on every side, plus one line height per
 /// extra `\n`-split line. Mirrors the background-box math in `build_text_calls`.
 /// `top_inset` is the gap from the box top down to the text origin (the label's
-/// `y`), which `LayoutContainer` uses to place the box. Returns `None` for a
-/// hidden label, or one with no font to draw with at all, so a
-/// `LayoutContainer` drops it and reserves no space.
+/// `y`), which a `Layout` places the box by. Returns `None` for a hidden label,
+/// or one with no font to draw with at all, so a `Layout` reserves it no
+/// space.
 pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<LabelBox> {
     if !label.visible {
         return None;
@@ -228,7 +226,13 @@ pub fn build_text_calls(
     let mut out = crate::render::overlay::call_buffer::TextCallBuffer::default();
     build_text_calls_into(
         &mut out,
-        labels.iter().map(|l| (l, Placement::default())),
+        labels.iter().map(|l| {
+            let canvas = Placement {
+                canvas: l.screen.is_some(),
+                ..Placement::default()
+            };
+            (l, canvas)
+        }),
         loaded_fonts,
         viewport,
     );
@@ -272,11 +276,9 @@ pub fn build_text_calls_into<'a>(
         vertices.reserve(4 * quads);
         indices.reserve(6 * quads);
 
-        // For centered labels, auto-scale to fill ~85% of the viewport while
-        // preserving the text's aspect ratio. The label's scale field is used
-        // for non-centered labels only.
-        // Set when horizontal alignment measures it, so the background box
-        // below does not measure the same content a second time.
+        // Centered labels scale to fill ~85% of the viewport; others use
+        // `label.scale`. `widest_line` saves the background box a second
+        // measurement.
         let mut widest_line: Option<f32> = None;
         let (x0, y0, scale) = if label.centered && win_w > 0.0 && win_h > 0.0 {
             let w1 = text_advance_width(content, font, 1.0);
@@ -294,7 +296,7 @@ pub fn build_text_calls_into<'a>(
         } else {
             // The anchor point and scale: a view-owned label maps through its
             // `fit` transform, a HUD label stays in literal window pixels.
-            let (ax, ay, scale) = if label.screen.is_some() {
+            let (ax, ay, scale) = if placement.canvas {
                 let t = match label.fit {
                     SpriteFit::Bottom => bottom,
                     SpriteFit::Cover => cover,
@@ -333,13 +335,9 @@ pub fn build_text_calls_into<'a>(
         let aw = font.atlas_w as f32;
         let ah = font.atlas_h as f32;
 
-        // Background box: a filled quad behind the glyphs, sized to hug the
-        // visible glyphs grown by `padding` on every side (not the full em line
-        // box, which left a large gap above the caps). Emitted first so the
-        // glyphs composite on top. It carries a sentinel UV (a negative u) that
-        // the text shader reads as "solid fill", with the box alpha passed
-        // through in v. Empty content draws nothing at all (so a blanked label
-        // fully disappears).
+        // The background box hugs the glyphs plus `padding`, drawn first with a
+        // negative-u sentinel the shader reads as solid fill. Empty content
+        // draws nothing.
         if label.background[3] > 0.0 && !content.is_empty() {
             let lines = content.split('\n').count().max(1) as f32;
             let text_w = widest_line.unwrap_or_else(|| widest_line_width(content, font, scale));
@@ -434,8 +432,15 @@ pub fn build_text_calls_into<'a>(
                 vertices,
                 indices,
                 atlas_slot: font.atlas_slot,
-                clip_rect: placement.clip.map(|b| band_to_window(&overlay, b)),
+                clip_rect: placement.clip.map(|b| {
+                    if placement.canvas {
+                        band_to_window(&overlay, b)
+                    } else {
+                        b
+                    }
+                }),
                 layer: placement.layer,
+                rank: placement.rank,
             });
         }
     }
@@ -501,6 +506,7 @@ mod tests {
             padding: 0.0,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
             visible: true,
             screen: None,
         }
@@ -934,6 +940,8 @@ mod tests {
         let calls = placed(Placement {
             clip: Some(band),
             layer: 0,
+            rank: 0,
+            canvas: true,
         });
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].clip_rect, Some(band));

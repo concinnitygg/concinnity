@@ -2,18 +2,17 @@
 //! world or the entry list live in `behavior.rs`; this holds what the panel
 //! remembers between frames and the resets that touch nothing else.
 
+use concinnity_engine::ecs::asset_id::AssetId;
+
 use crate::editor::behavior::clip::Clip;
 use crate::editor::behavior::panel::{Status, ViewMode};
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::NodePulse;
+use crate::editor::hook::edit::behavior::BehaviorData;
 
-// Shown state, which of the world's Behavior entries is open (an ordinal into
-// them, so an unrelated add / delete cannot retarget it), the selected outline
-// row, the outline and palette scrolls, whether the palette is up and which of
-// its options the keyboard is on, whether the value field holds keyboard focus,
-// and the world checker's verdict on the open behavior. The name field carries
-// its own focus, and `remove_armed` is the removal chip waiting on the press
-// that carries it out.
+// Behavior panel state: the open behavior (an ordinal into the entries), the
+// selected row, the palette, value-field focus, and the checker's verdict.
+// `remove_armed` is the removal chip awaiting its press.
 #[derive(Debug, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -22,9 +21,7 @@ use crate::editor::behavior::pulse::NodePulse;
 pub(in crate::editor::hook) struct BehaviorState {
     pub(in crate::editor::hook) index: usize,
     pub(in crate::editor::hook) row: Option<usize>,
-    pub(in crate::editor::hook) scroll: usize,
     pub(in crate::editor::hook) picking: bool,
-    pub(in crate::editor::hook) pick_scroll: usize,
     pub(in crate::editor::hook) pick: usize,
     // The palette's filter text, mirrored off its field once a frame so the
     // presses and draws that follow all narrow by the same query.
@@ -34,9 +31,14 @@ pub(in crate::editor::hook) struct BehaviorState {
     pub(in crate::editor::hook) remove_armed: bool,
     pub(in crate::editor::hook) status: Option<Status>,
     pub(in crate::editor::hook) mode: ViewMode,
-    // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
+    // The panel's name, value, and filter fields in the world it is built into.
+    pub(in crate::editor::hook) fields: [Option<AssetId>; 3],
+    // What is typed into the name and value fields, so a world the panel is
+    // rebuilt into shows it again.
+    pub(in crate::editor::hook) typed: [String; 2],
+    // The chart canvas's pan, and the card under the cursor.
     pub(in crate::editor::hook) pan: [f32; 2],
-    pub(in crate::editor::hook) pan_drag: Option<[f32; 2]>,
+    pub(in crate::editor::hook) hovered: Option<usize>,
     // The list member held for a paste, with the kind of list it came out of so
     // it can only land in one of the same kind. Session state, not an edit, and
     // deliberately not cleared by opening another behavior: carrying a node
@@ -46,13 +48,44 @@ pub(in crate::editor::hook) struct BehaviorState {
     // and the things they reach rather than for places inside one, so the
     // outline row the other two views share cannot address them.
     pub(in crate::editor::hook) overview_card: Option<usize>,
-    // Live-debug state fed by the runtime's execution trace while a play
-    // session runs with the Behavior or Variables panel open
-    // (`hook/drive/trace.rs`). Pulses cover the OPEN behavior only (paths are
-    // per-body); breakpoints are held by behavior NAME + node path so they
-    // survive preview rebuilds and body edits shifting node ids.
+    // Live-debug pulses for the open behavior during play, with breakpoints
+    // held by behavior name and node path so they survive rebuilds.
     pub(in crate::editor::hook) pulses: Vec<NodePulse>,
     pub(in crate::editor::hook) breakpoints: Vec<(String, Path)>,
+    // What the panel last showed, and the revision bumped each time it changed.
+    pub(in crate::editor::hook) shown: Option<Shown>,
+    pub(in crate::editor::hook) revision: u64,
+    // The outline row to bring into view, and whether the palette's highlight
+    // moved: asked for by an action, shown by the next frame's panel.
+    pub(in crate::editor::hook) reveal: Option<usize>,
+    pub(in crate::editor::hook) reveal_now: Option<usize>,
+    pub(in crate::editor::hook) reveal_pick: bool,
+    pub(in crate::editor::hook) reveal_pick_now: bool,
+    // Scratch the panel's live marks and chart are written through each frame.
+    pub(in crate::editor::hook) marks: Marks,
+}
+
+// The panel's data and what it was built from, so a frame whose model did not
+// change rebuilds none of it.
+#[derive(Debug)]
+pub(in crate::editor::hook) struct Shown {
+    pub(in crate::editor::hook) entries: u64,
+    pub(in crate::editor::hook) index: usize,
+    pub(in crate::editor::hook) row: Option<usize>,
+    pub(in crate::editor::hook) mode: ViewMode,
+    pub(in crate::editor::hook) filter: String,
+    pub(in crate::editor::hook) data: BehaviorData,
+}
+
+// Live-debug marks over the open body: cards and rows whose node just executed,
+// with each pulse's strength, the cards holding a breakpoint, and where the
+// chart's wire words went.
+#[derive(Debug, Default)]
+pub(in crate::editor::hook) struct Marks {
+    pub(in crate::editor::hook) pulse_cards: Vec<(usize, f32)>,
+    pub(in crate::editor::hook) pulse_rows: Vec<(usize, f32)>,
+    pub(in crate::editor::hook) break_cards: Vec<usize>,
+    pub(in crate::editor::hook) taken: Vec<[f32; 4]>,
 }
 
 impl BehaviorState {
@@ -69,8 +102,8 @@ impl BehaviorState {
     pub(in crate::editor::hook) fn reset_for_world(&mut self) {
         self.index = 0;
         self.row = None;
-        self.scroll = 0;
         self.status = None;
+        self.shown = None;
     }
 
     // Step to the next view. The pan does not survive, because each chart is
@@ -78,7 +111,6 @@ impl BehaviorState {
     pub(in crate::editor::hook) fn toggle_view(&mut self) {
         self.mode = self.mode.other();
         self.picking = false;
-        self.pan_drag = None;
         self.pan = [0.0, 0.0];
     }
 
@@ -106,9 +138,7 @@ mod tests {
         BehaviorState {
             index: 3,
             row: Some(2),
-            scroll: 4,
             picking: true,
-            pick_scroll: 5,
             pick: 6,
             filter: "wait".into(),
             focus: true,
@@ -117,7 +147,6 @@ mod tests {
             status: Some(Status::message("bad")),
             mode: ViewMode::Chart,
             pan: [1.0, 2.0],
-            pan_drag: Some([3.0, 4.0]),
             clip: Some(Clip {
                 list: List::Nodes,
                 value: serde_json::json!({ "kind": "wait" }),
@@ -125,6 +154,7 @@ mod tests {
             overview_card: Some(1),
             pulses: Vec::new(),
             breakpoints: vec![("b".into(), Vec::new())],
+            ..BehaviorState::default()
         }
     }
 
@@ -133,23 +163,23 @@ mod tests {
         let mut s = dirty();
         s.blur_inputs();
         assert!(!s.focus && !s.name_focus && !s.remove_armed && !s.picking);
-        assert_eq!((s.index, s.row, s.scroll), (3, Some(2), 4));
-        assert_eq!((s.pick, s.pick_scroll, s.filter.as_str()), (6, 5, "wait"));
+        assert_eq!((s.index, s.row), (3, Some(2)));
+        assert_eq!((s.pick, s.filter.as_str()), (6, "wait"));
         assert!(s.status.is_some());
         assert_eq!(s.mode, ViewMode::Chart);
-        assert_eq!((s.pan, s.pan_drag), ([1.0, 2.0], Some([3.0, 4.0])));
+        assert_eq!(s.pan, [1.0, 2.0]);
     }
 
     #[test]
     fn reset_for_world_keeps_the_clip_and_breakpoints() {
         let mut s = dirty();
         s.reset_for_world();
-        assert_eq!((s.index, s.row, s.scroll, s.status), (0, None, 0, None));
+        assert_eq!((s.index, s.row, s.status), (0, None, None));
         assert!(s.clip.is_some());
         assert_eq!(s.breakpoints.len(), 1);
         assert!(s.focus && s.name_focus && s.remove_armed && s.picking);
-        assert_eq!((s.pick, s.pick_scroll, s.filter.as_str()), (6, 5, "wait"));
+        assert_eq!((s.pick, s.filter.as_str()), (6, "wait"));
         assert_eq!((s.mode, s.overview_card), (ViewMode::Chart, Some(1)));
-        assert_eq!((s.pan, s.pan_drag), ([1.0, 2.0], Some([3.0, 4.0])));
+        assert_eq!(s.pan, [1.0, 2.0]);
     }
 }

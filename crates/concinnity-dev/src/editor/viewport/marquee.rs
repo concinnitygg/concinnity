@@ -1,15 +1,9 @@
 //! The marquee (box-select) rectangle: the pure screen-rect math and the one
-//! injected sprite drawn while a drag is in flight. The hook
-//! (`hook/drag/marquee.rs`) owns the drag state and the release-time selection.
+//! shape drawn while a drag is in flight. The hook (`hook/drag/marquee.rs`)
+//! owns the drag state and the release-time selection.
 
-use concinnity_engine::components::Sprite;
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
-
-use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::theme;
-
-pub(crate) const RECT: AssetId = AssetId(family_base(Family::Marquee));
+use crate::editor::ui::shapes::{Shape, Shapes};
 
 // A press must travel this far (either axis) before it becomes a marquee; a
 // stiller release is an empty-space click.
@@ -18,17 +12,6 @@ pub(crate) const DRAG_START_PX: f32 = 4.0;
 const BORDER_W: f32 = 1.5;
 // Accent fill faint enough to keep the scene readable through the band.
 const FILL_TINT: [f32; 4] = [0.26, 0.42, 0.66, 0.12];
-
-pub(crate) fn rect_sprite() -> (AssetId, Sprite) {
-    let rect = Sprite {
-        tint: FILL_TINT,
-        border_width: BORDER_W,
-        border_color: theme::ACCENT_TINT,
-        visible: false,
-        ..Default::default()
-    };
-    (RECT, rect)
-}
 
 // The `[x, y, w, h]` rect spanned by two drag corners, in any order.
 pub(crate) fn rect_from_corners(a: [f32; 2], b: [f32; 2]) -> [f32; 4] {
@@ -43,24 +26,15 @@ pub(crate) fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] <= b[0] + b[2] && b[0] <= a[0] + a[2] && a[1] <= b[1] + b[3] && b[1] <= a[1] + a[3]
 }
 
-pub(crate) fn place(world: &mut World, rect: [f32; 4]) {
-    if let Some(s) = sprite_mut(world) {
-        s.x = rect[0];
-        s.y = rect[1];
-        s.width = rect[2];
-        s.height = rect[3];
-        s.visible = true;
-    }
-}
-
-pub(crate) fn hide(world: &mut World) {
-    if let Some(s) = sprite_mut(world) {
-        s.visible = false;
-    }
-}
-
-fn sprite_mut(world: &mut World) -> Option<&mut Sprite> {
-    world.get_mut_by_id::<Sprite>(RECT)
+// The band over `rect`.
+pub(crate) fn push(shapes: &mut Shapes<'_>, rect: [f32; 4]) {
+    shapes.push(Shape {
+        rect,
+        fill: FILL_TINT,
+        border: theme::ACCENT_TINT,
+        border_width: BORDER_W,
+        ..Shape::default()
+    });
 }
 
 #[cfg(test)]

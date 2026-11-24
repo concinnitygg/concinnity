@@ -312,11 +312,9 @@ pub(crate) fn cell_size(surface: &WaterSurface) -> f32 {
     2.0 * surface.extent[0].max(surface.extent[1]).max(0.0) / n
 }
 
-// The pinch of each of `tagged` (wave, is wind sea), of which the first
-// `displacing` move the grid. The wind sea's displacing waves share one pinch
-// so together they reach `WIND_SEA_PINCH`; each swell wave takes its authored
-// steepness split over the displacing swell, as a lone Gerstner wave would.
-// The whole is scaled down if it would pass `MAX_TOTAL_PINCH`.
+// The pinch of each `tagged` wave, the first `displacing` of which move the
+// grid. The wind sea's waves share `WIND_SEA_PINCH`, swells split their authored
+// steepness, and the total is capped at `MAX_TOTAL_PINCH`.
 fn pinch_waves(tagged: &[(Wave, bool)], displacing: usize) -> Vec<BodyWave> {
     let moving = &tagged[..displacing];
     let slope = |w: &Wave| w.wavenumber() * w.amplitude;
@@ -485,8 +483,9 @@ pub struct WaterSurface {
     pub waves: Vec<WaterWave>,
     /// Linear-space RGB reflectance of deep water's body, each channel in
     /// [0, 1]: the share of the light reaching the surface that a deep column
-    /// scatters back out. Values outside [0, 1] are clamped.
-    #[asset(default = [0.02, 0.05, 0.15])]
+    /// scatters back out. Values outside [0, 1] are clamped. Unset, it is
+    /// clear open ocean's, which reads dark navy under the sky's reflection.
+    #[asset(default = [0.002, 0.008, 0.03])]
     pub deep_color: [f32; 3],
     /// Linear-space RGB reflectance of shallow water's body near the shore,
     /// each channel in [0, 1]. The seabed seen through the shallows is

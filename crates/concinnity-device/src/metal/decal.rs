@@ -30,11 +30,8 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 
-// The projected-decal pass: the pipeline, the shared unit-cube geometry, and
-// the sampler. They are built either at init (≥1 declared decal) or on the
-// first runtime `add_decal`; they stay `None` only when the world has never had
-// a decal, in which case the pass is skipped before iteration. The slot table
-// is the scene's (`SceneState::decals`).
+// The projected-decal pass, built at init with authored decals or on the first
+// runtime `add_decal`.
 pub(crate) struct DecalState {
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub cube_vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -43,16 +40,8 @@ pub(crate) struct DecalState {
 }
 
 impl MtlContext {
-    // Encode the projected-decal pass. Caller has ended the main pass, so
-    // `targets.hdr.depth` (MSAA) holds the scene depth and
-    // `targets.hdr.hdr_resolve` holds the resolved scene color. The pass
-    // alpha-blends one textured stamp per decal into `hdr_resolve`.
-    //
-    // `vp` is the same view-projection the main pass rasterized with:
-    // jittered when TAA is on, so the reconstructed world position lands on
-    // the same pixel the main pass shaded.
-    // pub(in crate::metal) so the render-graph executor in
-    // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
+    // Encode the decal pass: one alpha-blended stamp per decal into
+    // `hdr_resolve`. `vp` is the main pass's jittered view-projection.
     pub(in crate::metal) fn encode_decals(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -128,12 +117,7 @@ impl MtlContext {
         // a single `[[attribute(0)]] float3` mapped to buffer(2) by the
         // pipeline's vertex descriptor.
         enc.set_vertex_buffer(vbuf, 0, 2);
-        // Decal sampler at fragment sampler(0); texture(0) is the MSAA
-        // scene depth.
-        // Sample the single-sample `depth_resolve` (post-
-        // Main depth, plus any raymarched surface depth) instead
-        // of the MSAA original. Lets decals project correctly onto
-        // raymarched surfaces.
+        // `depth_resolve`, so decals land on raymarched surfaces too.
         enc.set_fragment_texture(
             self.targets.hdr.depth_resolve.as_ref(),
             decal::SCENE_DEPTH.index,
@@ -167,15 +151,9 @@ impl MtlContext {
     }
 }
 
-// Build the projected-decal pipeline. The pass runs after the main HDR pass:
-// a per-decal unit cube is rasterized, and the fragment shader reconstructs
-// the world-space sample point at each pixel from the main pass's MSAA depth
-// attachment, transforms it into decal-local space, and stamps the decal
-// texture onto whatever sits inside the unit box. The output is alpha-blended
-// into the resolved HDR target (`hdr_resolve`).
-//
-// Depth state is `Always` / no write -- every rasterized pixel inside the box
-// is a candidate; the shader's own bounds test does the volumetric culling.
+// The decal pipeline: a unit cube per decal whose fragment reconstructs the
+// world point from depth and stamps the texture, alpha-blended into
+// `hdr_resolve`. Depth is `Always` without write; the shader bounds-tests.
 pub(super) fn build_decal_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,

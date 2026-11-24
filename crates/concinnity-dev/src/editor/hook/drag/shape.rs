@@ -1,8 +1,8 @@
-//! `EditorHook`: a `CharacterShape` slider drag. The press on a slider takes the
-//! value under the cursor; while the button is held the value follows the
-//! cursor and the edited shape is re-resolved against the live pose every
-//! frame (no rebuild); releasing commits the working values to the entry as
-//! ONE edit, so undo reverts the whole drag; Escape restores the start state.
+//! `EditorHook`: a `CharacterShape` slider drag. The first change a held slider
+//! sends starts the drag from the entry's values; each change re-resolves the
+//! edited shape against the live pose (no rebuild); letting go commits the
+//! working values to the entry as ONE edit, so undo reverts the whole drag.
+//! Escape restores the start state, and the rest of that drag is ignored.
 
 use concinnity_engine::components::{CharacterCapsule, CharacterShape, FrameInput};
 use concinnity_engine::ecs::World;
@@ -11,91 +11,109 @@ use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::panels::character_shape::{ShapeValues, SliderRow};
-use crate::editor::widget_slider;
 
 pub(in crate::editor::hook) struct ShapeDrag {
-    pub(in crate::editor::hook) slider: usize,
-    rect: [f32; 4],
+    slider: usize,
+    row: SliderRow,
     shape_idx: usize,
     mesh: String,
-    sliders: Vec<SliderRow>,
     joints: Vec<String>,
     capsule: Option<CharacterCapsule>,
     start: ShapeValues,
     pub(in crate::editor::hook) values: ShapeValues,
+    cancelled: bool,
 }
 
 impl EditorHook {
-    pub(in crate::editor::hook) fn begin_shape_drag(
+    // Slider `slider` moved to `value` while held: preview the shape with it.
+    pub(in crate::editor::hook) fn drag_shape_slider(
         &mut self,
-        data: &crate::editor::hook::edit::character_shape::ShapeData,
         slider: usize,
-        rect: [f32; 4],
-        mouse: [f32; 2],
+        value: f32,
         world: &mut World,
     ) {
-        let Some(b) = &data.binding else {
+        if self.shape.drag.as_ref().is_none_or(|d| d.slider != slider) {
+            self.shape.drag = self.begin_shape_drag(slider, world);
+        }
+        let Some(drag) = &mut self.shape.drag else {
             return;
         };
-        let Some(shape_idx) = b.shape_idx else {
+        if drag.cancelled || !drag.set(value) {
             return;
-        };
-        let start = self.shape_values(shape_idx);
-        let mut drag = ShapeDrag {
-            slider,
-            rect,
-            shape_idx,
-            mesh: b.mesh.clone(),
-            sliders: data.derived.sliders.clone(),
-            joints: data.target.joint_names.clone(),
-            capsule: self.mesh_capsule(&b.mesh),
-            values: start.clone(),
-            start,
-        };
-        drag.follow(mouse[0]);
+        }
         drag.preview(world);
-        self.shape.drag = Some(drag);
+        let shown = drag.values.get(&drag.row);
+        if let Some(v) = self
+            .shape
+            .cache
+            .as_mut()
+            .and_then(|c| c.values.get_mut(slider))
+        {
+            *v = shown;
+        }
     }
 
-    // Per-frame drive: follow the cursor while the button is held, cancel on
-    // Escape, commit on release.
+    fn begin_shape_drag(&self, slider: usize, world: &World) -> Option<ShapeDrag> {
+        let data = self.shape_data(world);
+        let binding = data.binding?;
+        let shape_idx = binding.shape_idx?;
+        let row = data.derived.sliders.get(slider)?.clone();
+        let start = self.shape_values(shape_idx);
+        Some(ShapeDrag {
+            slider,
+            row,
+            shape_idx,
+            capsule: self.mesh_capsule(&binding.mesh),
+            mesh: binding.mesh,
+            joints: data.target.joint_names,
+            values: start.clone(),
+            start,
+            cancelled: false,
+        })
+    }
+
+    // Slider `slider` was let go at `value`: commit the drag, if it changed
+    // anything and was not cancelled.
+    pub(in crate::editor::hook) fn release_shape_slider(&mut self, slider: usize, value: f32) {
+        let Some(mut drag) = self.shape.drag.take() else {
+            return;
+        };
+        if drag.cancelled || drag.slider != slider {
+            return;
+        }
+        drag.set(value);
+        if drag.values != drag.start {
+            self.commit_shape(drag.shape_idx, &drag.values);
+        }
+    }
+
+    // Escape cancels a drag in flight: the start state shows again.
     pub(in crate::editor::hook) fn drive_shape_drag(
         &mut self,
         input: &FrameInput,
         world: &mut World,
     ) {
-        if input.escape {
-            if let Some(drag) = self.shape.drag.take() {
-                drag.restore(world);
-            }
+        if !input.escape {
             return;
         }
         let Some(drag) = &mut self.shape.drag else {
             return;
         };
-        if input.left_button_down {
-            if drag.follow(input.mouse_x) {
-                drag.preview(world);
-            }
+        if drag.cancelled {
             return;
         }
-        let Some(drag) = self.shape.drag.take() else {
-            return;
-        };
-        if drag.values != drag.start {
-            self.commit_shape(drag.shape_idx, &drag.values);
-        }
+        drag.cancelled = true;
+        drag.restore(world);
+        self.shape.cache = None;
     }
 }
 
 impl ShapeDrag {
-    // Take the value under cursor x; `true` when it changed.
-    fn follow(&mut self, mx: f32) -> bool {
-        let row = &self.sliders[self.slider];
-        let value = widget_slider::value_at(self.rect, mx, row.kind.range());
-        let before = self.values.clone();
-        self.values.set(row, value, &self.joints);
-        self.values != before
+    // Set the dragged row to `value`; `true` when that changed it.
+    fn set(&mut self, value: f32) -> bool {
+        let before = self.values.get(&self.row);
+        self.values.set(&self.row, value, &self.joints);
+        (self.values.get(&self.row) - before).abs() > f32::EPSILON
     }
 
     fn preview(&self, world: &mut World) {

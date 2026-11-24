@@ -5,15 +5,14 @@
 //! edit keeps the form open and writes nothing.
 
 use concinnity_cook::build_only::include::SourcedEntry;
-use concinnity_engine::ecs::World;
 use std::path::PathBuf;
 
-use super::fixtures::{entry, hook, set_field, world_with_fields};
+use super::fixtures::{entry, hook, toasted, world_with_fields};
 use crate::editor::entry_list::EntryList;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
-use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::panels::form_panel::FormAction;
 
 const FLAG: usize = 1;
 
@@ -82,11 +81,11 @@ impl FormExtras for Stub {
     }
 }
 
-fn open_with_stub(h: &mut EditorHook, world: &mut World, file: PathBuf) {
-    h.open_form(world, "PointLight".to_string(), FormTarget::New);
+fn open_with_stub(h: &mut EditorHook, file: PathBuf) {
+    h.open_form("PointLight".to_string(), FormTarget::New);
     h.form.extras = Some(Box::new(Stub { flag: false, file }));
-    h.refresh_form(world);
-    set_field(world, form_panel::NAME_INPUT, "lamp");
+    h.refresh_form();
+    h.form.name = "lamp".to_string();
 }
 
 #[test]
@@ -94,28 +93,27 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("made/by_stub.txt");
     let mut h = hook(vec![entry("other", "PointLight")]);
-    let mut world = world_with_fields();
-    open_with_stub(&mut h, &mut world, file.clone());
+    let world = world_with_fields();
+    open_with_stub(&mut h, file.clone());
 
     assert!(h.form.fields.iter().all(|f| f.key != "range"), "hidden");
     assert_eq!(h.form_row_count(), h.form.fields.len() + 2);
-    let (rows, blocked) = h.form_extras_data(&world);
+    let (rows, blocked) = h.form_extras_data();
     assert_eq!(rows[0].detail.as_deref(), Some("for 'lamp'"));
     assert_eq!(blocked.as_deref(), Some("tick the flag"));
-    let data = h.panel_data(&world);
-    let view = h.make_form_view(&data, [0.0, 0.0]);
-    assert_eq!(view.extras.len(), 2);
-    assert_eq!(view.blocked, Some("tick the flag"));
+    let data = h.form_data();
+    assert_eq!(data.extras.len(), 2);
+    assert_eq!(data.blocked.as_deref(), Some("tick the flag"));
 
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.apply_form(FormAction::Confirm, &world);
     assert_eq!(h.entries.len(), 1, "blocked: nothing added");
     assert_eq!(h.form.error.as_deref(), Some("tick the flag"));
     assert!(!file.exists());
 
-    h.apply_form(FormAction::PressExtra(FLAG), &mut world);
+    h.apply_form(FormAction::PressExtra(FLAG), &world);
     assert!(h.form.touched);
-    assert_eq!(h.form_extras_data(&world).1, None);
-    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.form_extras_data().1, None);
+    h.apply_form(FormAction::Confirm, &world);
     assert!(!h.form_open());
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["args"]["$id"], "lamp");
@@ -126,19 +124,13 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
     );
     assert_eq!(h.entries[0]["args"]["intensity"], 3.0);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "written");
-    let toasts: Vec<String> = h
-        .notifier
-        .stack()
-        .cards
-        .into_iter()
-        .map(|c| c.message)
-        .collect();
+    let toasts = toasted(&mut h);
     assert!(
         toasts.contains(&"stub after lamp".to_string()),
         "{toasts:?}"
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), 1);
     assert!(h.entries[0]["args"].get("intensity").is_none());
     assert!(!h.can_undo(), "one step");
@@ -156,20 +148,23 @@ fn a_refused_commit_keeps_the_form_and_writes_nothing() {
     let include = || SourcedEntry {
         entry: serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}}),
         file: None,
+        root: None,
     };
+    let lib = h.content_root.join("lib.jsonl");
     let other = || SourcedEntry {
         entry: entry("other", "PointLight"),
-        file: Some("lib.jsonl".into()),
+        file: Some(lib.clone()),
+        root: None,
     };
     h.entries = EntryList::with_includes(
         vec![include(), other(), include(), other()],
-        std::path::Path::new(&h.world_path),
+        h.world_origin(),
     );
     h.baseline = h.entries.clone();
-    let mut world = world_with_fields();
-    open_with_stub(&mut h, &mut world, file.clone());
-    h.apply_form(FormAction::PressExtra(FLAG), &mut world);
-    h.apply_form(FormAction::Confirm, &mut world);
+    let world = world_with_fields();
+    open_with_stub(&mut h, file.clone());
+    h.apply_form(FormAction::PressExtra(FLAG), &world);
+    h.apply_form(FormAction::Confirm, &world);
     assert_eq!(h.entries.len(), 4);
     assert!(h.entries[1]["args"].get("intensity").is_none());
     assert!(h.form_open() && h.form.extras.is_some());

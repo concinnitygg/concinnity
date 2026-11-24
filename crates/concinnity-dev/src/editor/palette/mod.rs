@@ -62,13 +62,8 @@ pub(crate) struct PaletteItem {
 // How many committed rows the empty-query list remembers, newest first.
 pub(crate) const RECENT_CAP: usize = 6;
 
-// The items `query` keeps, best first, as indices into `items`.
-//
-// A query starting with '/' narrows to the commands alone, ranked by the name
-// after the slash with any arguments ignored, so "/add Sprite" still ranks
-// /add first. An empty query is the launch list instead: recently committed
-// rows, then the panels and commands (both short lists); assets appear once
-// something is typed, so a large world never floods the default view.
+// The items `query` keeps, best first. A '/' query ranks commands by name; an
+// empty query lists recent rows, panels and commands.
 pub(crate) fn matches(items: &[PaletteItem], recent: &[String], query: &str) -> Vec<usize> {
     let typed = query.trim();
     if let Some(rest) = typed.strip_prefix('/') {

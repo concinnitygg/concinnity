@@ -210,11 +210,8 @@ mod tests {
 
     #[test]
     fn oblique_clip_puts_the_plane_at_the_near_depth() {
-        // A view-space plane at z = -5 facing the camera (kept side is farther,
-        // z < -5). After oblique clipping the reversed-depth projection, a point
-        // ON the plane maps to ndc.z ~= 1 (the near plane), a point in front (far
-        // side) to ndc.z in (0, 1), and a point behind the plane past 1
-        // (clipped).
+        // A plane at z = -5 facing the camera: on it ndc.z is ~1, in front of
+        // it in (0, 1), and behind it past 1.
         let proj = camera_projection(1.2, 1.0, 0.1);
         // Plane z = -5: n.p + d = 0 with kept side n.p + d > 0 toward -z (far).
         // Choose C so the far/kept side is positive: C = (0,0,-1,-5) -> for
@@ -247,11 +244,7 @@ mod tests {
 
     #[test]
     fn planar_matrices_clip_below_the_water_plane() {
-        // A camera above a horizontal water plane (y = 0, normal up). The mirror
-        // pass must clip world geometry BELOW the plane (it would otherwise leak
-        // into the reflection). Verify a below-water point lands past the near
-        // plane (ndc.z > 1 under reversed depth) and an above-water point stays
-        // in [0, 1].
+        // Below the water plane must clip (ndc.z > 1); above stays in [0, 1].
         let plane = [0.0, 1.0, 0.0, 0.0]; // y = 0, normal +y (kept side: above)
         // Simple camera at (0, 3, 6) looking toward -z and slightly down. Build a
         // view that just translates (identity rotation is enough for the depth
@@ -279,11 +272,8 @@ mod tests {
         assert!(close(m.eye[1], -3.0, 1e-5), "reflected eye height");
     }
 
-    // The light-binning kernel places a cluster by unprojecting the tile's NDC
-    // corners through `inv_view_proj` (at the far depth) and slicing along
-    // `view_forward`; the mirror's fragment places itself by its rasterized
-    // position and `-(view * p).z`. Both must agree for every reflected point,
-    // through the oblique projection.
+    // The light-binning kernel and the mirror fragment must place every
+    // reflected point in the same cluster through the oblique projection.
     #[test]
     fn a_mirror_fragment_finds_the_cluster_built_around_it() {
         let plane = [0.0, 1.0, 0.0, 0.0];
@@ -363,11 +353,8 @@ mod tests {
 
     #[test]
     fn reflected_frustum_captures_geometry_behind_the_camera() {
-        // A vertical mirror at z = -5 (unit normal +z, facing the camera). The
-        // camera sits at the origin looking down -z, toward the mirror. An object
-        // BEHIND the camera (z = +3) is outside the main frustum, but its
-        // reflection is visible in the mirror -- so the reflected-frustum cull must
-        // capture it where the main-camera set would miss it (the V1 gap).
+        // An object behind the camera is visible in the mirror, so the
+        // reflected cull must keep it.
         let plane = [0.0, 0.0, 1.0, 5.0]; // n.p + d = 0 -> z = -5
         let view = [
             [1.0, 0.0, 0.0, 0.0],

@@ -125,11 +125,8 @@ impl Features {
             },
         );
         let taa_enabled = plan.temporal;
-        // The device's ceiling for the HDR format, re-queried on both paths since
-        // the outgoing world's AA mode may differ; the resolved setting is what
-        // the world actually asks for. A temporal technique resolves it to one
-        // sample, which drops the resolve attachment from every render pass and
-        // makes the color image the scene spine.
+        // The device's ceiling for the HDR format, re-queried on reload too. A temporal
+        // technique resolves to one sample, which drops the resolve attachment.
         let msaa_samples = super::device::resolve_sample_count(
             super::device::get_max_usable_sample_count(&hw.instance, hw.physical_device),
             hdr_samples,
@@ -162,13 +159,9 @@ impl VkContext {
         Self::build(init, None)
     }
 
-    // Construct from the assembled backend inputs (see
-    // `concinnity_engine::render::backend::init::BackendInit` for per-field docs).
-    //
-    // `reuse` is `Some` only on a live editor `WorldReload::reload_world`: the
-    // hardware and swapchain are inherited from the outgoing context instead of
-    // acquired fresh, and every per-world resource is rebuilt on them. `None`
-    // acquires it all fresh, the normal launch path.
+    // Construct from the backend inputs. `reuse` is `Some` on a live
+    // `reload_world`, inheriting the hardware and swapchain; `None` acquires them
+    // fresh.
     fn build(
         init: BackendInit<'_>,
         reuse: Option<(VkHardware, SwapchainState)>,
@@ -434,7 +427,6 @@ impl VkContext {
             transparent: world_fx.transparent,
             water_sim: world_fx.water_sim,
             wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
-            wake_frame: None,
             planar_reflection: world_fx.planar_reflection,
             particle: ParticleState::default(),
             grass,
@@ -781,37 +773,17 @@ impl WorldReload for VkContext {
         Some(self.hw.swapchain_config)
     }
 
-    // Rebuild this backend's world content in place on its existing hardware for
-    // a live editor edit: wait for the GPU to idle, hand the hardware and
-    // swapchain to a successor context built from `init`, then replace `self`
-    // with it. The outgoing `self` is dropped by the `*self = rebuilt`
-    // assignment; `reused_by_successor` (set just before it) makes that Drop free
-    // only this world's content and leave the shared hardware to the successor.
-    // Only ever called when `hot_swap_config` reported a config matching
-    // `init.swapchain_config()`, so the swapchain (format / frames-in-flight /
-    // EDR) is guaranteed unchanged. Mirrors `DxContext::reload_world`.
-    //
-    // The old world's content is freed BEFORE the successor builds, into the
-    // allocator the two contexts share, so the rebuild fills the released
-    // blocks instead of holding both worlds' memory for the reload's duration.
-    //
-    // On a content-build failure (essentially impossible for a pre-validated
-    // editor edit built from the engine's built-in shaders) the moved window is
-    // closed with the dropped hardware handles and the old world is already
-    // gone; `self` keeps the shared hardware (the flag is unset on the failure
-    // path) and tears it down in a normal Drop, so the caller can drop this
-    // backend and mark the session failed without a leak.
+    // Rebuild this world's content in place for a live editor edit: free the old
+    // content into the shared allocator, build a successor on the same hardware and
+    // swapchain, and replace `self` with it. Only called when the swapchain config
+    // matches. On failure the old world is already gone and `self` keeps the
+    // hardware for a normal `Drop`.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let reuse = (self.hw.hand_over()?, self.swapchain.share());
-        // Free the old world into the shared allocator BEFORE the successor
-        // builds, and make the released ranges placeable now (`wait_idle`
-        // above gated everything in flight): the rebuild then fills the same
-        // blocks instead of doubling the device footprint for the reload's
-        // duration. The flag is set first so the content pass keeps the
-        // swapchain for the successor; a build failure unsets it and re-runs
-        // the swapchain teardown the content pass skipped, so the
-        // failed-session `Drop` still tears the shared hardware down.
+        // Free the old world before the successor builds so it reuses the memory. The
+        // flag set first keeps the swapchain for the successor; a failure unsets it
+        // and tears the swapchain down so `Drop` frees the hardware.
         self.reused_by_successor = true;
         self.destroy_world_content();
         self.hw.alloc.reclaim_idle();

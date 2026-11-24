@@ -80,11 +80,8 @@ fn build_fullscreen_pipeline_from(
         .map_err(|e| RenderError::ShaderCompile(format!("{label} pipeline: {e:?}")))
 }
 
-// Build a fullscreen-triangle pipeline whose fragment comes from a
-// single-source program, paired with the shared `fullscreen_vertex`. The two
-// stages come from separate libraries because a fragment variant declares only
-// the resources it binds, so each variant is its own metallib while the vertex
-// is compiled once for all of them.
+// A fullscreen-triangle pipeline: a single-source fragment variant paired with
+// the shared `fullscreen_vertex`.
 pub(in crate::metal) fn build_fullscreen_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     fragment: &ShaderProgram,
@@ -97,11 +94,8 @@ pub(in crate::metal) fn build_fullscreen_pipeline(
     build_fullscreen_pipeline_from(device, &vert_fn, &frag_fn, fragment.label, format, blend)
 }
 
-// Bind `sampler` to fragment sampler slots `first..first + count`. A post
-// pass's source occupies a texture and a sampler at the same index, so a pass
-// sampling N textures through one sampler state binds it N times. A pass that
-// samples through two sampler states (SSR: the screen sources through one, the
-// cubemaps through another) calls this once per contiguous run.
+// Bind `sampler` to fragment sampler slots `first..first + count`, since each
+// source takes a texture and sampler at the same index.
 pub(in crate::metal) fn set_fragment_sampler_range(
     enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
     sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
@@ -127,16 +121,9 @@ pub(in crate::metal) struct FullscreenPass<'a> {
     pub label: &'a str,
 }
 
-// Run one fullscreen-triangle pass: open a single-attachment render encoder on
-// `pass.target` (with the given `pass.load` action and an always-`Store`),
-// attach GPU timing per `pass.timer`, set `pass.pipeline`, let `bind` set the
-// pass's fragment inputs, draw the `[[vertex_id]]` triangle, and end encoding.
-// Centralizes the encoder open / draw / close skeleton every screen-space
-// effect repeats so each `encode_*` supplies only its unique bindings.
-//
-// A free function over the timing resources rather than a method on the
-// context, so the shared post-pass seam (post/post_device.rs) can drive it from
-// a device value assembled at init, before a context exists.
+// Run one fullscreen-triangle pass on `pass.target` with timing, letting `bind`
+// set its fragment inputs. A free function so the shared post seam can drive it
+// before a context exists.
 pub(in crate::metal) fn encode_fullscreen_pass(
     cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     timing: Option<&crate::metal::pass_timing::PassTimingResources>,

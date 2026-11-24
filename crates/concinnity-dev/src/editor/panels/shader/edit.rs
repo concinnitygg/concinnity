@@ -8,7 +8,7 @@ use std::fmt;
 
 use super::list::ShaderDecl;
 use super::source::{SourceKey, same_file, stage_name};
-use crate::editor::widget_check::Check;
+use crate::editor::modal::Check;
 use concinnity_engine::components::ShaderStage;
 
 // An edit that takes a file away from the Shader source panel, carried through
@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn decls(entries: &[serde_json::Value]) -> Vec<ShaderDecl> {
-        declared(entries, str::to_string)
+        declared(entries, |_, d| d.to_string())
     }
 
     #[test]

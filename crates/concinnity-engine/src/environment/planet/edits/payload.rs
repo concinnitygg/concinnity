@@ -1,8 +1,5 @@
-// One edit page as the blob carries it: its storage, compressed.
-//
-// Before compression a page is a flag byte (bit 0: it stores detail
-// weights), its offset and scale as little-endian `f32`s, its height steps as
-// little-endian `i16`s, and its weights if stored.
+// One compressed edit page. Uncompressed: a flag byte (bit 0: has weights),
+// offset and scale as LE `f32`s, height steps as LE `i16`s, then any weights.
 
 use alloc::vec;
 use alloc::vec::Vec;

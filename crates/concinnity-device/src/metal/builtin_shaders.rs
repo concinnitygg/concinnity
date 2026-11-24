@@ -1,13 +1,6 @@
-// The Metal half of the single-source shader compile: everything the
-// declarations in `concinnity_engine::render::shader::programs::metal::TABLE` need
-// a compiler, a content-addressed cache, or a filesystem for, over the
-// declarations it brings into the backend's scope.
-//
-// The fast path loads the metallib the build script precompiled; source
-// compilation remains for hot-reload (disk edits must win) and for binaries
-// built on a host without the shader toolchain, whose embedded lookup misses
-// these names. The runtime compile caches the metallib in the content-addressed
-// shader cache, so a given source text compiles at most once per machine.
+// The Metal half of the single-source shader compile. The fast path loads the
+// build-time metallib; source compiles serve hot reload and toolchain-less
+// builds, cached per machine.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::borrow::Cow;

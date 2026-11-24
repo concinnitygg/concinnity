@@ -1,8 +1,5 @@
-// Raycast probe answering: each frame the ground probes the animation IK
-// published and the third-person camera's occlusion probe get their rays
-// resolved against the scene. Both exchanges are one frame behind their
-// writer (the probing systems run after physics), which is invisible at
-// frame rates.
+// Raycast probes: the IK ground probes and the third-person camera's
+// occlusion probe, answered a frame behind their writers.
 
 use crate::simulation::physics::{LayerMask, Simulation};
 use concinnity_core::math::vec3::length;
@@ -19,11 +16,8 @@ const CAMERA_MARGIN: f32 = 0.15;
 // The camera never pulls closer to the pivot than this.
 const CAMERA_MIN_DISTANCE: f32 = 0.3;
 
-// Answer every probe component. Character capsules are transparent to their
-// own probes (a foot ray starts inside the rig's capsule; the camera ray
-// starts at a pivot inside it); `mask` keeps the rays on scene geometry
-// (world and prop layers), so trigger regions and other characters never
-// register as ground or as a camera obstruction.
+// Answer every probe component against world and prop layers, ignoring the
+// probing character's own capsule.
 pub(crate) fn step_probes(
     world: &Simulation,
     ctx: &mut PipelineContext<'_>,

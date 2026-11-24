@@ -236,22 +236,12 @@ pub struct PayloadJoint {
     pub scale: [f32; 3],
 }
 
-// Serialize skinned vertices, indices, and bind-pose skeleton into a packed
-// binary payload.
+// Serialize skinned vertices, indices and the bind-pose skeleton.
 //
-// Format (little-endian): `"SKMV"` magic, `u32 vertex_count`,
-// `vertex_count * 80` bytes of interleaved `SkinnedVertex` data,
-// `u32 index_count`, `index_count * 2` bytes of u16 indices,
-// `u32 joint_count`, then `joint_count` joint records, each:
-// `u32 name_byte_len`, name UTF-8 bytes, `i32 parent`,
-// `f32×3 translation`, `f32×3 rotation_deg`, `f32×3 scale`.
-//
-// The skeleton block is always present (possibly with `joint_count == 0`),
-// so a payload deserializes into a self-contained runtime view, no need
-// for the args JSON to carry the skeleton alongside.
-//
-// Calls [`serialize_skinned_with_lods`] with no morphs and no alternates, so
-// neither optional block is written.
+// Format (little-endian): `"SKMV"`, `u32 vertex_count`, 80-byte
+// `SkinnedVertex`es, `u32 index_count`, u16 indices, `u32 joint_count`, then
+// per joint `u32 name_byte_len`, the name, `i32 parent`, `f32×3 translation`,
+// `f32×3 rotation_deg`, `f32×3 scale`. The skeleton block is always present.
 #[cfg(test)]
 pub(crate) fn serialize_skinned(
     vertices: &[SkinnedVertex],
@@ -642,11 +632,8 @@ mod tests {
 
     #[test]
     fn vertex_layout_matches_msl() {
-        // `Vertex` is read through a pointer by the RT skinning kernel
-        // (the deformed-vertex layout rt_skin.hlsl writes, 56-byte
-        // stride) and as the static RT vertex format, so the field offsets
-        // must match exactly. The main/shadow passes consume it through a
-        // vertex descriptor declaring the same 0/12/24/36/48 attribute offsets.
+        // The RT skinning kernel reads `Vertex` by pointer at a 56-byte stride,
+        // and the vertex descriptors use the same offsets.
         use core::mem::{offset_of, size_of};
         assert_eq!(size_of::<Vertex>(), 56);
         assert_eq!(offset_of!(Vertex, pos), 0);
@@ -658,11 +645,7 @@ mod tests {
 
     #[test]
     fn skinned_vertex_layout_matches_msl() {
-        // `SkinnedVertex` is read through a pointer by the RT skinning kernel
-        // (the bind-pose layout rt_skin.hlsl reads), whose float3s + u16[4] +
-        // packed_float4 fields must line up byte-for-byte with this 80-byte
-        // struct. The main/shadow skinned passes consume it through a vertex
-        // descriptor declaring the same attribute offsets.
+        // The RT skinning kernel reads `SkinnedVertex` by pointer at 80 bytes.
         use core::mem::{offset_of, size_of};
         assert_eq!(size_of::<SkinnedVertex>(), 80);
         assert_eq!(offset_of!(SkinnedVertex, pos), 0);

@@ -5,24 +5,9 @@ use concinnity_engine::render::shader::source::SourceFile;
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
 
-// Resolve a declared source path to the on-disk path the build will read. A
-// bare filename is looked up recursively under the build's asset search root,
-// then falls back to `<assets>/<raw>`. A path with a directory component is
-// used verbatim.
+// The on-disk path the build reads a declared source path from.
 pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> std::path::PathBuf {
-    let p = std::path::Path::new(raw);
-    if p.parent().is_none_or(|d| d.as_os_str().is_empty()) {
-        if let Some(path) = ctx
-            .assets_dir
-            .and_then(|dir| concinnity_host::store::source::find_in(dir, raw))
-        {
-            return path;
-        }
-        if let Some(assets) = ctx.assets_dir {
-            return assets.join(raw);
-        }
-    }
-    std::path::PathBuf::from(raw)
+    concinnity_host::store::source::resolve(raw, ctx.root)
 }
 
 // The declared path of one of the Shader's files, straight from the args.
@@ -101,9 +86,7 @@ impl crate::asset::BuildAsset for Shader {
     // another and MSL text on the third, so the target belongs in the cache key.
     const TARGET_DEPENDENT: bool = true;
 
-    // Only the declared files are read. Reporting them covers the resolution
-    // the cache's generic walk misses: a bare filename found under the asset
-    // root, which the walk cannot see.
+    // Only the declared files are read, each under the build's root.
     fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
         let mut inputs = Vec::new();
@@ -126,16 +109,16 @@ mod tests {
     use crate::asset::{BuildAsset, SourceFiles};
 
     fn ctx() -> BuildCtx<'static> {
-        with_assets(None)
+        with_root(None)
     }
 
-    fn with_assets(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
+    fn with_root(root: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "s",
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir,
+            root,
             all_assets: &[],
         }
     }
@@ -210,45 +193,18 @@ mod tests {
         }
     }
 
+    // A declared path names a file under the build's root; with no root it is
+    // left as authored.
     #[test]
-    fn resolve_source_path_for_keeps_paths_with_a_directory_component() {
-        // A path that already contains a directory is returned verbatim: no
-        // search applies, with or without an asset root.
-        let dir = tempfile::tempdir().unwrap();
+    fn a_declared_path_resolves_under_the_root() {
+        let root = std::path::Path::new("/p");
+        assert_eq!(
+            resolve_source_path_for("shaders/x.hlsl", &with_root(Some(root))),
+            root.join("shaders/x.hlsl")
+        );
         assert_eq!(
             resolve_source_path_for("shaders/x.hlsl", &ctx()),
             std::path::Path::new("shaders/x.hlsl")
-        );
-        assert_eq!(
-            resolve_source_path_for("shaders/x.hlsl", &with_assets(Some(dir.path()))),
-            std::path::Path::new("shaders/x.hlsl")
-        );
-    }
-
-    // A bare filename is found by recursive search under the asset root.
-    #[test]
-    fn resolve_source_path_for_finds_a_nested_asset() {
-        let assets = tempfile::tempdir().unwrap();
-        let nested = assets.path().join("shaders");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("user.hlsl"), "// hlsl").unwrap();
-        assert_eq!(
-            resolve_source_path_for("user.hlsl", &with_assets(Some(assets.path()))),
-            nested.join("user.hlsl")
-        );
-    }
-
-    #[test]
-    fn resolve_source_path_for_falls_back_to_the_assets_dir() {
-        let assets = tempfile::tempdir().unwrap();
-        assert_eq!(
-            resolve_source_path_for("cn_no_such.hlsl", &with_assets(Some(assets.path()))),
-            assets.path().join("cn_no_such.hlsl")
-        );
-        // With no search root at all the bare name is left as it was authored.
-        assert_eq!(
-            resolve_source_path_for("cn_no_such.hlsl", &ctx()),
-            std::path::Path::new("cn_no_such.hlsl")
         );
     }
 

@@ -41,15 +41,9 @@ pub(super) enum RetiredSlot {
     Skinned(SkinnedIndex),
 }
 
-// Despawn an entity and its descendants: retire every GPU slot each one owns,
-// then remove it from every component column and recycle its id. A static
-// renderable's slots come from its RenderHandle (RetiredSlot::Draw); a skinned
-// entity has no RenderHandle but a SkeletonPose whose `skinned_index` is a
-// RetiredSlot::Skinned (its pooled instance slot returns to the reserve, or an
-// authored template is just hidden). The slots are hidden, not compacted.
-// `retire` is the slot sink so the cascade is testable without a full backend;
-// `despawn_subtree` dispatches it to the backend's retire methods. Returns the
-// number of entities removed.
+// Despawn an entity and its descendants: retire each one's draw or skinned
+// slots through `retire`, then remove it and recycle its id. Returns the
+// number removed.
 fn despawn_collected(
     ctx: &mut PipelineContext<'_>,
     root: Entity,

@@ -1976,6 +1976,8 @@ struct WaterSurfacePoint
     float3 below;
     float camera_distance;
     WaterDaylight day;
+    // The air in front of the surface (`transparent_air`).
+    float4 air;
 };
 
 // `dx`, `dy` are the pixel's footprint on the rest plane (`water_footprint`).
@@ -2016,6 +2018,8 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
 #endif
     s.camera_distance = water_dist;
     s.world_pos = i.world_pos;
+    float3 toward = normalize(i.world_pos - view.camera_pos.xyz);
+    s.air = transparent_air(view.camera_pos.xyz + toward * water_dist, i.position.xy);
     s.day = water_daylight(i.world_pos);
     float water_depth = max(scene_dist - water_dist, 0.0);
 #ifdef WATER_SEA
@@ -2029,6 +2033,8 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
         water_depth = max(scene_dist - water_dist, 0.0);
     }
 #endif
+
+    refracted = transparent_unhaze(refracted, s.air);
 
     // The body as a lit single-scatter layer: light entering the flat surface
     // (the sun past its entry Fresnel, and the sky) is scattered back out by
@@ -2192,7 +2198,7 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
     float3 color = lerp(s.below, reflection, fresnel) + glint;
     // Whitecaps lie on top of the water: what they cover neither mirrors nor
     // glints.
-    color = lerp(color, s.below, water_cover(s));
+    color = transparent_haze(lerp(color, s.below, water_cover(s)), s.air);
     float near = 1.0 - smoothstep(WATER_REACTIVE_FADE_METERS.x, WATER_REACTIVE_FADE_METERS.y,
                                   s.camera_distance);
     float reactive = max(reactive_luminance(glint), fresnel * WATER_REACTIVE_FRESNEL * near);

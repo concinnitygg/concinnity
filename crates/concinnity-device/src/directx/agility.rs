@@ -1,32 +1,13 @@
-// The Agility SDK handshake: two symbols Windows' system `d3d12.dll` reads
-// from the running EXE's PE export table at process start. When both are
-// present and the named path resolves to a directory holding `D3D12Core.dll`,
-// it loads that copy in place of the OS-bundled (older) D3D12 runtime. FFX FSR3
-// needs the newer one -- see `post::upscale::fsr` -- and without it
-// `ffxCreateContext` throws a C++ exception that aborts the process.
+// The Agility SDK handshake: two symbols the system `d3d12.dll` reads from the
+// EXE's export table at process start, loading `D3D12Core.dll` from the named
+// path instead of the OS runtime. FSR3 needs the newer runtime.
 //
-// An EXE only exports what its linker was told to export, so the statics alone
-// are not enough: each package owning a final binary emits
-// `/EXPORT:<name>,DATA` from its build script (concinnity-toolchain's
-// `BinaryTargets`), and that argument is also what pulls these definitions out
-// of the rlib. `,DATA` is critical -- without it the linker inserts a code thunk
-// that `d3d12.dll` would dereference as a pointer.
+// Each binary's build script emits `/EXPORT:<name>,DATA`, which also pulls
+// these out of the rlib; without `,DATA` the linker adds a code thunk.
 //
-// This is the only mechanism a shipped binary can use. The runtime alternative,
-// `ID3D12SDKConfiguration::SetSDKVersion`, is documented as usable "only in
-// Windows Developer Mode" -- it exists for tools like PIX, not for applications
-// -- and returns DXGI_ERROR_INVALID_CALL everywhere else.
-//
-// The handshake has no fallback: if the directory is absent, D3D12 device
-// creation fails outright rather than reverting to the OS runtime, and the
-// renderer reports "no suitable D3D12 adapter found" (see `init::bootstrap`, which
-// says so). A binary carrying these exports is therefore only portable together
-// with the directory beside it.
-//
-// The version must match the Agility NuGet package the build script bundles:
-// the directory name is `microsoft.direct3d.d3d12.1.<VERSION>.<PATCH>`, so
-// `microsoft.direct3d.d3d12.1.619.3` is 619. The vendored `agility` release is
-// the tree these bytes have to agree with.
+// With the directory missing, device creation fails outright, so a binary is
+// portable only with it. The version must match the bundled Agility package
+// (`microsoft.direct3d.d3d12.1.619.3` is 619).
 
 // `pub` even though nothing in the crate names them: the visibility is what
 // declares them as exported symbols alongside `#[unsafe(no_mangle)]`.

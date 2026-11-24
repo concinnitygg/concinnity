@@ -118,11 +118,9 @@ pub(crate) struct RenderingBake {
     last_fence_value: u64,
 }
 
-// A finished capture convolving into its cube on the GPU, one destination mip per
-// frame. Holds both cubes plus the allocator and list of every dispatch it has
-// submitted, which install drops once the fence covers them. Nothing else bakes
-// while this slot is full: the dispatches address their cubes through the one
-// reserved descriptor block a starting capture would rewrite.
+// A finished capture convolving into its cube, one mip per frame, holding its
+// lists until the fence covers them. Nothing else bakes meanwhile, since its
+// dispatches use the one reserved descriptor block.
 pub(crate) struct PrefilteringBake {
     gpu: PrefilterGpu,
     cmd_allocs: Vec<ID3D12CommandAllocator>,
@@ -275,11 +273,8 @@ impl DxContext {
             None
         };
 
-        // Snapshot the frame's light + shadow uniforms into bake-owned CBVs so all six
-        // faces share one temporally-consistent lighting set, and so the capture does
-        // not read `light_ubo[frame]` / `shadow_ubo[frame]` while `record_frame` (which runs
-        // after this) overwrites them on the same frame -- a CPU/GPU race on a mapped
-        // buffer. The capture's lighting is the env live when it started.
+        // Snapshot the light and shadow uniforms into bake-owned CBVs, so all six faces
+        // light the same and the capture never races `record_frame`'s writes.
         // SAFETY: `LightUniforms` is `#[repr(C)]` with explicit pad fields and no implicit padding
         // (pinned by the layout tests in `render_types.rs`), so all `size_of` bytes are
         // initialized, and the borrow keeps them live for the snapshot copy below.
@@ -400,11 +395,8 @@ impl DxContext {
         })
     }
 
-    // Submit the in-flight capture's next cube face (one per frame): a fresh command
-    // list that culls the face frustum into the reserved slot, renders the bindless
-    // static + instance geometry into the face target, (resolves +) copies it into its
-    // slice of the capture cube, then signals a fence value. The last face's value is
-    // what the convolution waits for.
+    // Submit the capture's next face: cull, render, copy into the capture cube,
+    // then signal a fence value; the last face's value gates the convolution.
     fn record_probe_face(&self, bake: &mut RenderingBake, face: usize) -> RenderResult<()> {
         let slot = self.bake_ring_slot();
         let (eye, view_gva, light_gva, shadow_gva) = (
@@ -498,11 +490,8 @@ impl DxContext {
         Ok(())
     }
 
-    // Resolve (when MSAA) + copy the just-rendered face color into slice `face` of
-    // the capture cube. The color rests in RENDER_TARGET and is restored to it for
-    // the next face; the resolve target rests in PIXEL_SHADER_RESOURCE. Face order is
-    // the hardware cube order (`gfx::cubemap`), so slice `face` is the face a sampler
-    // finds looking that way.
+    // Resolve (with MSAA) and copy the face into slice `face` of the capture cube,
+    // in hardware cube order.
     fn copy_face_to_capture(cmd: &ID3D12GraphicsCommandList, bake: &RenderingBake, face: usize) {
         let sample_count = bake.sample_count;
         // Subresource index of mip 0 of array slice `face`, which D3D12 orders
@@ -596,11 +585,8 @@ impl DxContext {
         }
     }
 
-    // Record convolution step `mip` of a bake: mip 0 is the firefly-clamped mirror
-    // mip plus the capture's source pyramid, each later mip one GGX convolution.
-    // Each GGX dispatch reads the finished pyramid and writes a mip nothing else
-    // touches, so consecutive mips need no barrier; the queue's FIFO order puts
-    // every one of them after the pyramid build that produced their source.
+    // Record convolution step `mip`: mip 0 is the clamped mirror mip; each later
+    // mip one GGX convolution into a mip nothing else touches, so no barriers.
     fn record_prefilter_mip(&self, bake: &mut PrefilteringBake, mip: u32) -> RenderResult<()> {
         if mip == 0 {
             return self.record_prefilter_step(bake, |ctx, cmd, bake| {
@@ -682,16 +668,9 @@ impl DxContext {
         Ok(())
     }
 
-    // Render the bindless static + instance geometry into an off-screen target. A
-    // thin sibling of `encode_main_pass`'s bindless branch: it clears + targets the
-    // RTV/DSV, binds a per-view ViewUniforms CBV, and issues the static + instance
-    // prefix `ExecuteIndirect` from `slot`'s indirect buffer. Skinned geometry is not
-    // drawn (V1). No SSAO pre-pass, no HDR resolve -- the caller copies / resolves the
-    // target out. Shared by the probe-face capture (square face, reserved bake
-    // slot's indirect at offset 0) and the planar reflection mirror render
-    // (render-resolution target, the planar indirect buffer at the plane's region
-    // byte offset, drawn against the frame's object buffer). `indirect_offset` is a
-    // byte offset into `indirect` to the region's first command.
+    // Render the bindless static + instance prefix into an off-screen target from
+    // `slot`'s indirect buffer at `indirect_offset`, with a per-view CBV. No
+    // skinned geometry, SSAO or resolve. Shared by probe faces and planar mirrors.
     pub(in crate::directx) fn encode_main_into_face(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -925,12 +904,8 @@ impl ProbeBakeDevice for DxContext {
             && self.probe.prefilter.is_some()
     }
 
-    // Geometry may still be streaming: a zero cull would bake an empty cube. Both
-    // cubes of a bake are addressed through ONE reserved SRV-heap block, written
-    // when a capture starts, so a capture waits for the previous convolution to
-    // install rather than rewriting the descriptors its dispatches bind. An
-    // atmosphere's sky and ambient light come from tables the frame writes, so
-    // a capture also waits for the first of them.
+    // A capture waits for streamed geometry, for the previous convolution to
+    // install (both share one descriptor block), and for the atmosphere's tables.
     fn capture_ready(&self, prefilter_in_flight: bool) -> bool {
         self.state.draw.record_count() > 0 && !prefilter_in_flight && self.atmosphere_tables_ready()
     }

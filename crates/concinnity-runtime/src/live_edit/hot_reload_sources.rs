@@ -59,7 +59,7 @@ impl HotReloadSources {
 }
 
 // Snapshot each ProceduralMesh, with its interned name, before the mesh load
-// drains them. A world.jsonl reload diffs a freshly parsed entry against this
+// drains them. A .jsonl file reload diffs a freshly parsed entry against this
 // and regenerates the mesh when they differ, logging it by name.
 pub(crate) fn procedural_mesh_snapshot(
     ctx: &PipelineContext<'_>,
@@ -73,13 +73,10 @@ pub(crate) fn procedural_mesh_snapshot(
 }
 
 // The SdfVolume field catalog, each field resolved the way the cook found the
-// file it compiled, under the build's asset root `assets_dir`.
-pub(crate) fn resolve_sdf_fields(
-    volumes: &[SdfVolumeSource],
-    assets_dir: Option<&Path>,
-) -> SdfFieldMap {
+// file it compiled, under the build's root.
+pub(crate) fn resolve_sdf_fields(volumes: &[SdfVolumeSource], root: Option<&Path>) -> SdfFieldMap {
     SdfFieldMap::build(volumes, |raw| {
-        concinnity_host::store::source::find_existing(raw, assets_dir)
+        concinnity_host::store::source::find_existing(raw, root)
             .map(|path| path.to_string_lossy().into_owned())
     })
 }
@@ -197,15 +194,15 @@ mod tests {
         std::fs::write(fields.join("blob.hlsl"), "").unwrap();
         let map = resolve_sdf_fields(
             &[
-                source("blob", "blob.hlsl"),
+                source("blob", "fields/blob.hlsl"),
                 source("lost", "cn_no_such_field.hlsl"),
             ],
             Some(assets.path()),
         );
         assert_eq!(map.len(), 1);
         assert_eq!(
-            map.get("blob").unwrap().resolved_path,
-            fields.join("blob.hlsl").to_string_lossy()
+            Path::new(&map.get("blob").unwrap().resolved_path),
+            fields.join("blob.hlsl")
         );
     }
 }

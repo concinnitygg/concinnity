@@ -3,10 +3,8 @@
 
 use crate::editor::palette::{self, PaletteItem};
 
-// A one-frame focus blur after the Ctrl+K open, the query mirrored
-// off its field once a frame, the item list built on open with the matches the
-// query keeps, the highlighted match with its window scroll, and the labels of
-// recent commits (session state, the empty query's launch list).
+// Palette state: the open blur, the mirrored query, items and matches, the
+// highlight, recent commits, and change counters.
 #[derive(Debug, Default)]
 pub(in crate::editor::hook) struct PaletteState {
     pub(in crate::editor::hook) blur: bool,
@@ -14,8 +12,9 @@ pub(in crate::editor::hook) struct PaletteState {
     pub(in crate::editor::hook) items: Vec<PaletteItem>,
     pub(in crate::editor::hook) matches: Vec<usize>,
     pub(in crate::editor::hook) pick: usize,
-    pub(in crate::editor::hook) scroll: usize,
     pub(in crate::editor::hook) recent: Vec<String>,
+    pub(in crate::editor::hook) revision: u64,
+    pub(in crate::editor::hook) moved: u64,
 }
 
 impl PaletteState {
@@ -23,8 +22,14 @@ impl PaletteState {
     // its best answer.
     pub(in crate::editor::hook) fn rerank(&mut self) {
         self.matches = palette::matches(&self.items, &self.recent, &self.query);
-        self.pick = 0;
-        self.scroll = 0;
+        self.revision = self.revision.wrapping_add(1);
+        self.highlight(0);
+    }
+
+    // Highlight match `at`, bringing it into view.
+    pub(in crate::editor::hook) fn highlight(&mut self, at: usize) {
+        self.pick = at;
+        self.moved = self.moved.wrapping_add(1);
     }
 
     pub(in crate::editor::hook) fn note_recent(&mut self, label: String) {

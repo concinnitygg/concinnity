@@ -4,12 +4,9 @@ use super::{
 };
 
 impl StorySystem {
-    // Lay out the title screen menu from the save state on disk: Start and Quit
-    // always, Continue only when an auto-save exists, Load only when a slot
-    // does. The applicable buttons stack contiguously and centered, so an
-    // absent one leaves no gap; each button's hit region follows its label
-    // (and goes inert while the label is empty), so a hidden button neither
-    // shows nor catches clicks. Runs at init and whenever the title is shown.
+    // Lay out the title menu from the saves on disk: Start and Quit always,
+    // Continue with an auto-save, Load with a slot, stacked without gaps. Runs at
+    // init and whenever the title shows.
     pub(super) fn layout_title_menu(&self, ctx: &mut PipelineContext<'_>) {
         let (title_screen_id, start, cont, load, settings, quit, has_settings) =
             match self.ids.as_ref() {

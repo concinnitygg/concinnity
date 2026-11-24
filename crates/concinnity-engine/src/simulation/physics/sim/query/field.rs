@@ -1,22 +1,7 @@
-// Rays and swept shapes against terrain.
-//
-// Neither question goes through the iterative distance query the convex shapes
-// use, and for the same reason the narrow phase does not: the nearest feature
-// of a surface made of triangles is often the edge two of them share, and an
-// edge normal points sideways out of a surface a shape was sliding along. Both
-// answers here come from a triangle's own plane instead, so a capsule crossing
-// a cell boundary meets two planes that agree rather than an edge that does
-// not.
-//
-// The sweep is exact because it is a plane. A translated shape's furthest
-// point along a fixed direction moves with the shape, so the distance to a
-// plane changes linearly with the sweep and the moment of contact is one
-// division rather than a search. What the clip then decides is whether that
-// contact happened over this triangle or over its neighbor.
-//
-// The ray walks the grid cell by cell along its own direction rather than
-// testing everything under its bounds, because a ray long enough to cross a
-// terrain has bounds that cover most of it.
+// Rays and swept shapes against terrain, answered along each triangle's own
+// plane so a shape crossing a cell boundary meets agreeing planes rather than a
+// sideways edge. A plane makes the sweep one exact division. The ray walks the
+// grid cell by cell.
 
 use crate::simulation::physics::ColliderShape;
 use concinnity_core::math::SaturatingFrom;

@@ -611,11 +611,9 @@ pub static PARTICLE_SIMULATE: ShaderProgram = ShaderProgram {
     msaa: false,
 };
 
-// The remaining raster families: the particle billboard pair, the projected
-// decal, world-space lines and the text / sprite overlay. Each has real vertex
-// geometry, so unlike the post passes they keep their own vertex entry rather
-// than pairing with `fullscreen.hlsl`. Only the three depth-reading fragments
-// take the sample count; their vertex stages never name the depth source.
+// The remaining raster families: particles, decals, lines and the text and
+// sprite overlay, each with its own vertex entry. Only the three depth-reading
+// fragments take the sample count.
 /// `particle_vertex` from `particle.hlsl`.
 pub static PARTICLE_VERT: ShaderProgram = ShaderProgram {
     file: "particle.hlsl",
@@ -779,11 +777,8 @@ pub static GLASS_REFLECTION_FRAG_TEXTURED: ShaderProgram = ShaderProgram {
     msaa: true,
 };
 
-// The see-through glass MESH family, the transparent pass's third producer.
-// Ray-traced only -- the per-pixel trace is what makes the mesh see-through
-// rather than the opaque reflective glass the main pass draws -- so there is no
-// base pair. Its vertex stage is its own (it applies the per-draw model matrix)
-// but shares every binding with the rest of the pass.
+// The see-through glass mesh family: ray-traced only, with its own vertex
+// stage but every binding shared with the transparent pass.
 /// `glass_mesh_vertex` from `glass_mesh.hlsl`.
 pub static GLASS_MESH_VERT: ShaderProgram = ShaderProgram {
     file: "glass_mesh.hlsl",

@@ -1,12 +1,7 @@
-// The reflection-probe set as Metal binds it: one cube-map array holding every
-// probe's prefiltered radiance, a cube per probe, and this frame's parallax
-// records in a ring buffer, one `ProbeUniforms` per installed probe.
-//
-// `ssr`, `rt_reflections` and the transparent pass (glass, glass_mesh, water)
-// bind the array as a texture and the records as a buffer. The bindless main
-// pass reaches the array through its texture argument buffer instead, since
-// the draws an indirect command buffer executes cannot see encoder-bound
-// textures; its records ride a buffer the ICB draws inherit.
+// The reflection-probe set: a cube array of every probe's prefiltered radiance
+// and this frame's parallax records. The bindless main pass reaches the array
+// through its argument buffer, since ICB draws cannot see encoder-bound
+// textures.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -27,13 +22,9 @@ use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::probe_prefilter::PROBE_CUBE_FORMAT;
 
-// The cube array every probe bakes a slice of. `capacity` cubes at the bake's
-// face size and mip count, or a one-texel stand-in before any placement asks for
-// room: the shaders read only the first `ProbeSet::count` cubes, so a world with
-// no probe never samples it.
-//
-// Created unpooled: it is replaced only when a placement outgrows it, and the
-// old one is parked behind the frames-in-flight fence rather than freed.
+// The cube array every probe bakes a slice of, or a one-texel stand-in before
+// any placement. Unpooled: replaced only when outgrown, the old one parked
+// until retired.
 pub(in crate::metal) struct ProbeCubeArray {
     texture: Retained<ProtocolObject<dyn MTLTexture>>,
     capacity: usize,

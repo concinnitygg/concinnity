@@ -293,11 +293,8 @@ mod tests {
         PostProgram::ALL.map(|p| (p, p.program().file, p.program().gates))
     }
 
-    // The source lines a compile with `defines` keeps: `#if defined(..)`,
-    // `#elif defined(..)` (either joined by `||`), `#ifdef`, `#ifndef`, `#else`
-    // and `#endif` are evaluated, so a variant's declarations are counted and
-    // its siblings' are not. A macro the shader defines for itself counts as undefined, which is
-    // what every guard in the post sources tests for.
+    // The source lines a compile with `defines` keeps, evaluating the
+    // preprocessor guards. A shader's own macros count as undefined.
     fn active_lines<'s>(src: &'s str, defines: &[&str]) -> Vec<&'s str> {
         // Per open conditional: whether its enclosing region is live, whether a
         // branch has been taken, and whether the current branch is live.
@@ -355,12 +352,8 @@ mod tests {
         rest
     }
 
-    // Top-level single sampled-source declarations. A source is a texture and
-    // its sampler, so the texture half (`Texture2D<...>` / `TextureCube<...>`)
-    // is what counts and its `SamplerState` sibling would double the tally. A
-    // texture inside a parameter list (a helper taking one) is not a
-    // declaration, and neither is an array or the probe set's cube array, which
-    // are not slot-indexed sources.
+    // Top-level single sampled-source declarations, counting textures only.
+    // Parameters, arrays and the probe cube array are not sources.
     fn declared_sources(lines: &[&str]) -> usize {
         const HEADS: [&str; 2] = ["Texture2D<", "TextureCube<"];
         lines

@@ -1,11 +1,5 @@
-// Where a behavior finds an entity, and how it moves one.
-//
-// Most entities answer from their `Transform`. A camera has none: its pose
-// lives on the `Camera3D` component the camera systems write, which is also
-// where physics, the audio listener and the editor read it from. Asking each in
-// turn is what lets `position`, `distance` and the spatial questions name a
-// camera, which is how a behavior reaches the player, and what lets
-// `set_transform` move one.
+// Where a behavior finds an entity and how it moves one: the `Transform`, or
+// for a camera its `Camera3D` pose, so behaviors can reach and move the player.
 
 use crate::components::{Camera3D, CameraTrack, Transform};
 use crate::ecs::{ComponentStorage, Entity, PipelineContext};

@@ -4,7 +4,7 @@ use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 use super::choices::{CHOICE_BOX_COLOR, CHOICE_BOX_RADIUS};
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, hidden_label, hit_region, label, rounded_sprite};
-use crate::build_only::ui_spec::sprite;
+use crate::authoring::spec::{asset, spec_to_value};
 
 // Slot rows the save / load overlay shows at once. The story scrolls this
 // fixed window over its larger set of logical slots (the auto-save resumed by
@@ -20,7 +20,11 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let stage = &names.stage;
     let mut out = vec![
-        sprite(&stage.dim, 0.0, 0.0, win_w, win_h, [0.02, 0.02, 0.04, 0.0]),
+        spec_to_value(&asset::sprite(
+            &stage.dim,
+            [0.0, 0.0, win_w, win_h],
+            [0.02, 0.02, 0.04, 0.0],
+        )),
         label(
             &stage.history,
             &names.font_dialog,

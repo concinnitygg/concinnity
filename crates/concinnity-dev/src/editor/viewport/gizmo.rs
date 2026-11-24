@@ -1,28 +1,18 @@
 //! The translate gizmo: three world-axis handles drawn over the selected
-//! asset's origin as dotted screen-space lines (sprites cannot rotate, so each
-//! line is a run of small square segments) ending in a draggable tip handle.
+//! asset's origin as dotted screen-space lines (a canvas draws only upright
+//! rectangles, so each line is a run of small square segments) ending in a
+//! draggable tip handle.
 //! This module is the pure half: the screen layout, the handle hit test, and
 //! the axis-drag math. The hook (`hook/drag/gizmo.rs`) owns the drag state and
 //! the write-back.
 
-use concinnity_engine::components::Sprite;
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::components::TextAlign;
 use concinnity_engine::gfx::pick::PickRay;
 
-use crate::editor::hud_ids::{Family, family_base, hud_ids};
+use crate::editor::theme;
+use crate::editor::ui::shapes::{Shape, Shapes};
 
 pub(crate) const SEGMENTS: usize = 6;
-// Per-axis element run: the segments, then the tip handle.
-const AXIS_PARTS: usize = SEGMENTS + 1;
-
-// The axis runs back to back, and the mode caption beside the origin ("move" /
-// "rotate" / "scale").
-hud_ids! {
-    base: family_base(Family::Gizmo);
-    sprites: [axis_part[3 * AXIS_PARTS]];
-    labels: [pub(crate) MODE_LABEL];
-}
 
 const SEGMENT_PX: f32 = 3.0;
 const TIP_PX: f32 = 10.0;
@@ -83,14 +73,6 @@ impl GizmoMode {
 // continuous across the atan2 seam.
 pub(crate) fn wrap_deg(d: f32) -> f32 {
     -((-d + 180.0).rem_euclid(360.0) - 180.0)
-}
-
-fn segment_id(axis: usize, seg: usize) -> AssetId {
-    axis_part(axis * AXIS_PARTS + seg)
-}
-
-fn tip_id(axis: usize) -> AssetId {
-    axis_part(axis * AXIS_PARTS + SEGMENTS)
 }
 
 // The gizmo's screen geometry for one frame: the projected origin and the
@@ -196,71 +178,46 @@ pub(crate) fn axis_drag_t(origin: [f32; 3], axis: [f32; 3], ray: &PickRay) -> Op
     Some((b * e - d0) / denom)
 }
 
-// Injected sprites: hidden squares, one run + tip per axis. The tint is fixed
-// per axis; the tick only moves and shows them.
-pub(crate) fn sprites() -> Vec<(AssetId, Sprite)> {
-    let mut out = Vec::new();
-    for (axis, tint) in AXIS_TINTS.iter().enumerate() {
-        for seg in 0..SEGMENTS {
-            out.push(square(segment_id(axis, seg), *tint));
-        }
-        out.push(square(tip_id(axis), *tint));
-    }
-    out
-}
-
-fn square(id: AssetId, tint: [f32; 4]) -> (AssetId, Sprite) {
-    let square = Sprite {
-        tint,
-        visible: false,
-        ..Default::default()
-    };
-    (id, square)
-}
+// The caption's offset from the origin, and its box.
+const CAPTION_AT: [f32; 2] = [12.0, -26.0];
+const CAPTION_SIZE: [f32; 2] = [80.0, 20.0];
 
 // Lay the dotted runs from just outside the origin to each tip, center the
 // tip handles (shaped by the mode) on their projected points, and caption the
 // mode beside the origin.
-pub(crate) fn place(world: &mut World, layout: &Layout, mode: GizmoMode) {
-    for axis in 0..3 {
+pub(crate) fn push(shapes: &mut Shapes<'_>, layout: &Layout, mode: GizmoMode) {
+    for (axis, tint) in AXIS_TINTS.iter().enumerate() {
         for seg in 0..SEGMENTS {
             // Segments start away from the origin so the runs do not overdraw
             // the object's center, and stop short of the tip handle.
             let f = (seg as f32 + 1.0) / (SEGMENTS as f32 + 1.0);
             let x = layout.origin[0] + (layout.tips[axis][0] - layout.origin[0]) * f;
             let y = layout.origin[1] + (layout.tips[axis][1] - layout.origin[1]) * f;
-            place_square(world, segment_id(axis, seg), [x, y], SEGMENT_PX, 0.0);
+            push_square(shapes, [x, y], SEGMENT_PX, 0.0, *tint);
         }
-        place_square(
-            world,
-            tip_id(axis),
-            layout.tips[axis],
-            TIP_PX,
-            mode.tip_radius(),
-        );
+        push_square(shapes, layout.tips[axis], TIP_PX, mode.tip_radius(), *tint);
     }
-    if let Some(l) = crate::editor::widget::label_mut(world, MODE_LABEL) {
-        l.content = mode.caption().to_string();
-        l.x = layout.origin[0] + 12.0;
-        l.y = layout.origin[1] - 26.0;
-        l.color = crate::editor::theme::LABEL_DIM;
-        l.visible = true;
-    }
+    shapes.push(Shape {
+        rect: [
+            layout.origin[0] + CAPTION_AT[0],
+            layout.origin[1] + CAPTION_AT[1],
+            CAPTION_SIZE[0],
+            CAPTION_SIZE[1],
+        ],
+        text: mode.caption(),
+        text_color: theme::LABEL_DIM,
+        align: TextAlign::Left,
+        ..Shape::default()
+    });
 }
 
-pub(crate) fn hide(world: &mut World) {
-    ids().hide(world);
-}
-
-fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32, radius: f32) {
-    if let Some(s) = world.get_mut_by_id::<Sprite>(id) {
-        s.x = center[0] - size * 0.5;
-        s.y = center[1] - size * 0.5;
-        s.width = size;
-        s.height = size;
-        s.corner_radius = radius;
-        s.visible = true;
-    }
+fn push_square(shapes: &mut Shapes<'_>, center: [f32; 2], size: f32, radius: f32, tint: [f32; 4]) {
+    shapes.push(Shape {
+        rect: [center[0] - size * 0.5, center[1] - size * 0.5, size, size],
+        fill: tint,
+        radius,
+        ..Shape::default()
+    });
 }
 
 #[cfg(test)]
@@ -369,16 +326,22 @@ mod tests {
         assert!((wrap_deg(720.0)).abs() < 1e-3);
     }
 
-    // Each axis draws its segments, then its tip, axis after axis.
+    // Each axis draws its segments, then its tip centered on the projected
+    // point, and the caption names the mode.
     #[test]
-    fn axis_parts_run_in_draw_order() {
-        let parts: Vec<AssetId> = (0..3)
-            .flat_map(|axis| {
-                (0..SEGMENTS)
-                    .map(move |seg| segment_id(axis, seg))
-                    .chain([tip_id(axis)])
-            })
-            .collect();
-        assert_eq!(parts, ids().sprites);
+    fn push_draws_each_axis_run_then_the_caption() {
+        let view = view_matrix([0.0; 3], 0.0, 0.0);
+        let l = layout(&view, FOV, VP, [0.0, 0.0, -5.0]).unwrap();
+        let mut list = Vec::new();
+        let mut shapes = Shapes::new(&mut list);
+        push(&mut shapes, &l, GizmoMode::Scale);
+        shapes.finish();
+
+        assert_eq!(list.len(), 3 * (SEGMENTS + 1) + 1);
+        let tip = &list[SEGMENTS];
+        assert_eq!(tip.fill, AXIS_TINTS[0]);
+        assert!((tip.rect[0] + TIP_PX * 0.5 - l.tips[0][0]).abs() < 1e-3);
+        assert!((tip.rect[1] + TIP_PX * 0.5 - l.tips[0][1]).abs() < 1e-3);
+        assert_eq!(list.last().unwrap().text, "scale");
     }
 }

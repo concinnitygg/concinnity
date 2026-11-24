@@ -18,20 +18,15 @@
 //! those further is the ledger's job, not this module's.
 
 use concinnity_core::math::SaturatingFrom;
-// How far a term must move, as a percentage of the memory budget, before it
-// counts as drift, and how far back it must fall before it stops counting. Any
-// long session jitters by a few megabytes and none of it means anything, and a
-// figure sitting on a single threshold would alternate its reading twice a
-// second; the gap between the two is the hysteresis band that stops it, the
-// same way the streaming valve's engage and release marks do.
+// How far a term must grow, as a percentage of the memory budget, to count as
+// drift, and how far back it must fall to stop: a hysteresis band so ordinary
+// jitter does not flap the reading.
 const SIGNIFICANT_PCT: u64 = 2;
 const RELEASE_PCT: u64 = 1;
 
-// Per-sample RSS growth, as a percentage of the previous sample, under which the
-// session counts as flat, and how many flat samples in a row settle it. Startup
-// climbs steeply while blobs load and pipelines build, and the driver keeps
-// allocating for seconds after the first frame; one flat sample lands in the
-// gaps of that, so the baseline waits for a run of them.
+// Per-sample RSS growth under which the session counts as flat, and how many
+// flat samples in a row settle the baseline, since startup keeps allocating
+// for seconds.
 const SETTLE_GROWTH_PCT: u64 = 1;
 const SETTLE_STREAK: u32 = 4;
 
@@ -162,11 +157,9 @@ fn growth(now: u64, base: u64) -> i64 {
     i64::saturating_from(i128::from(now) - i128::from(base))
 }
 
-// Whether one term counts as drifting, given whether it already did. A term
-// that has not moved must clear the significance mark to start counting, and one
-// that has must fall back under the release mark to stop; between them it holds
-// whatever it was. Shrinkage never counts, and a zero budget has no scale to
-// judge against so nothing counts.
+// Whether one term counts as drifting, given whether it already did: it must
+// clear the significance mark to start and fall under the release mark to stop.
+// Shrinkage never counts, nor anything against a zero budget.
 fn moved(growth: i64, budget_bytes: u64, was_moved: bool) -> bool {
     let pct = if was_moved {
         RELEASE_PCT
@@ -271,11 +264,8 @@ mod tests {
         assert_eq!(d.verdict, DriftVerdict::Settled);
     }
 
-    // A figure sitting on the threshold must not alternate its reading. A live
-    // run flapped outside-heap / settled in 250 ms across a growth of 350 then
-    // 317 MiB against a 328 MiB mark, which is a log line twice a second saying
-    // nothing. Once a term counts as drifting it holds until it falls back to
-    // the release mark.
+    // A term on the threshold holds its reading until it falls to the release
+    // mark.
     #[test]
     fn a_growth_hovering_at_the_threshold_holds_its_reading() {
         let start = 0;

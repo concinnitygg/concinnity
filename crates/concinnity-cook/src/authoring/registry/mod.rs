@@ -107,12 +107,13 @@ macro_rules! __meta_payload {
 
 // The authored args schema TYPE: the component itself by default, `NoArgs` for
 // runtime-only entries, or the authoring form of the asset the `args: <Asset>`
-// override names, for the types whose authored shape diverges from the runtime
-// component.
+// (or, for a form in this crate's `ui` module, `ui_args: <Asset>`) override
+// names, for the types whose authored shape diverges from the runtime component.
 macro_rules! __meta_args_ty {
     ($default:path;) => { $default };
     ($default:path; runtime $($r:tt)*) => { NoArgs };
     ($default:path; args: $a:ident $($r:tt)*) => { concinnity_engine::components::cook::$a };
+    ($default:path; ui_args: $a:ident $($r:tt)*) => { crate::ui::$a };
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
@@ -415,7 +416,7 @@ macro_rules! define_registered_type {
             /// Normalize a JSON args value through the typed args schema: the
             /// same deserialize + validate as `reserialize_args`, but back to
             /// JSON with defaults filled and references resolved. Authoring
-            /// tools (`cn add`, the editor form) write this into world.jsonl;
+            /// tools (`cn add`, the editor form) write this into a .jsonl file;
             /// the baked postcard bytes cannot round-trip to JSON.
             ///
             /// # Errors
@@ -520,6 +521,11 @@ macro_rules! define_registered_type {
             /// [`Self::ref_fields`], under the action's own path.
             pub fn action_fields(self) -> &'static [ActionField] {
                 &self.field_table().actions
+            }
+            /// The fields holding a path to a file, owned or not. Each is the
+            /// dotted path [`Self::ref_fields`] uses.
+            pub fn file_fields(self) -> &'static [String] {
+                &self.field_table().files
             }
             /// The fields holding a file this type owns: its authored source,
             /// which belongs to the asset rather than being content other
@@ -757,10 +763,10 @@ mod authored_tests {
 }
 
 /// Bake the runtime component for the asset types whose baked form diverges
-/// from their authored args (the entries with `args:` metadata): run the type's
-/// `bake` translation at build time and serialize the component itself, which
-/// the type's `from_baked` deserializes at load. Pass-through types return
-/// `None`; cook reserializes their args (which ARE the component).
+/// from their authored args (the entries with `args:` or `ui_args:` metadata):
+/// run the type's `bake` translation at build time and serialize the component
+/// itself, which the type's `from_baked` deserializes at load. Pass-through
+/// types return `None`; cook reserializes their args (which ARE the component).
 ///
 /// # Errors
 ///
@@ -803,6 +809,14 @@ pub fn bake_divergent(
         }
         RegisteredType::AppConfig => {
             bake!(AppConfig, concinnity_engine::components::cook::AppConfig)
+        }
+        RegisteredType::Screen => {
+            let asset = ct.as_str();
+            let typed = crate::authoring::from_authored::<crate::ui::Screen>(args)
+                .map_err(|source| AuthoringError::Args { asset, source })?;
+            postcard::to_allocvec(&typed.runtime())
+                .map(Some)
+                .map_err(|source| AuthoringError::Encode { asset, source })
         }
         _ => Ok(None),
     }
@@ -1373,16 +1387,27 @@ mod tests {
                 "Screen",
                 "WaterSurface",
                 "SdfVolume",
-                "LayoutContainer",
+                "Layout",
                 "StatHud",
                 "DebugHud",
-                "TextInput",
+                "TextField",
                 "LoadingOverlay",
                 "Terrain",
                 "Planet",
                 "Atmosphere",
                 "NightSky",
                 "Cloud",
+                "List",
+                "Grid",
+                "Canvas",
+                "Tabs",
+                "Checkbox",
+                "Button",
+                "TextArea",
+                "Menu",
+                "Modal",
+                "Toasts",
+                "ValueSlider",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

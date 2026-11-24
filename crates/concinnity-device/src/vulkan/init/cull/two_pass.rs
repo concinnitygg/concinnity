@@ -57,15 +57,9 @@ pub(super) fn build_two_pass_cull(
         &compute.draw_args_buffers,
         &compute.status_buffers,
     );
-    // Two-pass Hi-Z occlusion resources. Built only when the world
-    // requested `occlusion_two_pass` AND the bindless cull path is active:
-    // the late cull pipeline (`CULL_LATE`, same layout as the early pass), a
-    // second set of per-frame indirect buffers `CullLate` writes / `MainLate`
-    // reads, a dedicated descriptor pool + per-frame late cull sets
-    // (bindings 0/1/2/3 = object / draw-args / second-indirect /
-    // cull-status), and the early and late main render passes. The Hi-Z
-    // late cull-read sets live inside `HiZResources` (built with the cull
-    // pass when `occlusion_two_pass`). Mirrors `directx/init/pipelines.rs`.
+    // Two-pass Hi-Z occlusion, when requested on the bindless path: the late cull
+    // pipeline, second indirect buffers, the late cull sets, and the early and late
+    // main render passes.
     type TwoPassCullResources = (
         Option<OwnedPipeline>,
         Vec<vk::DescriptorSet>,

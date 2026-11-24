@@ -11,7 +11,7 @@ use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 
 pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
-    // A command that launches a world installs its own logging as it starts.
+    // A command that launches an application installs its own logging as it starts.
     if cli.quiet && cli.command.launch_args(cli.quiet).is_none() {
         concinnity_runtime::install_logging(true);
     }
@@ -23,32 +23,42 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(Path::new(&args.path)),
         Commands::Cook(args) => command::cook(
-            args.world.file(),
+            args.target.target(),
             if args.verbose {
                 command::Verbosity::Verbose
             } else {
                 command::Verbosity::Normal
             },
         ),
-        Commands::Check(args) => command::check(args.world.file()),
-        Commands::Run(args) => crate::run_world(args.world.file(), launch(&args.launch.args), tree),
+        Commands::Check(args) => command::check(args.file.as_deref()),
+        Commands::Run(args) => {
+            crate::run_app(args.target.target(), launch(&args.launch.args), tree)
+        }
         Commands::Bench(args) => {
-            crate::run_world(args.world.file(), launch(&args.launch.args), tree)
+            crate::run_app(args.target.target(), launch(&args.launch.args), tree)
         }
         Commands::Edit(args) => {
             let launch = launch(&args.launch.args);
             crate::run::select_graphics_api(&launch, tree);
-            crate::run_editor(launch, args.world.file())
+            let file = args
+                .target
+                .target()
+                .named()?
+                .map(|path| path.to_string_lossy().into_owned());
+            crate::run_editor(launch, file.as_deref())
         }
-        Commands::Add(args) => {
-            command::add(args.id.as_deref(), &args.targets, args.template.as_deref())
-        }
-        Commands::Rm(args) => command::rm(&args.id),
-        Commands::List(args) => command::list(args.world.file(), args.expanded, args.systems),
-        Commands::Explain(args) => command::explain(&args.id, args.world.file()),
+        Commands::Add(args) => command::add(
+            args.target.target(),
+            args.id.as_deref(),
+            &args.targets,
+            args.template.as_deref(),
+        ),
+        Commands::Rm(args) => command::rm(args.target.target(), &args.id),
+        Commands::List(args) => command::list(args.target.target(), args.expanded, args.systems),
+        Commands::Explain(args) => command::explain(&args.id, args.target.target()),
         Commands::Docs(args) => crate::docs::docs(args.root.as_deref()),
         Commands::Export(args) => command::export::export(&ExportOptions {
-            world: args.world.file().map(str::to_string),
+            target: args.target.target(),
             name: args.name.clone(),
             version: args.version.clone(),
             platform: args.platform.clone(),

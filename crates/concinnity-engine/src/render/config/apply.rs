@@ -97,6 +97,18 @@ impl RebuildSet {
         self.0 == 0
     }
 
+    /// Whether the set holds SSR, SSGI or ray-traced reflections, the features
+    /// that share the reflection target.
+    pub fn touches_reflections(&self) -> bool {
+        [
+            RebuildFeature::Ssr,
+            RebuildFeature::Ssgi,
+            RebuildFeature::RtReflections,
+        ]
+        .into_iter()
+        .any(|f| self.contains(f))
+    }
+
     /// The features in the set, in [`RebuildFeature::ALL`] order.
     pub fn iter(&self) -> impl Iterator<Item = RebuildFeature> + '_ {
         RebuildFeature::ALL

@@ -1,16 +1,6 @@
-// The authored joint specification, reduced once to the frame the solver
-// works in.
-//
-// A joint is authored as an axis, a pair of limits, and a motor, none of which
-// the solver can use as given: an axis may be zero-length, limits may arrive
-// the wrong way round, and a motor with no force ceiling drives nothing. All
-// of that is settled here, at construction, so the substep loop never branches
-// on degenerate input.
-//
-// The rest rotation is the other half of it. A joint holds the bodies at the
-// relative orientation they had when it was made, so what "zero" means for a
-// hinge angle, and what a fixed joint holds, is captured once rather than
-// re-derived from an authored pose the simulation never sees.
+// The authored joint spec reduced once to the solver's frame: degenerate axes,
+// swapped limits and unbounded motors settled at construction, and the rest
+// rotation captured at creation.
 
 use crate::simulation::physics::sim::math::{Quat, Vec3};
 use crate::simulation::physics::{JointMotor, JointSpec};

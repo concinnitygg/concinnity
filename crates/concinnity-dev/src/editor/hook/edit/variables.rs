@@ -16,14 +16,15 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::replace_args;
 use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use serde_json::Value;
 
 use crate::editor::behavior::{edit, palette, relations};
-use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
+use crate::editor::hook::{EditorHook, declared_id, entry_type};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::panels::variables::{self, Row};
 use crate::editor::panels::variables_panel::{self, VariablesAction, VariablesView};
-use crate::editor::widget;
+use crate::editor::ui::{BuiltPanel, BuiltUi, field};
 
 // Owned per-tick data backing a `VariablesView`.
 pub(in crate::editor::hook) struct VariablesData {
@@ -33,11 +34,6 @@ pub(in crate::editor::hook) struct VariablesData {
     // Whether a live session's values are showing in place of the declared
     // starting values (see `hook/drive/trace.rs`).
     pub live: bool,
-}
-
-// The type words a variable steps through, in the order the palette lists them.
-fn literal_verbs() -> Vec<&'static str> {
-    palette::LITERALS.iter().map(|e| e.verb).collect()
 }
 
 impl EditorHook {
@@ -123,27 +119,72 @@ impl EditorHook {
         ))
     }
 
-    pub(in crate::editor::hook) fn make_variables_view<'a>(
-        &'a self,
-        data: &'a VariablesData,
-        mouse: [f32; 2],
-    ) -> VariablesView<'a> {
-        let frontmost = self.panel_order.last() == Some(&PanelKey::Variables);
-        let on_declared = self
+    // Read the rows again when the entries or the live values changed.
+    pub(in crate::editor::hook) fn prepare_variables(&mut self) {
+        let keys = (self.entries.revision(), self.live_revision);
+        if self
             .variables
-            .row
-            .and_then(|i| data.rows.get(i))
-            .is_some_and(Row::declared);
-        VariablesView {
+            .shown
+            .as_ref()
+            .is_none_or(|(e, l, _)| (*e, *l) != keys)
+        {
+            self.variables.shown = Some((keys.0, keys.1, self.variables_data()));
+            self.variables.revision = self.variables.revision.wrapping_add(1);
+        }
+    }
+
+    // Which fields show focused: the ones holding it, while the panel is
+    // frontmost.
+    fn variables_focus_shown(&self) -> (bool, bool) {
+        let frontmost = self.panel_order.last() == Some(&PanelKey::Variables);
+        (
+            self.variables.name_focus && frontmost,
+            self.variables.value_focus && frontmost,
+        )
+    }
+
+    pub(in crate::editor::hook) fn make_variables_view(&self) -> Option<VariablesView<'_>> {
+        let (_, _, data) = self.variables.shown.as_ref()?;
+        let (name_focus, value_focus) = self.variables_focus_shown();
+        Some(VariablesView {
             rows: &data.rows,
-            scroll: self.variables.scroll,
             selected: self.variables.row,
             authoritative: data.authoritative,
-            name_focus: self.variables.name_focus && on_declared && frontmost,
-            value_focus: self.variables.value_focus && on_declared && frontmost,
+            name_focus,
+            value_focus,
             status: data.status.as_deref(),
             live: data.live,
-            mouse,
+            revision: self.variables.revision,
+        })
+    }
+
+    // The name and value fields' ids in `world`.
+    fn variables_fields(world: &World) -> [Option<AssetId>; 2] {
+        world
+            .resource::<BuiltUi>()
+            .and_then(|b| b.panel(PanelKey::Variables))
+            .map_or([None, None], variables_panel::fields)
+    }
+
+    // Take in a press that focused a field, or left one: the field's focus
+    // differs from what was last shown.
+    // A rename the press abandoned puts back what the table holds.
+    pub(in crate::editor::hook) fn observe_variables(
+        &mut self,
+        world: &mut World,
+        built: &BuiltPanel,
+    ) {
+        let [name, value] = variables_panel::focused(world, built);
+        let (shown_name, shown_value) = self.variables_focus_shown();
+        if name != shown_name {
+            if name {
+                self.variables.name_focus = true;
+            } else {
+                self.blur_variables_name(world);
+            }
+        }
+        if value != shown_value {
+            self.variables.value_focus = value;
         }
     }
 
@@ -151,7 +192,6 @@ impl EditorHook {
     // from whatever the table now holds.
     pub(in crate::editor::hook) fn open_variables(&mut self, world: &mut World) {
         self.variables.row = None;
-        self.variables.scroll = 0;
         self.variables.name_focus = false;
         self.variables.value_focus = false;
         self.seed_variables_fields(world);
@@ -161,7 +201,7 @@ impl EditorHook {
     // somewhere else in the editor already knowing which variable they mean.
     pub(super) fn open_variable_named(&mut self, name: &str, world: &mut World) {
         if !self.open[PanelKey::Variables] {
-            registry::panel(PanelKey::Variables).toggle(self, world);
+            registry::toggle(PanelKey::Variables, self, world);
         }
         self.focus_panel(PanelKey::Variables);
         let at = self
@@ -172,7 +212,6 @@ impl EditorHook {
         self.variables.row = at;
         self.variables.name_focus = false;
         self.variables.value_focus = false;
-        self.ensure_variables_row_visible();
         self.seed_variables_fields(world);
     }
 
@@ -183,20 +222,22 @@ impl EditorHook {
     ) {
         // A focused name field lasts only until the next press, so the keyboard
         // cannot stay in a field the user has clicked away from.
-        if action != VariablesAction::FocusName {
-            self.blur_variables_name(world);
-        }
+        self.blur_variables_name(world);
         match action {
             VariablesAction::New => self.add_variable(world),
             VariablesAction::Select(i) => self.select_variable(i, world),
-            VariablesAction::Declare => self.declare_variable(world),
-            VariablesAction::Retype => self.retype_variable(world),
-            VariablesAction::Remove => self.remove_variable(world),
-            VariablesAction::FocusName => self.variables.name_focus = true,
-            VariablesAction::FocusValue => self.variables.value_focus = true,
-            VariablesAction::Consume => {
-                self.variables.value_focus = false;
+            VariablesAction::Type => {
+                let declared = self
+                    .variables
+                    .row
+                    .and_then(|i| self.variables_data().rows.get(i).map(Row::declared));
+                match declared {
+                    Some(true) => self.retype_variable(world),
+                    Some(false) => self.declare_variable(world),
+                    None => {}
+                }
             }
+            VariablesAction::Remove => self.remove_variable(world),
         }
     }
 
@@ -265,7 +306,6 @@ impl EditorHook {
             .rows
             .iter()
             .position(|r| r.name == name && r.declared());
-        self.ensure_variables_row_visible();
         self.seed_variables_fields(world);
     }
 
@@ -280,12 +320,12 @@ impl EditorHook {
             return;
         };
         let current = slot.get("value").cloned().unwrap_or(Value::Null);
-        let verbs = literal_verbs();
-        let next = verbs
+        // Step to the next type word, in palette order.
+        let next = palette::LITERALS
             .iter()
-            .position(|v| *v == palette::verb_of(&current))
-            .map_or(0, |i| (i + 1) % verbs.len());
-        let value = palette::swap_literal(&current, verbs[next]);
+            .position(|e| e.verb == palette::verb_of(&current))
+            .map_or(0, |i| (i + 1) % palette::LITERALS.len());
+        let value = palette::swap_literal(&current, palette::LITERALS[next].verb);
         let Some(map) = slot.as_object_mut() else {
             return;
         };
@@ -343,9 +383,8 @@ impl EditorHook {
         let Some((idx, at)) = self.selected_declaration() else {
             return;
         };
-        let typed = widget::field_text(world, variables_panel::NAME_INPUT)
-            .trim()
-            .to_string();
+        let [name, _] = Self::variables_fields(world);
+        let typed = field::text(world, name).trim().to_string();
         self.blur_variables_name(world);
         if typed.is_empty() {
             return;
@@ -371,7 +410,8 @@ impl EditorHook {
         let Some((idx, at)) = self.selected_declaration() else {
             return;
         };
-        let text = widget::field_text(world, variables_panel::VALUE_INPUT);
+        let [_, value] = Self::variables_fields(world);
+        let text = field::text(world, value);
         let mut args = self.variables_args().unwrap_or(Value::Null);
         let Some(slot) = decl_mut(&mut args, at) else {
             return;
@@ -424,8 +464,9 @@ impl EditorHook {
             Some(r) => (r.name, r.value),
             None => (String::new(), String::new()),
         };
-        widget::seed_field(world, variables_panel::NAME_INPUT, &name);
-        widget::seed_field(world, variables_panel::VALUE_INPUT, &value);
+        let [name_field, value_field] = Self::variables_fields(world);
+        field::set_text(world, name_field, &name);
+        field::set_text(world, value_field, &value);
     }
 
     // Give the name field up, putting back what the table holds so an abandoned
@@ -436,28 +477,6 @@ impl EditorHook {
         }
         self.variables.name_focus = false;
         self.seed_variables_fields(world);
-    }
-
-    fn variables_rows_shown(&self) -> usize {
-        variables_panel::visible_rows(self.effective_size(PanelKey::Variables)[1])
-    }
-
-    fn ensure_variables_row_visible(&mut self) {
-        let Some(row) = self.variables.row else {
-            return;
-        };
-        let shown = self.variables_rows_shown();
-        self.variables.scroll =
-            crate::editor::behavior::navigate::scroll_to(row, self.variables.scroll, shown);
-    }
-
-    pub(in crate::editor::hook) fn scroll_variables(&mut self, delta: f32) {
-        let max = self
-            .variables_data()
-            .rows
-            .len()
-            .saturating_sub(self.variables_rows_shown());
-        self.variables.scroll = scroll_step(self.variables.scroll, delta, max);
     }
 }
 

@@ -73,20 +73,10 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
     })
 }
 
-// Compute cull compute kernel. One invocation per build-time `DrawObject`
-// frustum/distance-tests the object's `GpuObjectData` AABB against the six
-// CPU-extracted frustum planes and counts the ones it keeps per stream; the
-// packing kernels (`vulkan/compact.rs`) then write their
-// `VkDrawIndexedIndirectCommand`s into one list per stream of the per-frame
-// indirect buffer, which the main bindless pass draws list by list, so the
-// CPU never walks the static draw list.
-//
-// The frustum and distance maths mirror `gfx::frustum` exactly (the six
-// planes are extracted CPU-side already normalized) so the GPU path culls
-// identically to the CPU BVH path it replaces. `GpuObjectData` / `GpuDrawArgs`
-// mirror `gfx::render_types` under std430; the command struct mirrors
-// `VkDrawIndexedIndirectCommand`. The object id rides `first_instance` (the
-// bindless vertex shader reads it as `gl_InstanceIndex`).
+// Compute cull kernel: one invocation per object tests its AABB against the
+// six frustum planes, as `gfx::frustum` does, and counts the kept ones per
+// stream; the packing kernels write the indirect commands. The object id rides
+// `first_instance`.
 
 // Byte size of the cull kernel's `CullView` push-constant block: exactly the
 // 128-byte push-constant range every device guarantees.
@@ -306,12 +296,8 @@ pub(super) struct BucketPipelineTargets {
     pub template_generation: u64,
 }
 
-// Build one shader bucket's pipelines. `bucket` is the
-// `DrawObject::shader_bucket` value (bucket 0 is the world default program) and
-// names the bucket in error messages.
-//
-// A bucket with no programs is one the world declared no Shader for, so the
-// engine's own bindless programs render it.
+// Build one shader bucket's pipelines; a bucket with no programs renders with
+// the engine's bindless programs.
 pub(super) fn build_bucket_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
@@ -669,11 +655,8 @@ mod tests {
         assert_eq!(injected, ["#define CN_BACKEND_VULKAN 1"]);
     }
 
-    // A world Shader's bindless entries compile from its programs, and are its
-    // own programs rather than the engine's. No device is needed, so this guards the
-    // world-shader path the Vulkan-on-Windows runtime cannot unit-test end to
-    // end. The payload carries no cooked artifacts, so both entries take the
-    // compile branch of `surface_source`, which is also what a stale cook does.
+    // A world Shader's bindless entries compile from its own programs, checked
+    // without a device.
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
         concinnity_shader::require_dxc!();

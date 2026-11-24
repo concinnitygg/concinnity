@@ -21,7 +21,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: &[],
         }
     }

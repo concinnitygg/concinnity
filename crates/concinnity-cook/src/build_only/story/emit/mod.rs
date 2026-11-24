@@ -9,7 +9,7 @@ use self::stage::emit_stage;
 use self::title::emit_title_screen;
 use self::widgets::font;
 use super::model::{ImageDims, Story};
-use crate::build_only::membership::scope_to_screen;
+use crate::ui::scope_entries_to_screen;
 
 pub(super) mod choices;
 mod ending;
@@ -27,7 +27,7 @@ mod tests;
 
 // One screen's generated elements, each naming the screen it belongs to.
 fn scoped(mut group: Vec<serde_json::Value>, screen: &str) -> Vec<serde_json::Value> {
-    scope_to_screen(&mut group, screen);
+    scope_entries_to_screen(&mut group, screen);
     group
 }
 

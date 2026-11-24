@@ -8,9 +8,9 @@ use super::LoadedWorld;
 /// The origin of one expanded-world asset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provenance {
-    /// A world.jsonl line.
+    /// A .jsonl line.
     Authored,
-    /// A world.jsonl line that replaces what an expansion would have produced;
+    /// A .jsonl line that replaces what an expansion would have produced;
     /// the named source no longer drives this asset.
     AuthoredShadowing {
         /// The authored asset whose expansion it replaces.
@@ -42,12 +42,12 @@ impl Provenance {
         }
     }
 
-    /// Whether the asset has a world.jsonl line of its own.
+    /// Whether the asset has a .jsonl line of its own.
     pub fn is_authored(&self) -> bool {
         matches!(self, Self::Authored | Self::AuthoredShadowing { .. })
     }
 
-    /// Whether copying this asset's entry into world.jsonl overrides it rather
+    /// Whether copying this asset's entry into a .jsonl file overrides it rather
     /// than duplicating it: only the passes that skip a name the world claims
     /// (scene imports, injections) can be overridden this way. The macro
     /// expansions emit their primitives unconditionally, so a copy of one would

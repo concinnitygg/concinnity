@@ -7,17 +7,21 @@ use crate::compile::CompileError;
 use kira::sound::static_sound::StaticSoundData;
 use std::io::Cursor;
 
-// Read and validate the audio file named by `args["source"]`, returning its
-// bytes for the world blob.
+// Read and validate the audio file named by `args["source"]` under `root`,
+// returning its bytes for the world blob.
 pub(crate) fn compile_audio_clip_payload(
     args: &serde_json::Value,
+    root: Option<&std::path::Path>,
 ) -> Result<Vec<u8>, CompileError> {
     let source = args
         .get("source")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "AudioClip: missing 'source'".to_string())?;
-    let bytes = CompileError::read(source, "AudioClip: failed to read")?;
+    let bytes = CompileError::read(
+        concinnity_host::store::source::resolve(source, root),
+        "AudioClip: failed to read",
+    )?;
     // Decode-and-discard: a clip the engine cannot decode fails the build.
     StaticSoundData::from_cursor(Cursor::new(bytes.clone())).map_err(|e| {
         CompileError::Invalid(format!(
@@ -58,14 +62,14 @@ mod tests {
 
     #[test]
     fn missing_source_errors() {
-        assert!(compile_audio_clip_payload(&serde_json::json!({})).is_err());
-        assert!(compile_audio_clip_payload(&serde_json::json!({ "source": "" })).is_err());
+        assert!(compile_audio_clip_payload(&serde_json::json!({}), None).is_err());
+        assert!(compile_audio_clip_payload(&serde_json::json!({ "source": "" }), None).is_err());
     }
 
     #[test]
     fn nonexistent_file_errors() {
         let args = serde_json::json!({ "source": "definitely_not_here_9182.ogg" });
-        assert!(compile_audio_clip_payload(&args).is_err());
+        assert!(compile_audio_clip_payload(&args, None).is_err());
     }
 
     #[test]
@@ -74,7 +78,7 @@ mod tests {
         file.write_all(b"this is plainly not an audio file")
             .unwrap();
         let args = serde_json::json!({ "source": file.path().to_str().unwrap() });
-        assert!(compile_audio_clip_payload(&args).is_err());
+        assert!(compile_audio_clip_payload(&args, None).is_err());
     }
 
     #[test]
@@ -83,7 +87,7 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(&wav).unwrap();
         let args = serde_json::json!({ "source": file.path().to_str().unwrap() });
-        let payload = compile_audio_clip_payload(&args).expect("valid WAV should compile");
+        let payload = compile_audio_clip_payload(&args, None).expect("valid WAV should compile");
         assert_eq!(payload, wav, "payload should be the source bytes verbatim");
     }
 }

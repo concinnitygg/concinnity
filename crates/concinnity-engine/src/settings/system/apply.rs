@@ -1,10 +1,10 @@
 // The per-frame SettingCommand drain. Each command goes to the handler for its
 // row family, which changes the value, applies it (live to the backend where the
-// feature supports it, persist-only where a restart is required), refreshes the
-// row's value label, and records the change in the batch's settings snapshot.
+// feature supports it, persist-only where a restart is required), publishes the
+// value it now shows, and records the change in the batch's settings snapshot.
 
 use crate::components::{
-    AudioCommand, AudioTarget, ControlsCommand, SettingCommand, SettingOp, Sprite, WindowMode,
+    AudioCommand, AudioTarget, ControlsCommand, SettingCommand, SettingOp, WindowMode,
 };
 use crate::ecs::PipelineContext;
 use crate::protocol::FrameRateCap;
@@ -15,10 +15,12 @@ use crate::window::display_mode;
 use alloc::vec::Vec;
 
 use super::SettingsState;
-use super::rows::{set_label_content, set_rows_grayed, set_sprite_x};
+use super::rows::{place_slider, set_rows_grayed, show};
 use crate::settings::registry::{self, SliderSetting, SliderTarget};
 use crate::settings::rows::{quality_cycle, quality_toggle};
-use crate::settings::{self, SettingKey, StoredSettings, UserGraphicsSettings, levels};
+use crate::settings::{
+    self, SettingKey, SettingValues, StoredSettings, UserGraphicsSettings, levels,
+};
 use concinnity_core::platform::{CompiledPlatforms, GraphicsApiStatus};
 
 // A cycle row's option labels.
@@ -125,7 +127,7 @@ impl SettingsState {
         self.edit_stored(ctx, |state, ctx, cfg| {
             let mut changed_any = false;
             for mut cmd in setting_cmds {
-                if !state.slider_step_fraction(ctx, &mut cmd) {
+                if !Self::slider_step_fraction(ctx, &mut cmd) {
                     continue;
                 }
                 let changed = state.apply_setting_command(ctx, ops, cfg, &cmd);
@@ -172,24 +174,17 @@ impl SettingsState {
 
     // A Next/Prev on a slider row steps its value by `SLIDER_STEP_FRACTION` of the
     // range (a focused row's Left/Right), rewriting the op into the SetFraction a
-    // drag sends. The handle's position carries the current fraction: it is placed
-    // from the persisted value at init and moved on every change since. Returns
-    // false when the slider has no captured track, so the command is skipped.
-    fn slider_step_fraction(&self, ctx: &PipelineContext<'_>, cmd: &mut SettingCommand) -> bool {
+    // drag sends, from the fraction last published for it. Returns false when
+    // none has been, so the command is skipped.
+    fn slider_step_fraction(ctx: &PipelineContext<'_>, cmd: &mut SettingCommand) -> bool {
         if !matches!(cmd.op, SettingOp::Next | SettingOp::Prev)
             || registry::slider(cmd.setting).is_none()
         {
             return true;
         }
-        let Some(cur) = self
-            .sliders
-            .iter()
-            .find(|s| s.key == cmd.setting)
-            .and_then(|s| {
-                let hx = ctx.get_by_id::<Sprite>(s.handle_id).map(|sp| sp.x)?;
-                let travel = (s.track_w - s.handle_w).max(f32::EPSILON);
-                Some(((hx - s.track_x) / travel).clamp(0.0, 1.0))
-            })
+        let Some(cur) = ctx
+            .resource::<SettingValues>()
+            .and_then(|v| v.fraction(cmd.setting))
         else {
             return false;
         };
@@ -326,9 +321,7 @@ impl SettingsState {
         let Some(text) = text else {
             return false;
         };
-        if let Some(label_id) = cmd.value_label {
-            set_label_content(ctx, label_id, text);
-        }
+        show(ctx, cmd.setting, text);
         true
     }
 
@@ -352,24 +345,16 @@ impl SettingsState {
                 ctx.events_mut::<ControlsCommand>().send(command(stored));
             }
         }
-        if let Some(s) = self.sliders.iter().find(|s| s.key == cmd.setting) {
-            let hx = s.track_x + frac.clamp(0.0, 1.0) * (s.track_w - s.handle_w).max(0.0);
-            set_sprite_x(ctx, s.handle_id, hx);
-        }
-        if let Some(label_id) = cmd.value_label {
-            set_label_content(ctx, label_id, &(slider.format)(value));
-        }
+        place_slider(ctx, cmd.setting, frac);
+        show(ctx, cmd.setting, &(slider.format)(value));
         if cmd.persist {
             slider.persist(cfg, value);
         }
         cmd.persist
     }
 
-    // The Resolution row cycles the enumerated display modes rather than a static
-    // option list. Fullscreen-only: the backend holds the display to the chosen
-    // mode while the window is fullscreen, and the row is grayed and inert in the
-    // other modes, so the window is never resized here. Independent of the
-    // quality preset.
+    // The Resolution row cycles the display modes, fullscreen only; elsewhere
+    // the row is inert, so the window is never resized here.
     fn apply_resolution(
         &mut self,
         ctx: &mut PipelineContext<'_>,
@@ -386,9 +371,7 @@ impl SettingsState {
         self.resolution = Some(mode);
         ops.record(move |backend| backend.set_display_mode(mode));
         cfg.graphics.resolution = Some([mode.width, mode.height, mode.refresh_hz]);
-        if let Some(label_id) = cmd.value_label {
-            set_label_content(ctx, label_id, &mode.label());
-        }
+        show(ctx, cmd.setting, &mode.label());
         true
     }
 
@@ -412,9 +395,7 @@ impl SettingsState {
         };
         cfg.graphics.graphics_api = Some(choice.platform);
         cfg.graphics.graphics_api_trial = choice.trial;
-        if let Some(label_id) = cmd.value_label {
-            set_label_content(ctx, label_id, choice.platform.label());
-        }
+        show(ctx, cmd.setting, choice.platform.label());
         true
     }
 

@@ -27,7 +27,8 @@ use alloc::string::String;
 #[serde(default)]
 pub struct CubemapTexture {
     /// Path to the source equirectangular HDR (`.hdr`) file, relative to the
-    /// project root.
+    /// root of the file holding the line.
+    #[asset(file)]
     pub source: String,
     /// Edge length of each cube face in pixels. Must be a power of two.
     #[asset(default = 256)]

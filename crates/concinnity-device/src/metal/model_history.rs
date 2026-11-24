@@ -46,11 +46,8 @@ impl MtlContext {
             record_count: u32::saturating_from(record_count),
             _pad: [0; 3],
         };
-        // No timing attachment: this dispatch is not the `GBufferPrepass`
-        // pass, and claiming that pass's slot pair here made both encoders
-        // write it, so the reading was one encoder's start against the other's
-        // end. The snapshot is a handful of microseconds; the pre-pass it feeds
-        // is what the profiler reports.
+        // No timing attachment, since sharing the pre-pass's slots corrupts its
+        // reading.
         let desc = objc2_metal::MTLComputePassDescriptor::new();
         let enc = ScopedEncoder::new(
             cmd_buf

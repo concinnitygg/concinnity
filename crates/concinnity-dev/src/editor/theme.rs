@@ -8,6 +8,10 @@
 // label in a row or button.
 pub(crate) const TEXT_SCALE: f32 = 0.85;
 pub(crate) const TEXT_HALF: f32 = 10.0 * TEXT_SCALE;
+// One line of text, top to bottom.
+pub(crate) const LINE_H: f32 = TEXT_HALF * 2.0;
+// A panel's title bar, which drags it.
+pub(crate) const TITLE_H: f32 = 28.0;
 
 // Corner rounding: panels get the large radius, buttons / row highlights /
 // dropdowns the small one.
@@ -18,11 +22,7 @@ pub(crate) const CONTROL_RADIUS: f32 = 5.0;
 // tint, title bars included (no separate title strip).
 pub(crate) const CHROME_TINT: [f32; 4] = [0.11, 0.11, 0.14, 0.97];
 
-// The start screen's docked sidebar, which stands over the world it previews
-// rather than over a viewport: the same surface let down to a wash, so the
-// preview reads behind the listing and the window's framing is not cropped by
-// the column. Darker than the chrome it derives from, so a caption over a
-// bright scene keeps its contrast.
+// The start screen's sidebar tint, translucent over the preview it stands on.
 pub(crate) const SIDEBAR_TINT: [f32; 4] = [0.07, 0.07, 0.10, 0.55];
 
 // A hairline border framing every floating panel, a step lighter than the
@@ -44,11 +44,14 @@ pub(crate) const SELECTED_TINT: [f32; 4] = [0.18, 0.28, 0.46, 1.0];
 
 // Neutral button chip and the accent for an active / open control.
 pub(crate) const BUTTON_TINT: [f32; 4] = [0.19, 0.20, 0.25, 1.0];
+// The well a code text area sits in.
+pub(crate) const CODE_WELL_TINT: [f32; 4] = [0.07, 0.07, 0.09, 1.0];
+// A panel's close button under the pointer.
+pub(crate) const CLOSE_HOVER_TINT: [f32; 4] = [0.46, 0.26, 0.28, 1.0];
 pub(crate) const ACCENT_TINT: [f32; 4] = [0.26, 0.42, 0.66, 1.0];
 
-// A checkbox's box, on and off.
+// A checkbox's box while on.
 pub(crate) const CHECK_ON_TINT: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
-pub(crate) const CHECK_OFF_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 
 // Label colors: normal body text, dimmed secondary text, and headings.
 pub(crate) const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
@@ -61,54 +64,3 @@ pub(crate) const LOG_INFO: [f32; 3] = LABEL;
 pub(crate) const LOG_WARN: [f32; 3] = [0.95, 0.78, 0.45];
 pub(crate) const LOG_ERROR: [f32; 3] = [0.95, 0.55, 0.55];
 pub(crate) const LOG_COMMAND: [f32; 3] = [0.58, 0.72, 0.95];
-
-// Highlighted source in the code text area, by token.
-pub(crate) const CODE_KEYWORD: [f32; 3] = [0.78, 0.56, 0.96];
-pub(crate) const CODE_TYPE: [f32; 3] = [0.42, 0.78, 0.86];
-pub(crate) const CODE_NUMBER: [f32; 3] = [0.72, 0.86, 0.56];
-pub(crate) const CODE_STRING: [f32; 3] = [0.92, 0.66, 0.46];
-pub(crate) const CODE_COMMENT: [f32; 3] = [0.46, 0.54, 0.48];
-pub(crate) const CODE_PREPROCESSOR: [f32; 3] = [0.88, 0.52, 0.72];
-// The names the engine provides, set apart so an author sees what is theirs.
-pub(crate) const CODE_ENGINE: [f32; 3] = [0.96, 0.80, 0.40];
-pub(crate) const CODE_HEADING: [f32; 3] = [0.56, 0.74, 1.00];
-pub(crate) const CODE_EMPHASIS: [f32; 3] = [0.90, 0.72, 0.94];
-pub(crate) const CODE_LINK: [f32; 3] = [0.44, 0.78, 0.96];
-pub(crate) const CODE_LITERAL: [f32; 3] = [0.74, 0.84, 0.62];
-
-// Toast severity accents (the notification stack's edge stripe).
-pub(crate) const NOTIFY_INFO: [f32; 4] = [0.58, 0.72, 0.95, 1.0];
-pub(crate) const NOTIFY_SUCCESS: [f32; 4] = [0.42, 0.72, 0.46, 1.0];
-pub(crate) const NOTIFY_ERROR: [f32; 4] = [0.90, 0.42, 0.42, 1.0];
-
-// How far a row's hover / selection highlight is inset from the row rect, so
-// the highlight reads as a floating pill rather than a full-width band.
-pub(crate) const HIGHLIGHT_INSET_X: f32 = 4.0;
-pub(crate) const HIGHLIGHT_INSET_Y: f32 = 1.5;
-
-// A row's hover / selection highlight: the row rect pulled in by the insets.
-pub(crate) fn highlight_rect(rect: [f32; 4]) -> [f32; 4] {
-    [
-        rect[0] + HIGHLIGHT_INSET_X,
-        rect[1] + HIGHLIGHT_INSET_Y,
-        (rect[2] - 2.0 * HIGHLIGHT_INSET_X).max(0.0),
-        (rect[3] - 2.0 * HIGHLIGHT_INSET_Y).max(0.0),
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn highlight_rect_insets_and_never_goes_negative() {
-        let r = highlight_rect([10.0, 20.0, 100.0, 28.0]);
-        assert_eq!(r[0], 10.0 + HIGHLIGHT_INSET_X);
-        assert_eq!(r[1], 20.0 + HIGHLIGHT_INSET_Y);
-        assert_eq!(r[2], 100.0 - 2.0 * HIGHLIGHT_INSET_X);
-        assert_eq!(r[3], 28.0 - 2.0 * HIGHLIGHT_INSET_Y);
-        // A degenerate rect clamps to zero size instead of inverting.
-        let tiny = highlight_rect([0.0, 0.0, 2.0, 1.0]);
-        assert_eq!((tiny[2], tiny[3]), (0.0, 0.0));
-    }
-}

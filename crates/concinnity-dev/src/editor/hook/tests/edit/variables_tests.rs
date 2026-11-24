@@ -6,26 +6,33 @@
 //! the behaviors reading it.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::{InputKey, TextInput};
+use concinnity_engine::components::InputKey;
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
+use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
-use crate::editor::hook::tests::fixtures::{behavior, entry_with_args, hook, key_input};
+use crate::editor::hook::tests::fixtures::{
+    behavior, built_world, entry_with_args, hook, key_input,
+};
 use crate::editor::hook::{EditorHook, entry_type};
-use crate::editor::{behavior, widget};
+use crate::editor::ui::{BuiltUi, field};
 
 use crate::editor::panels::registry::{self, PanelKey};
 
 use crate::editor::panels::variables_panel::{self, VariablesAction};
 
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
-    let mut world = World::new();
-    for id in variables_panel::ids().field_ids() {
-        world.push_identified(id, TextInput::default());
-    }
+    let mut world = built_world(&[PanelKey::Variables]);
     let mut h = hook(entries);
-    registry::panel(PanelKey::Variables).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Variables, &mut h, &mut world);
     (h, world)
+}
+
+// The name and value fields.
+fn fields(world: &World) -> [Option<AssetId>; 2] {
+    let built = world.resource::<BuiltUi>().unwrap();
+    variables_panel::fields(built.panel(PanelKey::Variables).unwrap())
 }
 
 fn var_rows(h: &EditorHook) -> Vec<(String, String, bool)> {
@@ -92,7 +99,7 @@ fn declaring_the_first_variable_creates_the_table_holding_it() {
     assert!(h.variables_entry().is_none(), "no table yet");
 
     select_var(&mut h, &mut world, "score");
-    h.apply_variables_action(VariablesAction::Declare, &mut world);
+    h.apply_variables_action(VariablesAction::Type, &mut world);
 
     let idx = h.variables_entry().expect("the table was created");
     assert_eq!(entry_type(&h.entries[idx]), Some(RegisteredType::Variables));
@@ -134,7 +141,7 @@ fn a_declared_table_warns_about_a_name_it_leaves_out() {
 
     // Declaring it clears the warning.
     select_var(&mut h, &mut world, "health");
-    h.apply_variables_action(VariablesAction::Declare, &mut world);
+    h.apply_variables_action(VariablesAction::Type, &mut world);
     assert!(h.variables_data().status.is_none());
     assert_eq!(
         var_rows(&h),
@@ -157,7 +164,7 @@ fn retyping_a_variable_steps_its_type_and_starting_value_together() {
     select_var(&mut h, &mut world, "score");
     let mut seen = vec![h.variables_data().rows[0].ty.clone()];
     for _ in 0..3 {
-        h.apply_variables_action(VariablesAction::Retype, &mut world);
+        h.apply_variables_action(VariablesAction::Type, &mut world);
         seen.push(h.variables_data().rows[0].ty.clone());
     }
     assert_eq!(seen, ["bool", "int", "float", "vec3"]);
@@ -167,7 +174,7 @@ fn retyping_a_variable_steps_its_type_and_starting_value_together() {
         table_args(&h)["vars"][0],
     );
     // And it cycles rather than running out.
-    h.apply_variables_action(VariablesAction::Retype, &mut world);
+    h.apply_variables_action(VariablesAction::Type, &mut world);
     assert_eq!(h.variables_data().rows[0].ty, "bool");
 }
 
@@ -181,8 +188,9 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
         serde_json::json!({"vars": [{"name": "spawn", "value": {"vec3": [0, 0, 0]}}]}),
     )]);
     select_var(&mut h, &mut world, "spawn");
-    h.apply_variables_action(VariablesAction::FocusValue, &mut world);
-    widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "1, 2, 3");
+    h.variables.value_focus = true;
+    let target = fields(&world)[1];
+    field::set_text(&mut world, target, "1, 2, 3");
     h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
@@ -191,17 +199,15 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
 
     // Something that is not a vector leaves the declaration as it was, and the
     // field goes back to what the table holds.
-    h.apply_variables_action(VariablesAction::FocusValue, &mut world);
-    widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "nonsense");
+    h.variables.value_focus = true;
+    let target = fields(&world)[1];
+    field::set_text(&mut world, target, "nonsense");
     h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
     );
-    assert_eq!(
-        widget::field_text(&world, variables_panel::VALUE_INPUT),
-        "1, 2, 3",
-    );
+    assert_eq!(field::text(&world, fields(&world)[1]), "1, 2, 3",);
 }
 
 // Renaming commits on Enter; a blank name is refused and the field goes back to
@@ -214,8 +220,9 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
         serde_json::json!({"vars": [{"name": "score", "value": {"int": 0}}]}),
     )]);
     select_var(&mut h, &mut world, "score");
-    h.apply_variables_action(VariablesAction::FocusName, &mut world);
-    widget::seed_field(&mut world, variables_panel::NAME_INPUT, "points");
+    h.variables.name_focus = true;
+    let target = fields(&world)[0];
+    field::set_text(&mut world, target, "points");
     h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
@@ -227,17 +234,15 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
         "the selection followed the rename"
     );
 
-    h.apply_variables_action(VariablesAction::FocusName, &mut world);
-    widget::seed_field(&mut world, variables_panel::NAME_INPUT, "   ");
+    h.variables.name_focus = true;
+    let target = fields(&world)[0];
+    field::set_text(&mut world, target, "   ");
     h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")
     );
-    assert_eq!(
-        widget::field_text(&world, variables_panel::NAME_INPUT),
-        "points",
-    );
+    assert_eq!(field::text(&world, fields(&world)[0]), "points",);
 }
 
 // Removing a declaration drops the selection rather than retargeting it, and the
@@ -301,14 +306,14 @@ fn retyping_a_variable_re_checks_the_behaviors_reading_it() {
                 "do": [{"set": {"var": "score", "value": {"int": 1}}}]}),
         ),
     ]);
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     assert_eq!(h.behavior.status, Some(behavior::panel::Status::Ok));
 
     // The types cycle bool -> int -> float -> vec3, so two steps from int lands
     // on a type an int value no longer satisfies.
     select_var(&mut h, &mut world, "score");
-    h.apply_variables_action(VariablesAction::Retype, &mut world);
-    h.apply_variables_action(VariablesAction::Retype, &mut world);
+    h.apply_variables_action(VariablesAction::Type, &mut world);
+    h.apply_variables_action(VariablesAction::Type, &mut world);
     assert_eq!(h.variables_data().rows[0].ty, "vec3");
     let status = h
         .behavior
@@ -336,10 +341,10 @@ fn an_overview_variable_card_opens_the_table_on_it() {
         ),
     ]);
     // Close the panel again so opening it from the map is what opens it.
-    registry::panel(PanelKey::Variables).close(&mut h, &mut world);
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::close(PanelKey::Variables, &mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     for _ in 0..2 {
-        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world);
     }
     let card = h
         .behavior_data()
@@ -349,9 +354,42 @@ fn an_overview_variable_card_opens_the_table_on_it() {
         .position(|c| c.title == "score")
         .expect("the variable is on the map");
 
-    h.apply_behavior_action(BehaviorAction::OpenVariable(card), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::OpenVariable(card), &mut world);
     assert!(h.open[PanelKey::Variables], "the table opened");
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Variables));
     let row = h.variables.row.expect("selected on the card's variable");
     assert_eq!(h.variables_data().rows[row].name, "score");
+}
+
+// A rename abandoned by a press elsewhere puts back the name the table holds.
+#[test]
+fn an_abandoned_rename_puts_the_name_back() {
+    let (mut h, mut world) = variables_session(vec![entry_with_args(
+        "world_vars",
+        "Variables",
+        serde_json::json!({"vars": [{"name": "score", "value": {"int": 0}}]}),
+    )]);
+    select_var(&mut h, &mut world, "score");
+    h.focus_panel(PanelKey::Variables);
+    let [name, _] = fields(&world);
+    world
+        .get_mut_by_id::<concinnity_engine::components::TextField>(name.unwrap())
+        .unwrap()
+        .focused = true;
+    let built = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::Variables)
+        .unwrap()
+        .clone();
+    h.observe_variables(&mut world, &built);
+    assert!(h.variables.name_focus);
+    field::set_text(&mut world, name, "half typed");
+    world
+        .get_mut_by_id::<concinnity_engine::components::TextField>(name.unwrap())
+        .unwrap()
+        .focused = false;
+    h.observe_variables(&mut world, &built);
+    assert!(!h.variables.name_focus);
+    assert_eq!(field::text(&world, name), "score");
 }

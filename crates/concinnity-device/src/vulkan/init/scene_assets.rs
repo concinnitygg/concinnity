@@ -35,12 +35,8 @@ pub(super) fn build_scene_assets(
             .collect::<Result<Vec<_>, _>>()?
     };
 
-    // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
-    // the flat-normal image a draw with no normal map samples, then the
-    // white image a draw with no albedo samples. Real normal maps and
-    // albedos are textures in `textures` (the shared pool) at their own
-    // handle; only these two live in `fallback_textures`, past the last
-    // real texture.
+    // Reserved fallbacks past the last real texture, in `FALLBACK_TEXTURE_COUNT`
+    // order: flat normal, then white.
     let upload_ctx = gpu.upload();
     let fallback_textures = vec![
         create_fallback_flat_normal(&upload_ctx)?,

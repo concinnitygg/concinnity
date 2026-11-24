@@ -6,9 +6,10 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::bake::texture;
 use concinnity_engine::components::{
-    BackgroundOverrides, Camera3D, CharacterRig, FrameInput, GlobalTransform, GraphicsConfig,
-    HitRegion, Material, Prop, RenderHandle, Scene, SceneCommand, Shader, ShaderPrograms,
-    SkeletonPose, SkinnedMesh, Sprite, StreamingConfig, TextLabel, UiAction, Window,
+    BackgroundOverrides, Binding, Camera3D, CharacterRig, FrameInput, GlobalTransform,
+    GraphicsConfig, HitRegion, Material, Prop, RenderHandle, Scene, SceneCommand, Shader,
+    ShaderPrograms, SkeletonPose, SkinnedMesh, Sprite, StreamingConfig, TextLabel, UiAction,
+    ValueOp, Window,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{
@@ -29,7 +30,7 @@ use concinnity_engine::resource::{
     ColorLutTable, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, SkinnedMeshTable,
     TextureTable,
 };
-use concinnity_engine::settings::SettingKey;
+use concinnity_engine::settings::{SettingKey, SettingValues};
 use concinnity_host::store::blob::BlobData;
 use std::sync::{Arc, Mutex};
 
@@ -346,14 +347,14 @@ fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, n: u1
     push_skinned_payload(b, name, sm, &skinned_payload(n, &[]));
 }
 
-// One settings row: the setting-action HitRegion the menu builds plus
-// the value TextLabel it points at. Init syncs the label to the live value while
-// the regions are still present (UiInputSystem drains them afterwards).
-fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId) {
+// One settings row: a HitRegion stepping `key` forward plus the value
+// TextLabel bound to it.
+fn push_settings_row(b: &mut WorldBuilder, key: SettingKey, label: AssetId) {
     b.push(HitRegion {
-        action: Some(act(
-            serde_json::json!({"setting": {"key": key, "verb": verb}}),
-        )),
+        action: Some(UiAction::Value {
+            binding: Binding::Setting(key),
+            op: ValueOp::Step(1),
+        }),
         label: Some(Ref::new(label)),
         ..Default::default()
     });
@@ -362,24 +363,18 @@ fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId
         TextLabel {
             content: "<placeholder>".to_string(),
             color: LIT,
+            text_binding: Some(Binding::Setting(key)),
             ..Default::default()
         },
     );
 }
 
-// The content of the TextLabel with `id`.
-fn label_text(world: &mut World, id: AssetId) -> String {
+// What the settings menu shows for `key`, or "" for nothing.
+fn shown(world: &World, key: SettingKey) -> &str {
     world
-        .context()
-        .get_by_id::<TextLabel>(id)
-        .expect("label present")
-        .content
-        .clone()
-}
-
-// A test action from its text form, with integer targets.
-fn act(action: serde_json::Value) -> UiAction {
-    serde_json::from_value(action).unwrap()
+        .resource::<SettingValues>()
+        .and_then(|v| v.text(key))
+        .unwrap_or_default()
 }
 
 // Quality effects at their defaults, adjusted by `f`.

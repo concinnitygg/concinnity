@@ -85,10 +85,8 @@ pub(in crate::vulkan) fn build_spot_shadow(
     )?;
     upload_records(&data_buffer, &data);
 
-    // One `ShadowUniforms` per slice, each with the spot's matrix in
-    // `light_vps[0]`, so the shared shadow vertex shader renders a spot slice by
-    // pushing cascade_idx = 0. Slots are padded to the device's minimum uniform
-    // buffer offset alignment so each slice's descriptor can point at its own.
+    // One `ShadowUniforms` per slice, its matrix in `light_vps[0]`, padded to the
+    // minimum UBO offset alignment.
     // SAFETY: a property query on a live handle; it only reads.
     let align = unsafe { instance.get_physical_device_properties(physical_device) }
         .limits
@@ -190,12 +188,9 @@ fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
 }
 
 impl VkContext {
-    // One depth-only render pass per scheduled spot slice, GPU-driven like the
-    // cascades: a per-slice cull against the spot's light frustum packs the
-    // slice's own lists, and the slice draws them through the shared
-    // bindless shadow pipeline with that slice's uniforms at set 0. Slices with
-    // no records still clear, so the main pass samples valid depth.
-    // pub(in crate::vulkan) so the render-graph executor can dispatch it.
+    // One depth-only pass per scheduled spot slice: cull against its frustum, then
+    // draw its lists through the bindless shadow pipeline. Empty slices still
+    // clear.
     pub(in crate::vulkan) fn encode_spot_shadow_pass(&self, rec: &Recorder<'_>, frame_idx: usize) {
         if self.spot_shadow.count() == 0 {
             return;

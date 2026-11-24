@@ -8,7 +8,7 @@ use concinnity_cook::authoring::world::entry_handles;
 use concinnity_engine::components::ShaderStage;
 
 use super::shader_edits::new_shader_file;
-use crate::editor::entry_list::EntryList;
+use crate::editor::entry_list::{EntryList, Origin};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::edits::references_note;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
@@ -18,6 +18,7 @@ use crate::editor::panels::shader;
 use crate::editor::panels::shader::edit::{file_stem, vertex_stem};
 use crate::editor::panels::shader::form::{Mode, Paths, ShaderForm};
 use crate::editor::panels::shader::source::{Leave, SourceKey};
+use std::path::PathBuf;
 
 const SHADER: &str = "Shader";
 
@@ -26,14 +27,24 @@ pub(in crate::editor::hook) struct ShaderExtras {
     form: ShaderForm,
     // The Shader's name when the form opened, for an edit.
     original: Option<String>,
+    // The root the Shader's file paths are declared from.
+    root: PathBuf,
 }
 
 impl ShaderExtras {
-    pub(in crate::editor::hook) fn open(entries: &EntryList, target: &FormTarget) -> Self {
+    pub(in crate::editor::hook) fn open(
+        entries: &EntryList,
+        target: &FormTarget,
+        origin: Origin<'_>,
+    ) -> Self {
         let editing = target.entry().and_then(|k| entries.index_of(k));
         Self {
             form: ShaderForm::open(entries, editing),
             original: editing.and_then(|i| entry_handles(entries).swap_remove(i)),
+            root: editing.map_or_else(
+                || entries.file_root(None, origin),
+                |i| entries.root_of(i, origin),
+            ),
         }
     }
 
@@ -54,7 +65,7 @@ impl ShaderExtras {
         };
         let mut files = Vec::new();
         let mut plan = |stem: String, stage: ShaderStage, starter: usize| {
-            let (path, declared) = new_shader_file(&stem);
+            let (path, declared) = new_shader_file(&stem, &self.root);
             files.push(NewFile {
                 path,
                 text: shader::templates::text(stage, starter).to_string(),

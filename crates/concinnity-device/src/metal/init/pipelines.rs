@@ -99,13 +99,9 @@ pub(crate) fn build_main_pipeline(
         .map_err(|e| RenderError::ShaderCompile(format!("main pipeline state: {e:?}")))
 }
 
-// Fail unless the device and the engine fragment support the bindless main
-// pass: argument-buffer tier 2, and a `BindlessTextures` block at buffer(7)
-// laid out the way the resource-id writes assume. That block is written as
-// plain resource ids at `resource_id_offset(id)`, so its encoder is built only
-// to prove the layout: the block ends in an unsized pool, which the emitted MSL
-// declares one long, so every member an id and a resource id apart holds
-// exactly when the encoder's length is the fixed members plus one pool slot.
+// Fail unless the device and fragment support the bindless main pass:
+// argument-buffer tier 2 and a `BindlessTextures` block at buffer(7) laid out as
+// the resource-id writes assume, checked against the encoder's length.
 fn check_bindless_support(
     device: &ProtocolObject<dyn MTLDevice>,
     fragment: &ProtocolObject<dyn MTLFunction>,
@@ -132,16 +128,9 @@ fn check_bindless_support(
     Ok(())
 }
 
-// Write the engine sampler block at buffer(10) once: the pool sampler
-// (trilinear + anisotropic + repeat), the shadow compare sampler, and the cube
-// sampler, at the argument ids their registers give them in
-// `main_bindless.hlsl` (s0..s2, locked by the build script). Samplers never
-// stream, so unlike the texture argument buffer this is written a single time.
-//
-// The block's encoder describes the engine's layout, so it comes from the
-// engine's own fragment. A world's compile of the same file declares the same
-// block, but a `shade` that samples nothing lets the compiler drop it, and an
-// encoder cannot be derived from a parameter that is not there.
+// Write the sampler block at buffer(10) once: pool, shadow compare and cube
+// samplers at ids s0..s2. Its encoder comes from the engine's fragment, since a
+// world `shade` that samples nothing lets the compiler drop the block.
 pub(crate) fn build_bindless_sampler_args(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -176,14 +165,8 @@ pub(crate) fn build_bindless_sampler_args(
     Ok(buf)
 }
 
-// GPU-driven cascaded-shadow render pipeline: depth-only, no
-// fragment, no MSAA, but `supportIndirectCommandBuffers` so each cascade's
-// casters can draw through the shadow ICB the shadow cull's encode dispatch
-// fills. Entry `shadow_vertex_bindless` reads the per-object model matrix from
-// the GpuObjectData buffer at buffer(9) by `[[base_instance]]` (the record id
-// the cull baked), exactly like the main bindless `vertex_main`. Reuses the
-// full static vertex descriptor (the VS consumes only attribute(0) = position;
-// the deformed skinned tail shares the same 56-byte layout).
+// The GPU-driven shadow pipeline: depth-only with ICB support, reading each
+// record's model from buffer(9) by `[[base_instance]]`.
 pub(crate) fn build_shadow_bindless_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,

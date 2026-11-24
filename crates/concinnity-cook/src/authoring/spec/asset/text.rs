@@ -51,10 +51,10 @@ pub(crate) fn menu_label(
         .set("centered", false)
 }
 
-/// An editable `TextInput` showing `placeholder` when empty. Geometry, colors, and
+/// An editable `TextField` showing `placeholder` when empty. Geometry, colors, and
 /// length cap keep their defaults; chain `.set(...)` for the rest.
-pub fn text_input(name: impl Into<String>, placeholder: impl Into<String>) -> AssetSpec {
-    AssetSpec::new(name, "TextInput").set("placeholder", placeholder.into())
+pub fn text_field(name: impl Into<String>, placeholder: impl Into<String>) -> AssetSpec {
+    AssetSpec::new(name, "TextField").set("placeholder", placeholder.into())
 }
 
 #[cfg(test)]
@@ -113,9 +113,9 @@ mod tests {
     }
 
     #[test]
-    fn text_input_sets_placeholder() {
-        let t = text_input("name_field", "name");
-        assert_eq!(t.asset_type, "TextInput");
+    fn text_field_sets_placeholder() {
+        let t = text_field("name_field", "name");
+        assert_eq!(t.asset_type, "TextField");
         assert_eq!(
             t.fields
                 .iter()

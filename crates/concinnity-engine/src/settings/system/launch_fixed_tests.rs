@@ -174,7 +174,7 @@ fn fixed_rows_are_grayed_and_inert() {
         world.push(HitRegion {
             action: Some(
                 serde_json::from_value(
-                    serde_json::json!({"setting": {"key": key, "verb": "next"}}),
+                    serde_json::json!({"step": {"binding": alloc::format!("setting:{key}"), "by": 1}}),
                 )
                 .unwrap(),
             ),

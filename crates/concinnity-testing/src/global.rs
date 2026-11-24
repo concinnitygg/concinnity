@@ -23,8 +23,8 @@ use crate::access::{self, ExclusiveAccess};
 /// # use concinnity_testing::GlobalState;
 /// let state = GlobalState::acquire().with_cwd();
 /// // A relative write now lands in the guard's tree, not the source checkout.
-/// std::fs::write("world-lock.json", "{}").unwrap();
-/// # assert!(state.root().join("world-lock.json").exists());
+/// std::fs::write("cook-lock.json", "{}").unwrap();
+/// # assert!(state.root().join("cook-lock.json").exists());
 /// ```
 pub struct GlobalState {
     // Dropped last, and only through the explicit `Drop` below: the tree is

@@ -1,17 +1,7 @@
-// The spatial half of what a behavior may read: nearest, within, and the ray
-// test behind `raycast`.
-//
-// The candidates are always a declared query's entities, so what a body may
-// reach is exactly what it declared, the way its component queries already
-// work. Nearest and within are transform arithmetic and are here; the ray test
-// belongs to physics, where the ray-versus-shape primitives are, and this only
-// calls it.
-//
-// Nothing here reads the physics world itself, so a behavior sees no terrain
-// and no heightfield: an entity with no collider cannot be hit.
-//
-// The linear scans here define the answers. `index` reaches the same ones
-// without visiting every candidate, and falls back to these where it cannot.
+// What a behavior may read spatially: nearest, within, and the ray test behind
+// `raycast`, always over a declared query's entities. The ray test calls into
+// physics but sees no terrain. The linear scans define the answers; `index`
+// matches them faster.
 
 mod index;
 mod tree;

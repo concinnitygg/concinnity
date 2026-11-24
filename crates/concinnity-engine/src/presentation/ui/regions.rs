@@ -5,7 +5,7 @@
 use crate::ecs::{FrameVec, PipelineContext, Ref, StepResult};
 use hashbrown::{HashMap, HashSet};
 
-use crate::components::{FrameInput, SettingVerb, SpriteFit, TextLabel, UiAction};
+use crate::components::{FrameInput, HitRegion, SettingVerb, SpriteFit, TextLabel, UiAction};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
 use crate::settings::SettingKey;
@@ -18,9 +18,6 @@ use super::{
 
 // The per-frame state every region's hit-test reads.
 pub(super) struct RegionFrame<'a> {
-    // The topmost input-capturing screen; only its regions (or, with none,
-    // the screen-less regions) react.
-    active_screen: Option<AssetId>,
     // The scrollbar thumb is being dragged, so no region reacts.
     thumb_active: bool,
     // Reference-canvas mappings for screen-owned regions, chosen by `fit`.
@@ -29,6 +26,8 @@ pub(super) struct RegionFrame<'a> {
     overlay_cover: OverlayTransform,
     // Each panel's content band (reference space), indexed like `panels`.
     panel_bands: FrameVec<'a, [f32; 4]>,
+    // A widget or popup took this frame's press, so no region fires from it.
+    pub(super) click_taken: bool,
 }
 
 impl<'a> RegionFrame<'a> {
@@ -36,25 +35,24 @@ impl<'a> RegionFrame<'a> {
     // mappings a region may opt into derive from the same viewport.
     pub(super) fn new(
         viewport: [f32; 2],
-        active_screen: Option<AssetId>,
         thumb_active: bool,
         overlay: OverlayTransform,
         panel_bands: FrameVec<'a, [f32; 4]>,
     ) -> Self {
         Self {
-            active_screen,
             thumb_active,
             overlay,
             overlay_bottom: OverlayTransform::bottom_anchored_from_viewport(viewport),
             overlay_cover: OverlayTransform::cover_from_viewport(viewport),
             panel_bands,
+            click_taken: false,
         }
     }
 
-    // The cursor in a region's own space: window pixels for a screen-less
-    // region, reference space through its `fit` otherwise.
-    fn cursor_for(&self, screen: Option<AssetId>, fit: SpriteFit, mx: f32, my: f32) -> (f32, f32) {
-        if screen.is_none() {
+    // The cursor in a region's own space: window pixels off the canvas,
+    // reference space through its `fit` on it.
+    fn cursor_for(&self, canvas: bool, fit: SpriteFit, mx: f32, my: f32) -> (f32, f32) {
+        if !canvas {
             return (mx, my);
         }
         match fit {
@@ -68,14 +66,14 @@ impl<'a> RegionFrame<'a> {
 // What the region pass asks the caller to do after it releases the regions.
 #[derive(Default)]
 pub(super) struct RegionOutcome {
-    // A group header was clicked: flip that group on the active panel.
-    pub(super) toggle_group: Option<usize>,
-    // A rebind row was clicked: capture for this setting key and value label.
-    pub(super) start_capture: Option<(SettingKey, Option<AssetId>)>,
+    // A rebind row was clicked: capture for this setting key.
+    pub(super) start_capture: Option<SettingKey>,
     // A dropdown row was clicked: open its floating list.
     pub(super) start_open: Option<OpenRequest>,
     // A fired action ended the step (e.g. Quit); nothing else applies.
     pub(super) fired: Option<StepResult>,
+    // A region took this frame's press.
+    pub(super) pressed: bool,
 }
 
 // Why a region may be unable to hover or fire this frame.
@@ -108,17 +106,17 @@ fn region_inert(gate: RegionGate) -> bool {
         || gate.follow_inert
 }
 
-// A follow-label region's synced y and whether it is inert: it tracks its
-// label and goes inert while the label is empty or missing.
+// A follow-label region's synced position and whether it is inert: it tracks
+// its label and goes inert while the label is empty or missing.
 fn follow_sync(
-    follow: Option<(AssetId, f32)>,
-    labels: &HashMap<AssetId, (f32, bool)>,
-) -> (Option<f32>, bool) {
+    follow: Option<(AssetId, [f32; 2])>,
+    labels: &HashMap<AssetId, ([f32; 2], bool)>,
+) -> (Option<[f32; 2]>, bool) {
     let Some((label_id, offset)) = follow else {
         return (None, false);
     };
     match labels.get(&label_id) {
-        Some(&(ly, empty)) => (Some(ly + offset), empty),
+        Some(&(at, empty)) => (Some([at[0] + offset[0], at[1] + offset[1]]), empty),
         None => (None, true),
     }
 }
@@ -126,9 +124,11 @@ fn follow_sync(
 // Whether a region's setting row is in the runtime-disabled set.
 pub(super) fn setting_row_disabled(
     disabled_rows: &HashSet<SettingKey>,
-    action: Option<&UiAction>,
+    region: &HitRegion,
 ) -> bool {
-    matches!(action, Some(UiAction::Setting { key, .. }) if disabled_rows.contains(key))
+    region
+        .setting()
+        .is_some_and(|key| disabled_rows.contains(&key))
 }
 
 // What drives a region this frame: the focus cursor while it is set, else the
@@ -179,13 +179,14 @@ impl UiInputSystem {
         }
     }
 
-    // Resolve each followed label's (y, is-empty) once, so the region pass
+    // Resolve each followed label's (position, is-empty) once, so the region pass
     // reads a map instead of looking a label up per region.
     fn resolve_follow_labels(&mut self, ctx: &PipelineContext<'_>) {
         self.follow_labels.clear();
         for &id in &self.follow_label_ids {
             if let Some(l) = ctx.get_by_id::<TextLabel>(id) {
-                self.follow_labels.insert(id, (l.y, l.content.is_empty()));
+                self.follow_labels
+                    .insert(id, ([l.x, l.y], l.content.is_empty()));
             }
         }
     }
@@ -210,21 +211,20 @@ impl UiInputSystem {
         let mut outcome = RegionOutcome::default();
 
         for (i, entry) in self.regions.iter_mut().enumerate() {
-            let (follow_y, follow_inert) = follow_sync(entry.follow, &self.follow_labels);
-            if let Some(y) = follow_y {
+            let (follow_at, follow_inert) = follow_sync(entry.follow, &self.follow_labels);
+            if let Some([x, y]) = follow_at {
+                entry.region.x = x;
                 entry.region.y = y;
             }
             let pad_focused = focus_index == Some(i);
             let gate = RegionGate {
                 thumb_active: frame.thumb_active,
-                slider: entry.slider_key.is_some(),
+                slider: entry.region.slider.is_some(),
                 pad_focused,
-                screen_matches: entry.screen == frame.active_screen,
+                screen_matches: self.screens.receives_input(entry.screen)
+                    && !self.widgets.blocked(entry.screen),
                 collapsed_row: entry.scroll_row.is_some() && entry.hidden,
-                disabled: setting_row_disabled(
-                    &self.disabled_rows_cache,
-                    entry.region.action.as_ref(),
-                ),
+                disabled: setting_row_disabled(&self.disabled_rows_cache, &entry.region),
                 follow_inert,
             };
             if region_inert(gate) {
@@ -242,14 +242,29 @@ impl UiInputSystem {
 
             // A region spanning the whole reference canvas covers the full
             // window, so a full-canvas advance region catches letterbox clicks.
-            let full_window = entry.screen.is_some() && region_covers_canvas(&entry.region);
-            let (qx, qy) = frame.cursor_for(entry.screen, entry.fit, mx, my);
+            let full_window = entry.canvas && region_covers_canvas(&entry.region);
+            let (qx, qy) = frame.cursor_for(entry.canvas, entry.fit, mx, my);
             let r = &entry.region;
             let mut mouse_hovered = if full_window {
                 mx >= 0.0 && mx < vw && my >= 0.0 && my < vh
             } else {
                 point_in_rect(qx, qy, region_rect(r))
             };
+            // A region moves with its label, so it is reached where its
+            // label's panel is.
+            if mouse_hovered {
+                let owner = r.label.and_then(|l| ctx.entity_of(l.id()));
+                let own = entry.screen;
+                let screens = &self.screens;
+                let at = |s: Option<AssetId>| {
+                    if s == own {
+                        (qx, qy)
+                    } else {
+                        screens.cursor(s, &frame.overlay, mx, my)
+                    }
+                };
+                mouse_hovered = self.widgets.stack.reaches_owned(own, owner, at);
+            }
             // A scroll-content region only counts as hovered inside its band, so
             // a row scrolled past the edge does not catch clicks over the chrome.
             if let Some((pi, _)) = entry.scroll_row
@@ -266,7 +281,7 @@ impl UiInputSystem {
             } else {
                 Driver::Mouse {
                     hovered: mouse_hovered,
-                    clicked: input.left_click,
+                    clicked: input.left_click && !frame.click_taken,
                     fallback_fire,
                 }
             };
@@ -290,13 +305,13 @@ impl UiInputSystem {
             if fallback_fire {
                 confirm_used = true;
             }
+            outcome.pressed = true;
             match &r.action {
                 None => {}
-                Some(UiAction::GroupToggle(gid)) => outcome.toggle_group = Some(*gid),
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Rebind,
-                }) => outcome.start_capture = Some((*key, r.label.map(Ref::id))),
+                }) => outcome.start_capture = Some(*key),
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Open,
@@ -312,7 +327,7 @@ impl UiInputSystem {
                     });
                 }
                 Some(action) => {
-                    if let Some(result) = fire_action(action, r.label.map(Ref::id), ctx) {
+                    if let Some(result) = fire_action(action, entry.id, ctx) {
                         outcome.fired = Some(result);
                         return outcome;
                     }
@@ -326,6 +341,7 @@ impl UiInputSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{Binding, ValueOp};
 
     // A live region: on the active screen and gated by nothing.
     fn live() -> RegionGate {
@@ -385,33 +401,48 @@ mod tests {
 
     #[test]
     fn follow_sync_tracks_the_label_and_goes_inert_when_empty_or_missing() {
-        let labels = HashMap::from([(AssetId(1), (40.0, false)), (AssetId(2), (60.0, true))]);
+        let labels = HashMap::from([
+            (AssetId(1), ([10.0, 40.0], false)),
+            (AssetId(2), ([10.0, 60.0], true)),
+        ]);
+        let off = [-2.0, 5.0];
         assert_eq!(follow_sync(None, &labels), (None, false));
         assert_eq!(
-            follow_sync(Some((AssetId(1), 5.0)), &labels),
-            (Some(45.0), false)
+            follow_sync(Some((AssetId(1), off)), &labels),
+            (Some([8.0, 45.0]), false)
         );
         assert_eq!(
-            follow_sync(Some((AssetId(2), 5.0)), &labels),
-            (Some(65.0), true)
+            follow_sync(Some((AssetId(2), off)), &labels),
+            (Some([8.0, 65.0]), true)
         );
-        assert_eq!(follow_sync(Some((AssetId(3), 5.0)), &labels), (None, true));
+        assert_eq!(follow_sync(Some((AssetId(3), off)), &labels), (None, true));
     }
 
     #[test]
     fn setting_row_disabled_matches_the_setting_key() {
-        let rows = HashSet::from([SettingKey::ShowFps]);
-        let row = |key| UiAction::Setting {
-            key,
-            verb: SettingVerb::Next,
+        let rows = HashSet::from([SettingKey::ShowFps, SettingKey::Exposure]);
+        let row = |action: UiAction| HitRegion {
+            action: Some(action),
+            ..Default::default()
         };
-        assert!(setting_row_disabled(&rows, Some(&row(SettingKey::ShowFps))));
-        assert!(!setting_row_disabled(&rows, Some(&row(SettingKey::Vsync))));
-        assert!(!setting_row_disabled(&rows, Some(&UiAction::Quit)));
-        assert!(!setting_row_disabled(&rows, None));
+        let step = |key| {
+            row(UiAction::Value {
+                binding: Binding::Setting(key),
+                op: ValueOp::Step(1),
+            })
+        };
+        let slider = HitRegion {
+            slider: Some(Binding::Setting(SettingKey::Exposure)),
+            ..Default::default()
+        };
+        assert!(setting_row_disabled(&rows, &step(SettingKey::ShowFps)));
+        assert!(setting_row_disabled(&rows, &slider));
+        assert!(!setting_row_disabled(&rows, &step(SettingKey::Vsync)));
+        assert!(!setting_row_disabled(&rows, &row(UiAction::Quit)));
+        assert!(!setting_row_disabled(&rows, &HitRegion::default()));
         assert!(!setting_row_disabled(
             &HashSet::new(),
-            Some(&row(SettingKey::ShowFps))
+            &step(SettingKey::ShowFps)
         ));
     }
 

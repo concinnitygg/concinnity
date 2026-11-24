@@ -36,25 +36,13 @@ pub(crate) fn stage_name(stage: ShaderStage) -> &'static str {
     }
 }
 
-// The on-disk path of a declared Shader file. This is the resolution the
-// renderer's hot-reload catalog applies (`ShaderFile::resolved_path`), and a
-// recompile's diagnostics name a Shader's files by that path, so the panel
-// matches them against what this returns.
-pub(crate) fn resolve_path(declared: &str, assets_dir: Option<&Path>) -> String {
-    concinnity_host::store::source::resolve_source_path(declared, assets_dir)
-        .to_string_lossy()
-        .into_owned()
-}
-
-// The on-disk path of a declared distance field, as the renderer's catalog and
-// the cook find it; a file not written yet is where a new one under the assets
-// directory would go.
-pub(crate) fn resolve_field_path(declared: &str, assets_dir: Option<&Path>) -> String {
-    concinnity_host::store::source::find_existing(declared, assets_dir)
-        .unwrap_or_else(|| match assets_dir {
-            Some(dir) if !Path::new(declared).is_absolute() => dir.join(declared),
-            _ => declared.into(),
-        })
+// The on-disk path of a declared Shader file or distance field under `root`,
+// the root of the file declaring it. This is the resolution the renderer's
+// hot-reload catalog applies (`ShaderFile::resolved_path`), and a recompile's
+// diagnostics name a file by that path, so the panel matches them against what
+// this returns.
+pub(crate) fn resolve_path(declared: &str, root: Option<&Path>) -> String {
+    concinnity_host::store::source::resolve(declared, root)
         .to_string_lossy()
         .into_owned()
 }
@@ -83,19 +71,6 @@ pub(crate) fn starter_path(dir: &Path, name: &str, exists: impl Fn(&Path) -> boo
         .map(|i| shaders.join(format!("{name}_{i}.hlsl")))
         .find(|p| !exists(p))
         .expect("four billion candidates hold a free name")
-}
-
-// How a world line declares `path`: relative to `root` when it is under it,
-// with forward slashes so the line reads the same on every host.
-pub(crate) fn declared_form(path: &Path, root: &Path) -> String {
-    match path.strip_prefix(root) {
-        Ok(relative) => relative
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/"),
-        Err(_) => path.to_string_lossy().into_owned(),
-    }
 }
 
 // Where the panel goes next when it leaves the open file.
@@ -262,60 +237,29 @@ mod tests {
         );
     }
 
+    // A relative path resolves under the root, whether or not the file is
+    // there yet; an absolute one names itself.
     #[test]
-    fn a_declared_path_is_relative_to_the_root_when_under_it() {
-        let root = Path::new("/cn-none/project");
-        assert_eq!(
-            declared_form(&root.join("assets").join("shaders").join("a.hlsl"), root),
-            "assets/shaders/a.hlsl"
-        );
-        assert_eq!(
-            declared_form(Path::new("/cn-none/elsewhere/a.hlsl"), root),
-            "/cn-none/elsewhere/a.hlsl"
-        );
-    }
-
-    // A field resolves under the assets directory first, as the cook finds
-    // it, and a file not written yet lands there too.
-    #[test]
-    fn a_field_resolves_under_the_assets_directory() {
+    fn paths_resolve_as_the_renderer_resolves_them() {
         let dir = tempfile::tempdir().unwrap();
         let shaders = dir.path().join("shaders");
         std::fs::create_dir_all(&shaders).unwrap();
-        std::fs::write(shaders.join("blob.hlsl"), "").unwrap();
-        let found = resolve_field_path("shaders/blob.hlsl", Some(dir.path()));
+        std::fs::write(shaders.join("lit.hlsl"), "").unwrap();
         assert!(same_file(
-            &found,
-            &shaders.join("blob.hlsl").to_string_lossy()
+            &resolve_path("shaders/lit.hlsl", Some(dir.path())),
+            &shaders.join(".").join("lit.hlsl").to_string_lossy()
         ));
-        let fresh = resolve_field_path("shaders/new.hlsl", Some(dir.path()));
-        assert_eq!(fresh, dir.path().join("shaders/new.hlsl").to_string_lossy());
+        assert_eq!(
+            resolve_path("shaders/new.hlsl", Some(dir.path())),
+            dir.path().join("shaders/new.hlsl").to_string_lossy()
+        );
         let elsewhere = tempfile::tempdir().unwrap();
         let absolute = elsewhere
             .path()
             .join("a.hlsl")
             .to_string_lossy()
             .into_owned();
-        assert_eq!(resolve_field_path(&absolute, Some(dir.path())), absolute);
-    }
-
-    // A path with a directory resolves as written; a bare name is looked up
-    // under the assets directory, as the renderer's catalog resolves it.
-    #[test]
-    fn paths_resolve_as_the_renderer_resolves_them() {
-        let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("shaders");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("lit.hlsl"), "").unwrap();
-        assert_eq!(
-            resolve_path("lit.hlsl", Some(dir.path())),
-            nested.join("lit.hlsl").to_string_lossy()
-        );
-        assert_eq!(resolve_path("a/b.hlsl", Some(dir.path())), "a/b.hlsl");
-        assert!(same_file(
-            &resolve_path("lit.hlsl", Some(dir.path())),
-            &nested.join(".").join("lit.hlsl").to_string_lossy()
-        ));
+        assert_eq!(resolve_path(&absolute, Some(dir.path())), absolute);
         assert!(!same_file("/cn-none/a.hlsl", "/cn-none/b.hlsl"));
     }
 }

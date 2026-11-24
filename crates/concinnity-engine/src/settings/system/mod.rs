@@ -25,7 +25,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::components::{
-    ControlsCommand, GamepadAction, GamepadMap, SceneCommand, StreamingConfig, Window, WindowMode,
+    ControlsCommand, GamepadMap, SceneCommand, StreamingConfig, Window, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
@@ -63,37 +63,8 @@ mod rows;
 mod tests;
 
 pub use init::{DisplayReport, SettingsInit, gate_unavailable_rows};
-#[cfg(any(test, feature = "test-support"))]
-pub use inspect::SliderRow;
 pub use persist::SettingsStore;
 pub use rows::DISABLED_ROW_COLOR;
-
-// One key-rebind row's runtime bookkeeping: the action it rebinds and the value
-// `TextLabel` showing its bound key. Built at init from the row's `key_*`
-// rebind HitRegion.
-pub(crate) struct RebindViz {
-    pub(crate) action: keymap::Bindable,
-    pub(crate) value_id: AssetId,
-}
-
-// One gamepad-rebind row's runtime bookkeeping, mirroring `RebindViz`.
-pub(crate) struct PadRebindViz {
-    pub(crate) action: GamepadAction,
-    pub(crate) value_id: AssetId,
-}
-
-// One slider row's runtime bookkeeping: the setting it controls, the track
-// geometry it maps a fraction onto, and the handle Sprite + value TextLabel it
-// drives. Built at init from the row's drag HitRegion and the handle Sprite's
-// width.
-pub(crate) struct SliderViz {
-    pub(crate) key: SettingKey,
-    pub(crate) track_x: f32,
-    pub(crate) track_w: f32,
-    pub(crate) handle_w: f32,
-    pub(crate) handle_id: AssetId,
-    pub(crate) value_id: AssetId,
-}
 
 /// The live settings state: every value the settings menu displays and cycles,
 /// with the authored baselines a preset change re-clamps from and the row
@@ -102,15 +73,9 @@ pub struct SettingsState {
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows), pushed to the backend on each rebind (with a swap).
     pub(crate) keymap: keymap::KeyMap,
-    pub(crate) rebind_rows: Vec<RebindViz>,
     // Live gamepad action -> button map (the source of truth for the gamepad
     // rebind rows), carried to the input poll via ControlsCommand on each rebind.
     pub(crate) gamepad_map: GamepadMap,
-    pub(crate) pad_rebind_rows: Vec<PadRebindViz>,
-    pub(crate) sliders: Vec<SliderViz>,
-    // Cycle rows' setting key -> value-label id, captured at init, so a change
-    // can relabel a row other than the one clicked.
-    pub(crate) cycle_value_labels: hashbrown::HashMap<SettingKey, AssetId>,
     // The world's authored graphics values a preset change or authoring edit
     // re-resolves from, and the live resolved values the rows display and cycle.
     pub(crate) authored: WorldSettings,
@@ -283,11 +248,7 @@ impl SettingsState {
     pub(crate) fn new() -> Self {
         Self {
             keymap: keymap::KeyMap::default(),
-            rebind_rows: Vec::new(),
             gamepad_map: GamepadMap::default(),
-            pad_rebind_rows: Vec::new(),
-            sliders: Vec::new(),
-            cycle_value_labels: hashbrown::HashMap::new(),
             authored: WorldSettings::default(),
             resolved: ResolvedSettings::default(),
             quality_preset: QualityPreset::Auto,
@@ -460,12 +421,8 @@ impl SettingsState {
         self.layers(user, ceiling).resolve_quality()
     }
 
-    // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
-    // out of the event queue so the borrow is released before the jump runs.
-    // The flow lives in the shared `ActiveSceneFlow` resource (the renderer
-    // ticks its fades later this same tick, so a jump's fade starts on this
-    // frame); the jump's fade / visibility effects are recorded through the
-    // same `SceneOp` recorder the fade tick uses, then queued as one op.
+    // Apply the scene jumps UiInputSystem sent last tick through the shared
+    // `ActiveSceneFlow`, recording their effects as one queued op.
     fn apply_scene_commands(&mut self, ctx: &mut PipelineContext<'_>, ops: &mut RenderOps) {
         let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
             Some(events) => events.read(&mut self.scene_cmd_cursor).cloned().collect(),
@@ -516,12 +473,8 @@ impl SettingsState {
         }
     }
 
-    // Publish the stats-HUD state for the systems that run after this one each
-    // tick. Done after the settings drain so a "Display performance stats"
-    // toggle this frame is reflected the same frame: the visibility
-    // (StatHudSystem reads HudPrefs) and the inert/grayed sub-rows
-    // (UiInputSystem reads DisabledSettingRows) stay in lockstep with the
-    // gray-out applied in the drain.
+    // Publish `HudPrefs` and `DisabledSettingRows` after the settings drain,
+    // so a stats toggle shows the same frame.
     fn publish_hud_state(&mut self, ctx: &mut PipelineContext<'_>) {
         // Both resources are pure functions of a few settings fields and persist
         // in the resource map once inserted, so republish only when the inputs

@@ -5,6 +5,7 @@
 use concinnity_cook::authoring::flow::Place;
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::WorldJsonlAsset;
+use concinnity_cook::ui::screen_children;
 
 // How many kinds a card names before the rest is left off. The line is one
 // clipped row of a card wide, so a third kind would not be read.
@@ -14,18 +15,29 @@ const KINDS: usize = 2;
 /// a scene built from an imported file holds the import rather than the props
 /// it expands into, and that is the whole of what such a scene contains.
 pub(super) fn held_by(assets: &[WorldJsonlAsset], place: &str) -> String {
-    phrase(&counts(assets, |asset| names(asset) == Some(place)))
+    phrase(&counts(&with_children(assets), |asset| {
+        names(asset) == Some(place)
+    }))
 }
 
 /// What the world holds outside its places: everything naming none of them and
 /// not being one. A world declaring nowhere to be holds all of it.
 pub(super) fn unplaced(assets: &[WorldJsonlAsset], places: &[Place]) -> String {
-    phrase(&counts(assets, |asset| {
+    phrase(&counts(&with_children(assets), |asset| {
         names(asset).is_none() && !places.iter().any(|place| place.id == asset.id)
     }))
 }
 
-// The place an entry sits in, the way `build_only::membership` spells it: a
+// The entries with each screen's children beside it, as the cook lifts them
+// out, so an element a screen holds counts like one naming the screen.
+fn with_children(assets: &[WorldJsonlAsset]) -> Vec<WorldJsonlAsset> {
+    assets
+        .iter()
+        .flat_map(|asset| core::iter::once(asset.clone()).chain(screen_children(asset)))
+        .collect()
+}
+
+// The place an entry sits in, the way the cook's membership stamps spell it: a
 // `scene` on scene-scoped content, a `screen` on an overlay element. A null or
 // absent one names nothing: the entry is bound to no place.
 fn names(asset: &WorldJsonlAsset) -> Option<&str> {
@@ -109,6 +121,20 @@ mod tests {
             asset(RegisteredType::HitRegion, "a", json!({"screen": "pause"})),
             asset(RegisteredType::HitRegion, "b", json!({"screen": "pause"})),
             asset(RegisteredType::TextLabel, "t", json!({"screen": "pause"})),
+            asset(RegisteredType::TextLabel, "u", json!({"screen": "other"})),
+        ];
+        assert_eq!(held_by(&world, "pause"), "2 HitRegion, 1 TextLabel");
+    }
+
+    // A screen holds its children as it holds the elements naming it.
+    #[test]
+    fn a_screen_holds_its_children() {
+        let world = [
+            asset(
+                RegisteredType::Screen,
+                "pause",
+                json!({"children": [{"HitRegion": {}}, {"HitRegion": {}}, {"TextLabel": {}}]}),
+            ),
             asset(RegisteredType::TextLabel, "u", json!({"screen": "other"})),
         ];
         assert_eq!(held_by(&world, "pause"), "2 HitRegion, 1 TextLabel");

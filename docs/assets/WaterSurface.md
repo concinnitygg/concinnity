@@ -64,7 +64,7 @@ keep their history, which holds distant waves still.
 - `density`: A float. The water's density, in kilograms per cubic meter, at least 1: how strongly it buoys what floats in it. Seawater by default; fresh water is 1000.
 - `depth_meters`: A float. How deep a rectangle's water is, in meters below its rest, at least 0: anything lower is out of the water, so a cave under a pond stays dry. Defaults to `10.0`.
 - `waves`: An array of [WaterWave](WaterWave.md) objects. Extra swell rolling over the wind's waves, up to 4. None by default, and none on a planet's sea.
-- `deep_color`: An array of 3 floats. Linear-space RGB reflectance of deep water's body, each channel in [0, 1]: the share of the light reaching the surface that a deep column scatters back out. Values outside [0, 1] are clamped. Defaults to `[0.02, 0.05, 0.15]`.
+- `deep_color`: An array of 3 floats. Linear-space RGB reflectance of deep water's body, each channel in [0, 1]: the share of the light reaching the surface that a deep column scatters back out. Values outside [0, 1] are clamped. Unset, it is clear open ocean's, which reads dark navy under the sky's reflection. Defaults to `[0.002, 0.008, 0.03]`.
 - `shallow_color`: An array of 3 floats. Linear-space RGB reflectance of shallow water's body near the shore, each channel in [0, 1]. The seabed seen through the shallows is filtered by it too. Values outside [0, 1] are clamped. Defaults to `[0.2, 0.5, 0.55]`.
 - `depth_falloff_meters`: A float. Depth over which the reflectance blends from shallow to deep, in meters. Defaults to `4.0`.
 - `foam_width_meters`: A float. Width of the shoreline foam band, in meters. Defaults to `0.3`.

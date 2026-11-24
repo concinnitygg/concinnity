@@ -57,7 +57,7 @@ pub(crate) fn compile_terrain_payload<'a>(
     name: &str,
     args: &serde_json::Value,
     texture: impl Fn(&str) -> Option<&'a serde_json::Value>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<Vec<u8>, CompileError> {
     let scalars = without_references(args);
     let terrain: Terrain = schema_args(RegisteredType::Terrain, name, Some(&scalars))?;
@@ -66,7 +66,7 @@ pub(crate) fn compile_terrain_payload<'a>(
         let args = texture(texture_name).ok_or_else(|| {
             CompileError::Invalid(format!("{field} names no Texture '{texture_name}'"))
         })?;
-        crate::compile::texture::texture_rgba8(args, assets_dir)
+        crate::compile::texture::texture_rgba8(args, root)
             .map_err(|e| e.context(format_args!("{field} Texture '{texture_name}'")))
     };
 

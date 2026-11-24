@@ -55,11 +55,8 @@ impl VkContext {
     }
 
     // Whether replacing pool `slot` must drain the device first: true when a
-    // descriptor that samples the slot may be referenced by pending command
-    // buffers AND cannot wait for the per-frame propagation. The bindless pool
-    // copies propagate per frame slot, so what remains are the single-copy
-    // sets of the decal and particle passes, and a world with nothing to
-    // GPU-drive, which draws nothing.
+    // single-copy set (decal, particle) that may be pending samples it, or the
+    // world GPU-drives nothing.
     fn streamed_slot_needs_drain(&self, slot: usize) -> bool {
         let bindless_active =
             self.cull.bindless_pipeline.is_some() && self.state.draw.record_count() > 0;
@@ -69,11 +66,8 @@ impl VkContext {
         self.decal_samples_slot(slot) || self.particle_samples_slot(slot)
     }
 
-    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
-    // right after frame slot `frame`'s fence wait: re-point this slot's
-    // bindless pool copy at any swapped slots (legal now -- the wait retired
-    // every command buffer that binds this copy), then free retires whose
-    // covering fence has signaled.
+    // After this slot's fence wait: re-point its bindless pool copy at swapped
+    // slots and free retires whose fence has signaled.
     pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
         self.stream.frame += 1;
         if !self.stream.pool_rewrites.is_empty() {
@@ -109,18 +103,10 @@ impl TextureUploads for VkContext {
         self.update_texture_slot(slot, &gray)
     }
 
-    // Replace albedo texture-pool `slot` with a freshly decoded texture.
-    //
-    // The streaming fast path never stalls the device: the upload is
-    // submitted without waiting (later submissions on the queue order after
-    // its final barrier, so any frame recorded from here on samples it
-    // safely), the per-frame bindless pool copies re-point one per frame as
-    // their fences retire, and the old image
-    // plus upload transients are parked on `stream.retires` until every
-    // consumer provably moved off them. When a pending-referenced single-copy
-    // set samples the slot (see `streamed_slot_needs_drain`) the swap instead
-    // drains the device and rewrites everything in place, matching the
-    // hot-reload paths below.
+    // Replace albedo pool `slot` with a fresh texture without stalling: submit the
+    // upload, re-point each frame's pool copy as its fence retires, and park the
+    // old image until nothing uses it. A pending single-copy set that samples the
+    // slot forces a drain-and-rewrite instead.
     fn update_texture_slot(
         &mut self,
         slot: TextureSlot,
@@ -143,11 +129,8 @@ impl TextureUploads for VkContext {
         if self.streamed_slot_needs_drain(slot) {
             self.wait_idle();
             let img = upload_texture_image(&ctx, image)?;
-            // Swap in the new image, then rewrite every descriptor that
-            // samples this slot BEFORE destroying the old view. The reverse
-            // order left a brief window where descriptor sets referenced an
-            // already-destroyed VkImageView, which validation layers and some
-            // drivers flag even though vkUpdateDescriptorSets is write-only.
+            // Rewrite every descriptor before destroying the old view, so no set ever names
+            // a destroyed view.
             let old = std::mem::replace(&mut self.scene.textures[slot], img);
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every per-frame pool copy, so any
@@ -170,17 +153,8 @@ impl TextureUploads for VkContext {
         Ok(())
     }
 
-    // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    // Driven by asset hot-reload (`cn run -f` only) when the file-backed
-    // `ColorLut` source is saved. `wait_idle` first guarantees no in-flight
-    // command buffer still references the old image. Builds the replacement
-    // via the same `upload_color_lut` the init path uses, rewrites every
-    // composite descriptor set's binding 2 to point at the new view, then
-    // drops the previous image; same write-then-destroy order as the
-    // texture-pool rewires above to keep validation layers happy. Mirrors
-    // `DxContext::update_color_lut` / `MtlContext::update_color_lut`. Reached
-    // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
-    // lib, live in the bin).
+    // Replace the color-grading LUT on hot reload: wait idle, upload, re-point every
+    // composite set's binding 2, then drop the old image.
     fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
@@ -206,22 +180,10 @@ impl TextureUploads for VkContext {
         Ok(())
     }
 
-    // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn run -f` only). Decodes the byte stream
-    // emitted by `gfx::build::environment_map::serialize`, then re-uploads
-    // the irradiance + prefilter cubes via the same `upload_environment_map`
-    // the init path uses. Every consumer that captured the old image views is
-    // re-pointed at the new ones: every global set (each frame's, the planar
-    // mirrors' and an in-flight probe capture's faces) and the raymarch view
-    // sets. `prefilter_mip_count` is refreshed on `self` so the next frame's
-    // `ViewUniforms` upload picks up the new mip count, and the in-flight probe
-    // capture's face views are rewritten with it. Unlike DirectX,
-    // which re-uploads into the same SRV heap slots so its consumers need no
-    // re-wire, every Vulkan `upload_environment_map` mints fresh `vk::ImageView`
-    // handles, so each descriptor set must be re-written. Mirrors
-    // `DxContext::update_environment_map`. Reached
-    // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
-    // lib, live in the bin).
+    // Swap the IBL cubes on hot reload and re-point every set that captured the old
+    // views (global, planar, probe capture faces, raymarch), and refresh
+    // `prefilter_mip_count`. Vulkan uploads mint new views, so every set is
+    // rewritten.
     fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;

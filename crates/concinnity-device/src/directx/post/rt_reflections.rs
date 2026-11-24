@@ -94,25 +94,12 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
     })
 }
 
-// Root signature
-//
-// One compute root signature both kernels share: the RtParams root CBV; the
-// TLAS, vertex, index and geometry table as root SRVs (raw or structured
-// buffers bound by GPU virtual address, which inline ray tracing supports for
-// the acceleration structure too); descriptor tables for the scene, the
-// G-buffer normal+depth, the roughness, the prefilter cube and the unbounded
-// bindless pool; root SRVs for the deformed skinned vertices and indices, for
-// skinned hits. The miss fallback's reflection probes follow: the cube array
-// table, the ProbeSet CBV, the records, and the main camera's cluster grid
-// binning them (its params CBV and per-cluster lists). The textured trace's
-// grass-covered hits shade from the canopy CBV and its view tables. Then the
-// output's UAV table, SSGI's pyramid table, and the ray list and arguments:
-// root UAVs the classify writes, root SRVs the trace reads, the waves' slope
-// array the trace shades a level shell from, and root UAVs for the rays it
-// lists for the sky's own pass with their arguments, then the hits' UAV table
-// both kernels record into for the denoiser. Five static samplers: the
-// screen sources', the prefilter cube's, the pool's, the probe cube array's and
-// the waves'.
+// One compute root signature for both kernels: RtParams; the TLAS, vertex,
+// index and geometry buffers as root SRVs; tables for the scene, G-buffer,
+// roughness, prefilter cube and bindless pool; skinned vertex and index SRVs;
+// the probe fallback (cube array, ProbeSet, records, cluster grid); the canopy
+// CBV and tables; the output UAV, SSGI pyramid, ray list and arguments, wave
+// slopes, the sky's rays, and the denoiser's hits. Five static samplers.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
     use concinnity_engine::render::shader::programs::abi::rt_reflections::dx as rt;
@@ -278,11 +265,8 @@ pub(in crate::directx) struct RtReflectionsResources {
     // Resolved authored tunables; turned into a per-frame `RtParams` push.
     pub(in crate::directx) settings: RtReflectionSettings,
 
-    // Reflection output (reflected radiance + composite weight at the trace
-    // resolution, which the reflection composite upsamples over the scene) and
-    // the ray list. The output owns its own slot rather than reusing the
-    // optional SSR resolve output, because RT can be authored with SSR resolve
-    // off.
+    // The reflection output at trace resolution and the ray list, in slots of
+    // their own since RT can run without the SSR resolve.
     targets: RtTargets,
     // The trace resolution: render resolution reduced by `settings.divisor`.
     extent: (u32, u32),
@@ -514,11 +498,8 @@ pub(in crate::directx) fn swap_rt_reflections_pipelines(
 // Encoder
 
 impl DxContext {
-    // Encode the RT-reflection resolve: reset the ray arguments, classify every
-    // output texel, trace the listed ones, then blend the output over the scene
-    // through the reflection composite. No-op when any required resource is
-    // missing (the graph only schedules this pass when RT is live, so the guards
-    // are defensive).
+    // Encode the RT reflection resolve: classify, trace the listed texels, and
+    // blend through the reflection composite.
     pub(in crate::directx) fn encode_rt_reflections(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -699,10 +680,8 @@ impl DxContext {
             // frame's pool table is live.
             unsafe { cmd.set_compute_srv_table(9, pool) };
         }
-        // Skinned-geometry root SRVs: the deformed (posed) vertex buffer +
-        // the skinned index buffer the trace fetches a skinned hit from.
-        // Both return a valid 1-element dummy GVA when there is no skinned
-        // geometry, so the binding is always live.
+        // Skinned vertex and index SRVs, valid 1-element dummies without skinned
+        // geometry.
         // SAFETY: the list is recording, and the deformed vertex GVA is always a live buffer.
         unsafe { cmd.SetComputeRootShaderResourceView(10, accel.deformed_verts_gva()) };
         // SAFETY: the list is recording, and the skinned index GVA is always a live buffer.

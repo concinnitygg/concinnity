@@ -1,9 +1,7 @@
-// Pins what the settings chain hands the backend for a matrix of inputs: every
-// preset (Auto over each GPU tier), worlds authored above and below every
-// ceiling, and the user's overrides on and off. Each case folds the resolved
-// settings, what the backend derives from them, and a preset change's
-// re-resolved quality group into one digest, so a change to any value the
-// backend receives fails here by name, with the case's text to diff.
+// Pins what the settings chain hands the backend across every preset, worlds
+// above and below every ceiling, and user overrides on and off. Each case
+// digests the resolved settings, the backend's derivations and a preset
+// change's re-resolution, so any change fails here by name.
 
 use crate::components::BackgroundOverrides;
 use crate::components::{PlanetDetailOverrides, RelevanceOverrides};
@@ -626,11 +624,8 @@ fn the_settings_chain_resolves_every_case_as_pinned() {
     );
 }
 
-// The values a `bare` case now resolves for the two fields absence used to
-// move, written out from the rules: the render scale is the more aggressive of
-// the `quality` default and the tier's minimum unless the user picked one or
-// TAA takes the native scale at a preset that renders natively, and two-pass
-// occlusion takes its `true` default unless the user set it.
+// What a `bare` case resolves for render scale and two-pass occlusion,
+// written out from the rules.
 #[test]
 fn a_bare_world_resolves_to_the_section_defaults() {
     let third = 2.0 / 3.0;

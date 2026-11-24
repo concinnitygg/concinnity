@@ -42,17 +42,8 @@ pub(crate) trait CompileProgram: Program {
 
 impl<P: Program> CompileProgram for P {}
 
-// The build script's precompiled DXIL, keyed by each variant's artifact name.
-// Every name misses on a host that had no shader compiler at build time, and
-// the renderer compiles instead -- which is the only path that then needs one
-// at runtime.
-//
-// The key is the artifact name rather than the entry point because one entry
-// compiles into several programs: `fog_fragment` alone yields an MSAA and a
-// non-MSAA DXIL from the same file, and the ray-traced glass entry yields four.
-// Keying on anything the variant defines do not reach would hand one variant's
-// bytes to another -- a wrong render, not a failed one. The program tables'
-// soundness check in `core::render` locks it.
+// The build script's precompiled DXIL, keyed by artifact name since one entry
+// point compiles into several variants. A miss compiles at runtime.
 include!(concat!(env!("OUT_DIR"), "/engine_dxil.rs"));
 
 #[cfg(test)]

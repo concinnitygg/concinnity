@@ -1,101 +1,87 @@
-//! The Shader source panel's layout half: one of a Shader's `.hlsl` files in a
-//! code text area (see `source.rs` and `diagnostics.rs` for the
-//! data, `hook/edit/shader_source.rs` for the actions). The title names the
-//! Shader and the file's stage, the header carries the path, an unsaved-edits
-//! mark, the reference toggle and Save, a status line reports the last compile,
-//! and the gutter marks the lines its diagnostics name. The reference column
-//! (`reference_panel.rs`) sits at the right, beside the text.
+//! The Shader source panel: one of a Shader's `.hlsl` files in a code text area
+//! (see `source.rs` and `diagnostics.rs` for the data,
+//! `hook/edit/shader_source.rs` for the actions), its editor lent by the hook
+//! each frame. The title names the Shader and the file's stage, the header
+//! carries the path, an unsaved-edits mark, the reference toggle and Save, a
+//! status line reports the last compile and jumps to it when pressed, and the
+//! gutter marks the lines its diagnostics name. The reference column sits at
+//! the right, beside the text.
 
-use concinnity_engine::components::TextAlign;
+use concinnity_engine::components::{
+    Binding, Button, LayoutChild, LayoutDirection, LayoutSize, LineMark, List, TextAlign, TextArea,
+    TextLanguage, UiEvent, UiItem, UiState, UiValue, WidgetStyle,
+};
 use concinnity_engine::ecs::World;
+use concinnity_engine::presentation::text_edit::TextEditor;
+use concinnity_engine::presentation::text_edit::highlight::Token;
 
 use super::super::registry::PanelKey;
-use super::diagnostics::{Status, Tone};
+use super::diagnostics::Tone;
 use super::list_panel::tone_color;
-use super::reference_panel::{self as reference, COLUMN_W, RefView};
-use crate::editor::hud_ids::{hud_ids, panel_base};
-use crate::editor::text_area::TextArea;
-use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
+use super::reference::RefRow;
 use crate::editor::text_area::markers::{GutterMarker, Severity};
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
-
-// The chrome, then the text area and the reference column over it.
-hud_ids! {
-    base: panel_base(PanelKey::ShaderSource);
-    sprites: [
-        pub(crate) PANEL_BG,
-        CLOSE_BG,
-        SAVE_BG,
-        REF_BG,
-        ..AREA.sprite_ids(),
-        ..reference::ids().sprites.iter().copied(),
-    ];
-    labels: [
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        SAVE_LABEL,
-        PATH_LABEL,
-        STATUS_LABEL,
-        DIRTY_LABEL,
-        REF_LABEL,
-        ..reference::ids().labels.iter().copied(),
-    ];
-    code_labels: [
-        ..AREA.code_label_ids(),
-        ..reference::ids().code_labels.iter().copied(),
-    ];
-    blocks: [AREA_BASE: TextAreaIds::SPAN, pub(super) REFERENCE_BASE: reference::IDS_SPAN];
-}
-
-pub(crate) const AREA: TextAreaIds = TextAreaIds::new(AREA_BASE);
+use crate::editor::ui::build::{emit, fill};
+use crate::editor::ui::{BuiltPanel, PanelSpec, ROW_H, UiBuilder, panel_height, state};
 
 // The default (and minimum) width; the user can widen the panel past this.
 const SOURCE_W: f32 = 660.0;
-const PAD: f32 = 10.0;
+// The reference column's width.
+pub(crate) const COLUMN_W: f32 = 250.0;
 const HEADER_H: f32 = 32.0;
-// Two lines: a compiler message quoting a path rarely fits one.
-const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
 const BTN_W: f32 = 70.0;
 const REF_BTN_W: f32 = 90.0;
 const DIRTY_W: f32 = 70.0;
-const DEFAULT_ROWS: usize = 24;
-const CHROME_H: f32 = widget::TITLE_H + HEADER_H + STATUS_H;
+// The text area's height at the default panel size.
+const AREA_H: f32 = 520.0;
+const REF_ROW_H: f32 = 22.0;
 
-const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const PATH_COLOR: [f32; 3] = [0.62, 0.66, 0.76];
+const HEADING_COLOR: [f32; 3] = [0.58, 0.66, 0.80];
 
-// The per-frame view the hook assembles.
-pub(crate) struct SourceView<'a> {
-    // "water fragment".
-    pub title: &'a str,
-    pub path: &'a str,
-    pub area: &'a TextArea,
-    // Whether the text area holds the keyboard this frame.
-    pub focus: bool,
-    pub status: Option<&'a Status>,
-    pub markers: &'a [GutterMarker],
-    pub mouse: [f32; 2],
-    // The reference column, while it is shown.
-    pub reference: Option<RefView<'a>>,
-}
+// The state the panel shows, and the events its controls send.
+const TITLE: &str = "editor.source.title";
+const PATH: &str = "editor.source.path";
+const DIRTY: &str = "editor.source.dirty";
+const STATUS: &str = "editor.source.status";
+const REF_OPEN: &str = "editor.source.ref_open";
+const REF_ROWS: &str = "editor.source.ref_rows";
+const REF_SHOWN: &str = "editor.source.ref_shown";
+const SAVE: &str = "editor.source.save";
+const JUMP: &str = "editor.source.jump";
+const TOGGLE_REF: &str = "editor.source.toggle_ref";
+const REF_PICK: &str = "editor.source.ref_pick";
 
-// A resolved source-panel click.
+// The panel's slots.
+const AREA_SLOT: usize = 0;
+const STATUS_SLOT: usize = 1;
+const REF_SLOT: usize = 2;
+
+// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceAction {
-    // The press landed on the text area; the hook hands it to the area.
-    Text,
     // Write the file; the hot-reload watcher recompiles it.
     Save,
     // The status line: jump to the error it reports.
     Status,
     // Show or hide the reference column.
     ToggleReference,
-    // A row of the reference column, counted from its first shown row.
+    // Row `i` of the reference column.
     Reference(usize),
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
+}
+
+// The action a source-panel event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<SourceAction> {
+    Some(match event.name.as_str() {
+        SAVE => SourceAction::Save,
+        JUMP => SourceAction::Status,
+        TOGGLE_REF => SourceAction::ToggleReference,
+        REF_PICK => match event.value {
+            Some(UiValue::Int(i)) => SourceAction::Reference(usize::try_from(i).ok()?),
+            _ => return None,
+        },
+        _ => return None,
+    })
 }
 
 // Where the panel sits until the user drags it: left of center, below the
@@ -109,443 +95,342 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
 
 // The room the reference column takes from the text, when shown.
 fn reference_w(reference: bool) -> f32 {
-    if reference { COLUMN_W + PAD } else { 0.0 }
+    if reference { COLUMN_W + 4.0 } else { 0.0 }
 }
 
 pub(crate) fn size(reference: bool) -> [f32; 2] {
     [
         SOURCE_W + reference_w(reference),
-        CHROME_H + layout::height_for_rows(DEFAULT_ROWS, Metrics::code().line_h) + PAD,
+        panel_height(HEADER_H + ROW_H + AREA_H),
     ]
 }
 
-// The tallest the panel resizes to: the text area's whole row pool shown.
-pub(crate) fn max_size() -> [f32; 2] {
-    let rows = layout::height_for_rows(layout::ROW_POOL, Metrics::code().line_h);
-    [f32::INFINITY, CHROME_H + rows + PAD]
-}
-
-fn save_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - BTN_W,
-        o[1] + widget::TITLE_H + 4.0,
-        BTN_W,
-        HEADER_H - 8.0,
-    ]
-}
-
-fn reference_button_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    let save = save_rect(o, w);
-    [save[0] - PAD - REF_BTN_W, save[1], REF_BTN_W, save[3]]
-}
-
-fn status_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + PAD,
-        o[1] + widget::TITLE_H + HEADER_H + 1.0,
-        (w - 2.0 * PAD).max(0.0),
-        STATUS_H - 4.0,
-    ]
-}
-
-pub(crate) fn area_rect(o: [f32; 2], s: [f32; 2], reference: bool) -> [f32; 4] {
-    let top = o[1] + CHROME_H;
-    [
-        o[0] + PAD,
-        top,
-        (s[0] - 2.0 * PAD - reference_w(reference)).max(0.0),
-        (o[1] + s[1] - PAD - top).max(0.0),
-    ]
-}
-
-// The reference column: the text's height, at the panel's right.
-pub(crate) fn reference_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    let text = area_rect(o, s, true);
-    [o[0] + s[0] - PAD - COLUMN_W, text[1], COLUMN_W, text[3]]
-}
-
-pub(crate) fn area_geometry(
-    o: [f32; 2],
-    s: [f32; 2],
-    reference: bool,
-    area: &TextArea,
-    m: Metrics,
-) -> Geometry {
-    layout::geometry(area_rect(o, s, reference), m, area.line_count())
-}
-
-pub(crate) fn cursor_over_area(
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-    reference: bool,
-) -> bool {
-    point_in(mx, my, area_rect(o, s, reference))
-}
-
-pub(crate) fn cursor_over_reference(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    point_in(mx, my, reference_rect(o, s))
-}
-
-// Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`,
-// with the reference column shown or not. `None` means the click missed the
-// panel.
-pub(crate) fn hit_test(
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-    reference: bool,
-) -> Option<SourceAction> {
-    if point_in(mx, my, save_rect(o, s[0])) {
-        return Some(SourceAction::Save);
-    }
-    if point_in(mx, my, reference_button_rect(o, s[0])) {
-        return Some(SourceAction::ToggleReference);
-    }
-    if point_in(mx, my, status_rect(o, s[0])) {
-        return Some(SourceAction::Status);
-    }
-    if point_in(mx, my, area_rect(o, s, reference)) {
-        return Some(SourceAction::Text);
-    }
-    if reference && let Some(slot) = reference::slot_at(reference_rect(o, s), mx, my) {
-        return Some(SourceAction::Reference(slot));
-    }
-    point_in(mx, my, widget::outer_rect(o, s)).then_some(SourceAction::Consume)
-}
-
-// The status line's text and tone: the gutter marker or reference name under
-// the cursor while one is hovered, else the panel's own status.
-fn status_line(view: &SourceView<'_>, g: &Geometry, reference: [f32; 4]) -> Option<Status> {
-    let area_view = TextAreaView {
-        area: view.area,
-        focused: view.focus,
-        markers: view.markers,
-        mouse: view.mouse,
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let path = ui.bound_label(PATH, PATH_COLOR, TextAlign::Left)?;
+    let dirty = ui.bound_label(DIRTY, theme::LOG_WARN, TextAlign::Right)?;
+    let dirty = LayoutChild {
+        width: LayoutSize::Fixed(DIRTY_W),
+        ..dirty
     };
-    match layout::hovered_marker(&area_view, g) {
-        Some(m) => {
-            let tone = match m.severity {
-                Severity::Error => Tone::Error,
-                Severity::Warning => Tone::Warning,
-            };
-            Some(Status::new(
-                format!("line {}: {}", m.line + 1, m.message),
-                tone,
-            ))
-        }
-        None => view
-            .reference
-            .as_ref()
-            .and_then(|r| reference::hovered(r, reference))
-            .and_then(super::reference::RefRow::describe)
-            .map(|text| Status::new(text, Tone::Info))
-            .or_else(|| view.status.cloned()),
+    let reference = ui.button_with(
+        Button {
+            label: "Reference".to_string(),
+            active: Some(Binding::State(REF_OPEN.to_string())),
+            action: Some(emit(TOGGLE_REF, None)),
+            ..Default::default()
+        },
+        [REF_BTN_W, HEADER_H - 8.0],
+    )?;
+    let save = ui.button("Save", SAVE, None, [BTN_W, HEADER_H - 8.0])?;
+    let header = ui.row(vec![path, dirty, reference, save], HEADER_H)?;
+    let status = ui.button_with(
+        Button {
+            text_binding: Some(Binding::State(STATUS.to_string())),
+            action: Some(emit(JUMP, None)),
+            style: WidgetStyle {
+                background: [0.0; 4],
+                ..ui.style()
+            },
+            ..Default::default()
+        },
+        [SOURCE_W - 16.0, ROW_H],
+    )?;
+    let status_id = status.item?.id();
+    let area = ui.text_area(TextArea {
+        language: TextLanguage::Hlsl,
+        on_save: SAVE.to_string(),
+        ..Default::default()
+    })?;
+    let area_id = area.item?.id();
+    let column = ui.list(List {
+        items: REF_ROWS.to_string(),
+        row_height: REF_ROW_H,
+        indent: 12.0,
+        on_select: REF_PICK.to_string(),
+        on_activate: REF_PICK.to_string(),
+        on_expand: REF_PICK.to_string(),
+        ..Default::default()
+    })?;
+    let column_id = column.item?.id();
+    let column = LayoutChild {
+        width: LayoutSize::Fixed(COLUMN_W),
+        ..column
+    };
+    let body = ui.stack(LayoutDirection::Row, vec![area, column], 4.0, 0.0)?;
+    let spec = PanelSpec {
+        key: PanelKey::ShaderSource,
+        title: "Shader source",
+        title_state: Some(TITLE),
+        size: size(true),
+        min_size: Some(size(false)),
+    };
+    let mut panel = ui.panel(&spec, vec![header, status, fill(body)])?;
+    panel.slots = vec![area_id, status_id, column_id];
+    Some(panel)
+}
+
+// What the panel shows this frame.
+pub(crate) struct SourceView<'a> {
+    // "water fragment", in its two words.
+    pub title: [&'a str; 2],
+    pub path: &'a str,
+    pub dirty: bool,
+    // Whether the text area holds the keyboard.
+    pub focus: bool,
+    // The status line: the hovered reference name's signature and summary,
+    // else the file's own status and its tone.
+    pub hover: Option<[&'a str; 2]>,
+    pub status: Option<(&'a str, Tone)>,
+    pub markers: &'a [GutterMarker],
+    // While the reference column is shown, a key that changes whenever its
+    // rows do.
+    pub reference: Option<i32>,
+}
+
+fn mark_color(severity: Severity) -> [f32; 3] {
+    match severity {
+        Severity::Error => theme::LOG_ERROR,
+        Severity::Warning => theme::LOG_WARN,
     }
 }
 
-// Position + show the panel (`Some(view)`) at effective size `s`, or blank every
-// element (`None`).
-pub(crate) fn place(
+// A reference row as a list item: a group's heading, folding its names under
+// it, or a name in the code's color.
+fn ref_item(row: &RefRow<'_>) -> UiItem {
+    match row {
+        RefRow::Heading { folded, .. } => UiItem {
+            expandable: true,
+            expanded: !folded,
+            color: Some(HEADING_COLOR),
+            ..UiItem::new(&row.text())
+        },
+        RefRow::Name(_) => UiItem {
+            depth: 1,
+            color: Some(Token::Engine.color()),
+            ..UiItem::new(&row.text())
+        },
+    }
+}
+
+// Errors first, so a line marked twice shows its most severe.
+fn marks(markers: &[GutterMarker]) -> impl Iterator<Item = LineMark> + '_ {
+    [Severity::Error, Severity::Warning]
+        .into_iter()
+        .flat_map(move |severity| markers.iter().filter(move |m| m.severity == severity))
+        .map(|m| LineMark {
+            line: m.line,
+            color: mark_color(m.severity),
+        })
+}
+
+// Show the file's title, path, status, and marks, and the reference column's
+// rows, read from `rows` only when their key changed.
+pub(crate) fn sync<'r>(
+    view: &SourceView<'_>,
+    rows: impl FnOnce() -> Vec<RefRow<'r>>,
     world: &mut World,
-    view: Option<&SourceView<'_>>,
-    o: [f32; 2],
-    s: [f32; 2],
-    m: Metrics,
+    built: &BuiltPanel,
 ) {
-    let Some(view) = view else {
-        ids().hide(world);
-        return;
+    let [a, b] = view.title;
+    state::set_text(world, TITLE, format_args!("{a} {b}"));
+    state::set_text(world, PATH, format_args!("{}", view.path));
+    let dirty = if view.dirty { "unsaved" } else { "" };
+    state::set_text(world, DIRTY, format_args!("{dirty}"));
+    let tone = match (view.hover, view.status) {
+        (Some([signature, summary]), _) => {
+            state::set_text(world, STATUS, format_args!("{signature}: {summary}"));
+            Some(Tone::Info)
+        }
+        (None, Some((text, tone))) => {
+            state::set_text(world, STATUS, format_args!("{text}"));
+            Some(tone)
+        }
+        (None, None) => {
+            state::set_text(world, STATUS, format_args!(""));
+            None
+        }
     };
-    let w = s[0];
-    let dirty = view.area.is_dirty();
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
-    let title = widget::title_rect(o, w);
-    let heading = if dirty {
-        format!("{} *", view.title)
-    } else {
-        view.title.to_string()
-    };
-    widget::place_heading(world, TITLE_LABEL, title, &heading);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-    place_header(world, view, o, w, dirty);
-
-    let shows_reference = view.reference.is_some();
-    let g = area_geometry(o, s, shows_reference, view.area, m);
-    let reference_at = reference_rect(o, s);
-    let status = status_line(view, &g, reference_at);
-    let (text, tone) = status
-        .as_ref()
-        .map_or(("", Tone::Info), |s| (s.text.as_str(), s.tone));
-    widget::place_message(
-        world,
-        STATUS_LABEL,
-        status_rect(o, w),
-        text,
-        tone_color(tone),
-        status.is_some(),
-    );
-    let area_view = TextAreaView {
-        area: view.area,
-        focused: view.focus,
-        markers: view.markers,
-        mouse: view.mouse,
-    };
-    layout::place(world, AREA, Some(&area_view), &g);
-    reference::place(world, view.reference.as_ref(), reference_at);
+    let shown = world
+        .resource::<UiState>()
+        .and_then(|s| s.get(REF_SHOWN).cloned());
+    let refill = view
+        .reference
+        .filter(|&key| shown != Some(UiValue::Int(key)));
+    let items = refill.map(|_| rows().iter().map(ref_item).collect::<Vec<_>>());
+    state::with_state(world, |s| {
+        s.set(REF_OPEN, UiValue::Bool(view.reference.is_some()));
+        if let (Some(key), Some(items)) = (refill, items) {
+            s.set_list(REF_ROWS, items);
+            s.set(REF_SHOWN, UiValue::Int(key));
+        }
+    });
+    let slot = |i: usize| built.slots.get(i).copied();
+    if let Some(area) = slot(AREA_SLOT).and_then(|id| world.get_mut_by_id::<TextArea>(id)) {
+        area.focused = view.focus;
+        if !area.marks.iter().copied().eq(marks(view.markers)) {
+            area.marks.clear();
+            area.marks.extend(marks(view.markers));
+        }
+    }
+    if let Some(b) = slot(STATUS_SLOT).and_then(|id| world.get_mut_by_id::<Button>(id)) {
+        b.style.text = tone.map_or(theme::LABEL_DIM, tone_color);
+    }
+    if let Some(list) = slot(REF_SLOT).and_then(|id| world.get_mut_by_id::<List>(id)) {
+        list.visible = view.reference.is_some();
+    }
 }
 
-// The path on the left, then the unsaved-edits mark and Save on the right.
-fn place_header(world: &mut World, view: &SourceView<'_>, o: [f32; 2], w: f32, dirty: bool) {
-    let y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;
-    let save = save_rect(o, w);
-    let toggle = reference_button_rect(o, w);
-    let path_w = (toggle[0] - DIRTY_W - PAD - (o[0] + PAD)).max(0.0);
-    widget::place_message(
-        world,
-        PATH_LABEL,
-        [o[0] + PAD, y, path_w, widget::LINE_H],
-        view.path,
-        PATH_COLOR,
-        true,
-    );
-    if let Some(l) = widget::label_mut(world, DIRTY_LABEL) {
-        l.x = toggle[0] - PAD;
-        l.y = y;
-        l.align = TextAlign::Right;
-        l.color = theme::LOG_WARN;
-        l.visible = dirty;
-        l.content = "unsaved".to_string();
-    }
-    let open = view.reference.is_some();
-    let toggle_tint = match (open, point_in(view.mouse[0], view.mouse[1], toggle)) {
-        (true, _) => theme::ACCENT_TINT,
-        (false, true) => theme::HOVER_TINT,
-        (false, false) => theme::BUTTON_TINT,
+// The reference row under the pointer, if any.
+pub(crate) fn reference_hovered(world: &World, built: &BuiltPanel) -> Option<usize> {
+    built
+        .slots
+        .get(REF_SLOT)
+        .and_then(|&id| world.get_by_id::<List>(id))
+        .filter(|l| l.visible)
+        .and_then(|l| l.hovered)
+}
+
+// Whether the text area holds the keyboard, as the widget last showed it.
+pub(crate) fn area_focused(world: &World, built: &BuiltPanel) -> bool {
+    built
+        .slots
+        .get(AREA_SLOT)
+        .and_then(|&id| world.get_by_id::<TextArea>(id))
+        .is_some_and(|a| a.focused)
+}
+
+// Swap `editor` with the text area's: lending it to the area, or taking it
+// back.
+pub(crate) fn swap_editor(editor: &mut TextEditor, world: &mut World, built: &BuiltPanel) -> bool {
+    let Some(area) = built
+        .slots
+        .get(AREA_SLOT)
+        .and_then(|&id| world.get_mut_by_id::<TextArea>(id))
+    else {
+        return false;
     };
-    place_rounded(
-        world,
-        REF_BG,
-        toggle,
-        toggle_tint,
-        theme::CONTROL_RADIUS,
-        true,
-    );
-    widget::place_center_label(
-        world,
-        REF_LABEL,
-        [
-            toggle[0] + toggle[2] * 0.5,
-            toggle[1] + toggle[3] * 0.5 - theme::TEXT_HALF,
-        ],
-        "Reference",
-        [1.0, 1.0, 1.0],
-        true,
-    );
-    let hover = point_in(view.mouse[0], view.mouse[1], save);
-    let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
-    place_rounded(world, SAVE_BG, save, tint, theme::CONTROL_RADIUS, true);
-    widget::place_center_label(
-        world,
-        SAVE_LABEL,
-        [
-            save[0] + save[2] * 0.5,
-            save[1] + save[3] * 0.5 - theme::TEXT_HALF,
-        ],
-        "Save",
-        [1.0, 1.0, 1.0],
-        true,
-    );
+    std::mem::swap(editor, &mut *area.editor);
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::panels::shader::reference::{RefRow, Reference};
-    use crate::test_support::label;
+    use crate::editor::panels::shader::reference::Reference;
+    use concinnity_engine::ecs::asset_id::AssetId;
     use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 
-    const M: Metrics = Metrics {
-        line_h: 20.0,
-        advance: 8.0,
-        text_px: 14.0,
-        label_scale: 0.7,
-    };
-
-    fn injected_world() -> World {
-        ids().test_world()
+    fn built(world: &mut World) -> BuiltPanel {
+        let mut ui = UiBuilder::new(world, AssetId(9), None);
+        build(&mut ui).unwrap()
     }
 
-    fn view<'a>(
-        area: &'a TextArea,
-        status: Option<&'a Status>,
-        markers: &'a [GutterMarker],
-    ) -> SourceView<'a> {
+    fn view(reference: Option<i32>) -> SourceView<'static> {
         SourceView {
-            title: "water fragment",
-            path: "shaders/water.hlsl",
-            area,
+            title: ["water", "fragment"],
+            path: "water.hlsl",
+            dirty: true,
             focus: true,
-            status,
-            markers,
-            mouse: [0.0, 0.0],
-            reference: None,
+            hover: None,
+            status: Some(("2 errors", Tone::Error)),
+            markers: &[],
+            reference,
         }
     }
 
     #[test]
-    fn hit_test_resolves_save_status_and_text() {
-        let o = [40.0, 40.0];
-        let s = size(false);
-        let at = |r: [f32; 4]| (r[0] + 5.0, r[1] + 5.0);
-        let (x, y) = at(save_rect(o, s[0]));
-        assert_eq!(hit_test(x, y, o, s, false), Some(SourceAction::Save));
-        let (x, y) = at(status_rect(o, s[0]));
-        assert_eq!(hit_test(x, y, o, s, false), Some(SourceAction::Status));
-        let (x, y) = at(area_rect(o, s, false));
-        assert_eq!(hit_test(x, y, o, s, false), Some(SourceAction::Text));
-        assert_eq!(
-            hit_test(o[0] + 2.0, o[1] + widget::TITLE_H + 4.0, o, s, false),
-            Some(SourceAction::Consume)
+    fn the_reference_column_lists_its_groups_and_names_once_per_key() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let reference = Reference::default();
+        sync(
+            &view(Some(1)),
+            || reference.rows(ENTRIES),
+            &mut world,
+            &panel,
         );
-        assert_eq!(hit_test(5000.0, 5000.0, o, s, false), None);
+        let s = world.resource::<UiState>().unwrap();
+        let items = s.list(REF_ROWS);
+        assert_eq!(items.len(), reference.rows(ENTRIES).len());
+        assert!(items[0].expandable && items[0].expanded);
+        assert_eq!(s.get(DIRTY), Some(&UiValue::Text("unsaved".into())));
+        assert_eq!(s.get(TITLE), Some(&UiValue::Text("water fragment".into())));
+        let status = world.get_by_id::<Button>(panel.slots[STATUS_SLOT]).unwrap();
+        assert_eq!(status.style.text, theme::LOG_ERROR);
+        let mut read = false;
+        sync(
+            &view(Some(1)),
+            || {
+                read = true;
+                Vec::new()
+            },
+            &mut world,
+            &panel,
+        );
+        assert!(!read, "an unchanged key is not read again");
     }
 
     #[test]
-    fn unsaved_edits_mark_the_title_and_header() {
-        let mut world = injected_world();
-        let mut area = TextArea::from_text("float4 shade() {}");
-        place(
-            &mut world,
-            Some(&view(&area, None, &[])),
-            [20.0, 20.0],
-            size(false),
-            M,
+    fn a_hidden_reference_hides_its_column() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        sync(&view(None), Vec::new, &mut world, &panel);
+        assert!(
+            !world
+                .get_by_id::<List>(panel.slots[REF_SLOT])
+                .unwrap()
+                .visible
         );
-        assert_eq!(label(&world, TITLE_LABEL).content, "water fragment");
-        assert!(!label(&world, DIRTY_LABEL).visible);
-        area.type_char('x');
-        place(
-            &mut world,
-            Some(&view(&area, None, &[])),
-            [20.0, 20.0],
-            size(false),
-            M,
-        );
-        assert_eq!(label(&world, TITLE_LABEL).content, "water fragment *");
-        assert!(label(&world, DIRTY_LABEL).visible);
     }
 
     #[test]
-    fn the_status_line_takes_its_tone() {
-        let mut world = injected_world();
-        let area = TextArea::from_text("a");
-        let status = Status::new("line 1: bad", Tone::Error);
-        place(
-            &mut world,
-            Some(&view(&area, Some(&status), &[])),
-            [20.0, 20.0],
-            size(false),
-            M,
-        );
-        let l = label(&world, STATUS_LABEL);
-        assert!(l.visible && l.content == "line 1: bad");
-        assert_eq!(l.color, theme::LOG_ERROR);
+    fn a_line_marked_twice_shows_its_error_and_a_new_severity_shows() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let marker = |severity| GutterMarker {
+            line: 2,
+            column: 0,
+            severity,
+            message: String::new(),
+        };
+        let both = [marker(Severity::Warning), marker(Severity::Error)];
+        let v = SourceView {
+            markers: &both,
+            ..view(None)
+        };
+        sync(&v, Vec::new, &mut world, &panel);
+        let area = world.get_by_id::<TextArea>(panel.slots[AREA_SLOT]).unwrap();
+        assert_eq!(area.marks[0].color, theme::LOG_ERROR);
+        let warning = [marker(Severity::Warning)];
+        let v = SourceView {
+            markers: &warning,
+            ..view(None)
+        };
+        sync(&v, Vec::new, &mut world, &panel);
+        let area = world.get_by_id::<TextArea>(panel.slots[AREA_SLOT]).unwrap();
+        assert_eq!(area.marks.len(), 1);
+        assert_eq!(area.marks[0].color, theme::LOG_WARN);
     }
 
-    // Hovering a marker in the gutter reads it out on the status line.
     #[test]
-    fn a_hovered_marker_reads_out_on_the_status_line() {
-        let mut world = injected_world();
-        let area = TextArea::from_text("a\nb\nc");
+    fn a_steady_frame_allocates_nothing() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let reference = Reference::default();
         let markers = [GutterMarker {
             line: 1,
             column: 0,
-            severity: Severity::Warning,
-            message: "unused".to_string(),
+            severity: Severity::Error,
+            message: String::new(),
         }];
-        let o = [20.0, 20.0];
-        let r = area_rect(o, size(false), false);
-        let mut v = view(&area, None, &markers);
-        v.mouse = [r[0] + 2.0, r[1] + M.line_h * 1.5];
-        place(&mut world, Some(&v), o, size(false), M);
-        let l = label(&world, STATUS_LABEL);
-        assert_eq!(l.content, "line 2: unused");
-        assert_eq!(l.color, theme::LOG_WARN);
-    }
-
-    fn reference_rows() -> Vec<RefRow<'static>> {
-        Reference::default().rows(ENTRIES)
-    }
-
-    #[test]
-    fn the_reference_column_widens_the_panel_beside_the_text() {
-        let o = [20.0, 20.0];
-        let s = size(true);
-        assert_eq!(s[0], size(false)[0] + COLUMN_W + PAD);
-        let text = area_rect(o, s, true);
-        let column = reference_rect(o, s);
-        assert_eq!(
-            text[2],
-            area_rect(o, size(false), false)[2],
-            "the text keeps its width"
-        );
-        assert!(
-            text[0] + text[2] <= column[0],
-            "the column sits right of the text"
-        );
-        assert_eq!((column[1], column[3]), (text[1], text[3]));
-    }
-
-    #[test]
-    fn hit_test_resolves_the_toggle_and_reference_rows() {
-        let o = [40.0, 40.0];
-        let s = size(true);
-        let t = reference_button_rect(o, s[0]);
-        assert_eq!(
-            hit_test(t[0] + 2.0, t[1] + 2.0, o, s, true),
-            Some(SourceAction::ToggleReference)
-        );
-        let c = reference_rect(o, s);
-        assert_eq!(
-            hit_test(c[0] + 5.0, c[1] + 30.0, o, s, true),
-            Some(SourceAction::Reference(1))
-        );
-        assert_eq!(
-            hit_test(c[0] + 5.0, c[1] + 30.0, o, s, false),
-            Some(SourceAction::Text),
-            "a hidden column's room is the text's"
-        );
-    }
-
-    #[test]
-    fn a_hovered_reference_name_reads_out_on_the_status_line() {
-        let mut world = injected_world();
-        let area = TextArea::from_text("a");
-        let rows = reference_rows();
-        let o = [20.0, 20.0];
-        let s = size(true);
-        let c = reference_rect(o, s);
-        let status = Status::new("compiled", Tone::Info);
-        let mut v = view(&area, Some(&status), &[]);
-        let mouse = [c[0] + 5.0, c[1] + 30.0];
-        v.mouse = mouse;
-        v.reference = Some(RefView {
-            rows: &rows,
-            scroll: 0,
-            mouse,
+        let v = SourceView {
+            markers: &markers,
+            ..view(Some(3))
+        };
+        sync(&v, || reference.rows(ENTRIES), &mut world, &panel);
+        let min = concinnity_testing::quietest_allocs(0, || {
+            sync(&v, || reference.rows(ENTRIES), &mut world, &panel);
         });
-        place(&mut world, Some(&v), o, s, M);
-        let l = label(&world, STATUS_LABEL);
-        assert!(
-            l.content
-                .starts_with("float4 shade_surface(VertexOut v, GpuObjectData od): "),
-            "{}",
-            l.content
-        );
-        assert!(label(&world, REF_LABEL).visible);
+        assert_eq!(min, 0, "a steady sync allocated {min} times");
     }
 }

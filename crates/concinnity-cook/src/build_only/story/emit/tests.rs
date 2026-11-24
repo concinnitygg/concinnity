@@ -58,7 +58,7 @@ fn every_overlay_element_names_its_screen() {
     for entry in &entries {
         let overlay = matches!(
             entry["type"].as_str(),
-            Some("Sprite" | "TextLabel" | "TextInput" | "HitRegion" | "ScrollPanel")
+            Some("Sprite" | "TextLabel" | "TextField" | "HitRegion" | "ScrollPanel")
         );
         if !overlay {
             continue;

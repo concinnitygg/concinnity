@@ -58,11 +58,8 @@ pub(super) fn build_composite(
         &swapchain.image_views,
         swapchain.extent,
     )?;
-    // Composite set (set 0 for composite pass): HDR resolve image at
-    // binding 0, the bloom top octave at binding 1, the 3D color LUT at binding 2,
-    // then the channels the debug view modes visualize (3 = normal+depth, 4 =
-    // roughness, 5 = SSAO occlusion, 6 = motion, 7 = the reactive mask), and
-    // each source's sampler at binding 8 + its own.
+    // Composite set 0: scene (0), bloom top octave (1), color LUT (2), the debug
+    // view channels (3-7), and each source's sampler at 8 + its index.
     let set_layout = create_descriptor_set_layout(device, &source_set_bindings(COMPOSITE_SOURCES))?;
     // The composite shader reads the post-process tunables plus the scene fade,
     // so its push constant covers the wider `CompositeParams`.
@@ -89,11 +86,7 @@ pub(super) fn build_composite(
         )?
     };
 
-    // Composite sets (one per frame-in-flight slot): binding 0 = the
-    // scene image (SSR output when SSR is on, else this slot's HDR
-    // resolve), binding 1 = that slot's bloom top octave, binding 2 = the
-    // shared 3D color LUT. The TAA wiring later overrides binding 0 to
-    // the TAA output when TAA is on.
+    // One composite set per frame in flight; TAA later re-points binding 0.
     let composite_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let sets = alloc_descriptor_sets(
         device,

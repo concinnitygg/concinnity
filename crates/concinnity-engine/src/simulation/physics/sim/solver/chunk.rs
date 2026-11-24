@@ -1,17 +1,6 @@
-// One piece of a step's solve: whole islands, and everything needed to carry
-// them from the top of the step to the bottom.
-//
-// A chunk runs the entire substep loop rather than one pass of it. That is what
-// the island split buys over splitting each pass: the pieces have nothing to
-// say to each other at any point between the first integration and the last
-// bounce, so they are handed out once and joined once, instead of eight times
-// per step.
-//
-// Every array a chunk holds is a run rather than a scatter, because the
-// partition laid them out that way, so the runs are cut with plain slice
-// splits. The exception is the body states, which stay indexed by pool slot: a
-// chunk reaches those through a shared handle whose contract the partition is
-// what satisfies.
+// One piece of a step's solve: whole islands, carried through the entire
+// substep loop, so the pieces are handed out and joined once per step. Arrays
+// are runs cut by slice splits; body states stay indexed by pool slot.
 
 use crate::simulation::physics::sim::config::{SimConfig, Softness};
 use crate::simulation::physics::sim::contact::Manifold;
@@ -116,12 +105,9 @@ fn integrate_velocities(chunk: &mut Chunk<'_>, config: &SimConfig, fluids: &[Flu
     }
 }
 
-// One substep of gravity and the water on a floating body, backward Euler:
-// the water is read at the pose the substep is heading for, and the rise and
-// the turn take its stiffness `k` implicitly, `v' = v + h a / (1 + h^2 k / m)`,
-// gravity sharing the rise's so the body rests exactly where the two
-// balance. However stiff the float, the substep cannot gain energy: it damps
-// what moves faster than it resolves and leaves the rest alone.
+// One substep of gravity and buoyancy on a floating body, backward Euler with
+// the water's stiffness `k` taken implicitly, `v' = v + h a / (1 + h^2 k / m)`,
+// so it cannot gain energy.
 fn float(body: &mut SolverBody, load: &FluidLoad, pull: Vec3, h: f32) {
     let ahead = body.position + body.linear_velocity * h;
     let turned = body.rotation.integrate(body.angular_velocity, h);

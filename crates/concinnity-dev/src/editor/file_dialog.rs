@@ -9,13 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-// Open a native "open file" dialog rooted at `start`, filtered to the
-// extensions `entry_from_path` resolves. Returns `None` when the user cancels.
-//
-// Blocks the calling thread -- and so the editor's frame loop -- until the
-// dialog closes; it is modal and frontmost, so the still window behind it is
-// expected rather than a hang. Must be called from the main thread (macOS
-// requires NSOpenPanel there), which the editor hook's tick already runs on.
+// Open a native file dialog at `start`, filtered to importable extensions.
+// `None` on cancel. Modal and blocking; main thread only.
 pub(crate) fn pick_import_file(start: &Path) -> Option<PathBuf> {
     let groups = crate::authoring::IMPORT_EXTENSION_GROUPS;
     // An "everything" filter first so the user never has to guess a category,
@@ -34,13 +29,8 @@ pub(crate) fn pick_import_file(start: &Path) -> Option<PathBuf> {
     dialog.pick_file()
 }
 
-// The text to put in the Import panel's path field for a picked file: relative
-// to `root` (the project directory) when the file sits inside it, so
-// world.jsonl stays portable across machines; the absolute path otherwise,
-// which resolves on this machine but will not survive the project moving.
-//
-// Both sides are canonicalized first, so a symlinked root still matches (macOS
-// hands out `/tmp` for `/private/tmp`, and a picked file comes back resolved).
+// The Import path for a picked file: relative to `root` when inside it, else
+// absolute. Both sides are canonicalized first.
 pub(crate) fn project_path(picked: &Path, root: &Path) -> String {
     let picked = canonical_or_self(picked);
     let root = canonical_or_self(root);

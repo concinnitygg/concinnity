@@ -1,10 +1,6 @@
-// Render interpolation state for the fixed-timestep simulation. Each fixed
-// tick pushes the newly simulated pose; each rendered frame samples a blend of
-// the previous and current poses by the frame's accumulator alpha, so motion
-// stays smooth when the render rate and the tick rate differ. Positions blend
-// linearly; rotations blend as quaternions through the crate's own
-// `quat_slerp` (see `convert` for the one-time Euler conversion at the
-// Transform write boundary).
+// Render interpolation for the fixed-timestep simulation: frames blend the
+// previous and current tick poses by the accumulator alpha, slerping
+// rotations.
 
 use crate::environment::planet::Rebase;
 use crate::transform::quat_slerp;

@@ -1,8 +1,8 @@
-//! The `cn edit` run path. Like `cn run -f`, the editor compiles world.jsonl in
+//! The `cn edit` run path. Like `cn run -f`, the editor compiles .jsonl in
 //! memory: the session boots from the authored entries, not from the blobs a
-//! build left under the state tree, so what opens is always what the world file
-//! says. It overlays an injected editor HUD and persists edits by writing
-//! world.jsonl. The blobs are refreshed only by an explicit build (`cn cook`,
+//! build left under the state tree, so what opens is always what the file
+//! says. It sets its own UI up in that world and persists edits by writing
+//! .jsonl. The blobs are refreshed only by an explicit build (`cn cook`,
 //! or the console's cook command). An optional debug port reuses the existing
 //! debug server so an MCP client can inspect and drive a session.
 //!
@@ -58,21 +58,20 @@ mod hook;
 // The top bar: the full-width strip holding SAVE, the panel chips and the
 // transport.
 mod hud;
-// The reserved asset-id families every injected HUD element is declared in.
-mod hud_ids;
 // Vector icons drawn from rounded rectangles, sharp at any scale.
 mod icons;
-// Runtime injection of the HUD's reserved assets into a compiled world,
-// between the in-memory compile and `Runtime::start`.
-mod inject;
+// Setting the editor up in a compiled world, between the in-memory compile and
+// `Runtime::start`.
+mod install;
 // Applying an edit to the running preview world instead of rebuilding it.
 mod live;
 // The world map: its places and the moves between them, as a chart.
 mod map;
-// The confirmation dialog: message, optional name field, and its buttons.
+// The confirmation dialog: a modal panel with its message, optional name field
+// and checkbox, and its buttons.
 mod modal;
-// The toast queue the editor and its workers push into, and each message's
-// pure lifetime.
+// The toast inbox the editor and its workers push into, and the feed that
+// turns it into toasts.
 pub(crate) mod notify;
 // Extent outlines for assets with spatial reach but no geometry: trigger
 // volumes, light ranges, frusta, probe bounds.
@@ -106,8 +105,10 @@ mod text_area;
 mod theme;
 // The editor's view of the thumbnail set a build baked into the cache.
 mod thumbs;
-// The toast stack's card geometry and draw.
-mod toast_overlay;
+// The toast stack: the engine widget the notifications show on.
+mod toasts;
+// The editor's panels built from engine widgets.
+mod ui;
 // The Display menu: the viewport view mode and the per-session show flags.
 mod view_menu;
 // Interaction over the scene rather than over a panel: the gizmo and its
@@ -116,18 +117,10 @@ mod view_menu;
 mod viewport;
 // Pure composition of the two hide mechanisms, the manual set and an isolate.
 mod visibility;
-// The shared helpers every injected overlay element is placed through.
-mod widget;
-// A checkbox: box, caption, and an optional note.
-mod widget_check;
-// A list row's "..." dots and the menu of actions they open.
-mod widget_menu;
-// A drag slider: track, fill, handle and value label.
-mod widget_slider;
 // The Worlds panel and the start screen it becomes with no world open.
 mod worlds;
 
-use concinnity_cook::authoring::world::WORLD_JSONL;
+use concinnity_cook::authoring::world::APP_JSONL;
 use concinnity_engine::ecs::World;
 use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
 use concinnity_engine::shutdown::ShutdownToken;
@@ -136,17 +129,12 @@ use hook::EditorHook;
 
 use crate::frame_hook::FrameHook;
 
-// A minimal renderable world: a lone Window, which the cook pipeline expands
-// into default shaders around. Booted in memory when there is nothing
-// renderable to load (no world file, or an authored world that draws nothing),
-// so the editor still opens a window over a black scene. Named distinctively so
-// it never collides with an authored asset, and it is never added to the
-// authored entry list, so it can never leak into the user's world.jsonl on
-// SAVE.
+// A lone Window booted when there is nothing renderable to load, so the editor
+// still opens. Never added to the authored entries.
 const SEED_WINDOW: &str = "[\"Window\",{\"$id\":\"editor_default_window\"}]";
 
 /// Editor entry point (`cn edit`). Compiles the authored world in memory,
-/// injects the editor HUD, and runs the world loop driven by the editor hook
+/// sets the editor up in it, and runs the world loop driven by the editor hook
 /// (plus the debug server when the launch names a port).
 pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::Result<()> {
     let debug_port = args.debug_port;
@@ -161,41 +149,41 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     let console_sink = panels::console::ConsoleSink::default();
     panels::console::install_tracing(console_sink.clone(), launch.args.quiet);
 
-    // Resolve the edit target -- the world.jsonl where readable names live and
+    // Resolve the edit target -- the .jsonl file where readable names live and
     // where SAVE writes -- and whether the session opens on the Worlds panel
     // instead of a world.
     let (world_path, pick_a_world) = resolve_edit_target(json_path);
 
-    // Parse the authored entry list up front so edits patch it directly. A
-    // session opening on the start screen edits nothing until a world is picked
-    // there, and it boots on nothing: the window comes up on the screen's own
-    // listing, and the project's most recent world is compiled behind it a few
-    // frames later (`hook/worlds_start.rs`). A world that takes seconds to
-    // compile is then waited out on a screen that is up and usable rather than
-    // in front of no window at all.
+    // Parse the entries up front. A start-screen session boots on nothing and
+    // compiles the most recent world behind the listing a few frames later.
     let (entries, previewing) = if pick_a_world {
         (entry_list::EntryList::default(), start_screen_pick())
     } else {
-        let entries = worlds::files::read_entries(std::path::Path::new(&world_path))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let entries = worlds::files::read_entries(
+            std::path::Path::new(&world_path),
+            &crate::project::root_or_cwd(),
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         (entries, None)
     };
 
     // Bring up a renderable world by compiling those entries, seeding a render
     // marker when they alone would not render.
     let mut runtime = crate::project::runtime().with_launch(launch);
-    boot_world(&mut runtime, &entries)?;
+    let root = crate::project::root_or_cwd();
+    let origin = entry_list::Origin {
+        world: std::path::Path::new(&world_path),
+        root: &root,
+    };
+    boot_world(&mut runtime, &entries, origin)?;
 
-    // Inject the editor HUD elements before start (this also drops the world's
+    // Set the editor up in the world before start (this also drops the world's
     // DebugHud, whose F1 role the editor takes over); the editor's FrameHook
-    // tick drives them each frame.
-    inject::editor_hud(runtime.world_mut());
+    // tick drives its UI each frame.
+    install::editor_ui(runtime.world_mut());
 
-    // Every editor session hot-reloads file-backed assets; with a debug port
-    // the DebugServer owns the reload driver (so the `reload-assets` debug
-    // tool call reaches its flag), without one the driver runs as its own hook.
-    // Either way the session holds exactly one driver, so a reload is never
-    // applied twice.
+    // One hot-reload driver per session: the DebugServer's with a debug port,
+    // else its own hook.
     let mut editor_hook = EditorHook::new(world_path, entries)
         .with_console_sink(console_sink)
         .with_app_menu();
@@ -219,12 +207,9 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     crate::run::start_app(runtime, Some(hook))
 }
 
-// Resolve the world the editor opens on, and whether it opens on the Worlds
-// panel rather than on that world. An explicit path is taken as-is (present or
-// not, so a brand-new file can be named) and loads straight away. With no path
-// the session opens an empty scene and the Worlds panel, which picks the world
-// to work on; the path stands in until it does, so a SAVE before any pick
-// still lands at the project root.
+// The world the editor opens and whether it opens on the Worlds panel. An
+// explicit path loads at once, present or not; without one the Worlds panel
+// picks, and SAVE meanwhile lands at the project root.
 fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     match json_path {
         Some(p) => (p.to_string(), false),
@@ -244,28 +229,28 @@ fn start_screen_pick() -> Option<String> {
 // Where the editor puts a world nobody has saved yet.
 pub(crate) fn unsaved_world_path() -> String {
     crate::project::content_root().map_or_else(
-        || WORLD_JSONL.to_string(),
-        |dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned(),
+        || APP_JSONL.to_string(),
+        |dir| dir.join(APP_JSONL).to_string_lossy().into_owned(),
     )
 }
 
 // Populate `runtime` with a renderable world for editing, compiled from the
 // authored entries in memory. Nothing under the build root is read: the blobs
-// there are refreshed only by an explicit build, so they may lag the world file
+// there are refreshed only by an explicit build, so they may lag the file
 // the editor is opening.
-fn boot_world(runtime: &mut Runtime, entries: &[serde_json::Value]) -> std::io::Result<()> {
-    let jsonl = entry_list::build_text(entries)?;
+fn boot_world(
+    runtime: &mut Runtime,
+    entries: &entry_list::EntryList,
+    origin: entry_list::Origin<'_>,
+) -> std::io::Result<()> {
+    let jsonl = entries.build_text(origin)?;
     let (world, _) = build_renderable(&jsonl)?;
     runtime.load_world(world);
     Ok(())
 }
 
-// Compile world.jsonl content into a ready-to-run world, plus the template
-// baselines its expansion merged authored patches over. Content that would not
-// render (an empty world, or authored entries that draw nothing) is recompiled
-// with a seeded Window, so a session always opens one. Boot and every
-// live-preview rebuild come through here, so what the editor shows never
-// depends on which of the two produced it.
+// Compile .jsonl content into a world plus template baselines, seeding a
+// Window when it would not render. Boot and every rebuild come through here.
 fn build_renderable(
     jsonl: &str,
 ) -> std::io::Result<(World, Vec<concinnity_cook::build_only::ShadowedAsset>)> {
@@ -352,18 +337,15 @@ mod tests {
         assert_eq!(parsed[0]["type"], "Window");
     }
 
-    // A project whose build root is a `.concinnity/` of its own, as `cn` opens
-    // one, with the machine-wide cache so a boot compiles shaders once.
+    // A project rooted at `dir`, as `cn` opens one, with the machine-wide cache
+    // so a boot compiles shaders once. Returns the build root.
     fn open_project(dir: &std::path::Path) -> std::path::PathBuf {
-        let build_root = dir.join(".concinnity");
         crate::project::open(
-            concinnity_host::store::paths::StateTree::at(dir)
-                .with_build(&build_root)
-                .with_cache(concinnity_testing::shared_cache_dir(
-                    "concinnity-dev-tests-cache",
-                )),
+            concinnity_host::store::paths::StateTree::at(dir).with_cache(
+                concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
+            ),
         );
-        build_root
+        dir.to_path_buf()
     }
 
     fn entry(name: &str, ty: &str, args: serde_json::Value) -> serde_json::Value {
@@ -372,6 +354,17 @@ mod tests {
 
     // A renderable authored world, plus a label whose content identifies which
     // compile a booted world came from.
+    // Boot `entries` as the open project's file.
+    fn boot(runtime: &mut Runtime, entries: Vec<serde_json::Value>) -> std::io::Result<()> {
+        let root = crate::project::root_or_cwd();
+        let world = root.join("world.jsonl");
+        let origin = entry_list::Origin {
+            world: &world,
+            root: &root,
+        };
+        boot_world(runtime, &entry_list::EntryList::new(entries), origin)
+    }
+
     fn renderable_entries(label: &str) -> Vec<serde_json::Value> {
         vec![
             entry("cam", "Camera3D", serde_json::json!({})),
@@ -400,12 +393,16 @@ mod tests {
         let build_root = open_project(dir.path());
 
         let mut runtime = crate::project::runtime();
-        boot_world(&mut runtime, &renderable_entries("authored")).expect("the world builds");
+        boot(&mut runtime, renderable_entries("authored")).expect("the world builds");
 
         assert!(runtime.world().renders());
         assert_eq!(booted_label(&runtime), "authored");
         assert!(
-            !build_root.join("data").exists() && !build_root.join("world-lock.json").exists(),
+            !build_root.join("data").exists()
+                && !crate::project::tree()
+                    .expect("the test opened a project")
+                    .cook_lock_path()
+                    .exists(),
             "boot writes no blobs and no lock"
         );
 
@@ -422,7 +419,7 @@ mod tests {
         let build_root = open_project(dir.path());
 
         // An explicit build, as `cn cook` runs it, over the stale world.
-        let world_path = dir.path().join(WORLD_JSONL);
+        let world_path = dir.path().join(APP_JSONL);
         std::fs::write(
             &world_path,
             write_world_jsonl(&renderable_entries("stale")).unwrap(),
@@ -434,7 +431,7 @@ mod tests {
         let before = std::fs::read(&blob).expect("the build wrote a primary blob");
 
         let mut runtime = crate::project::runtime();
-        boot_world(&mut runtime, &renderable_entries("edited")).expect("the world builds");
+        boot(&mut runtime, renderable_entries("edited")).expect("the world builds");
 
         assert_eq!(
             booted_label(&runtime),
@@ -458,7 +455,7 @@ mod tests {
         crate::test_support::isolate_state_dir();
 
         let mut runtime = crate::project::runtime();
-        boot_world(&mut runtime, &[]).expect("an empty world seeds");
+        boot(&mut runtime, Vec::new()).expect("an empty world seeds");
         assert!(runtime.world().renders());
     }
 
@@ -484,8 +481,8 @@ mod tests {
         assert_eq!(path, unsaved_world_path());
     }
 
-    // With no world to discover, the editor opens an unsaved one at the
-    // project root, so the first save lands where a build looks.
+    // With no file named, the editor's unsaved one sits at the project root,
+    // where the application `init` starts would.
     #[test]
     fn an_unsaved_world_is_named_at_the_project_root() {
         // Reading the session's project; opening one is what the guard covers.
@@ -493,9 +490,6 @@ mod tests {
         crate::test_support::isolate_state_dir();
 
         let root = crate::project::content_root().expect("the harness opened a project");
-        assert_eq!(
-            unsaved_world_path(),
-            root.join(WORLD_JSONL).to_string_lossy()
-        );
+        assert_eq!(unsaved_world_path(), root.join(APP_JSONL).to_string_lossy());
     }
 }

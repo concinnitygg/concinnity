@@ -17,11 +17,9 @@ pub(super) struct GbufferPass {
     pub(super) model_history_pso: Option<ID3D12PipelineState>,
 }
 
-// The GPU-driven G-buffer pre-pass's model history: one column-major
-// `float4x4` per cull record per frame, and the snapshot kernel that fills it.
-// Device-local, resting as a shader resource between the dispatch that writes
-// a slot and the pre-pass that reads it a frame later. Built only when the
-// compute cull is active and the G-buffer is enabled.
+// The G-buffer pre-pass's model history (one matrix per record per frame) and
+// the snapshot kernel that fills it. Built only with the compute cull and the
+// G-buffer on.
 pub(super) fn build_gbuffer_pass(
     gpu: &InitGpu<'_>,
     compute: &ComputeCull,

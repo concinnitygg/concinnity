@@ -98,9 +98,9 @@ impl UpscaleRequest {
         mut build: impl FnMut(ResolvedBackend, DlssPreset) -> RenderResult<Option<T>>,
     ) -> RenderResult<(Option<T>, ResolvedBackend)> {
         let (width, height) = output;
-        if let Some(missing) = self.take_unbundled_request(available) {
+        if let Some(missing) = self.take_unavailable_request(available) {
             tracing::warn!(
-                "temporal upscaling: {:?} was requested but this build does not bundle it, \
+                "temporal upscaling: {:?} was requested but its library is not available, \
                  falling back",
                 ResolvedBackend::from(missing)
             );
@@ -128,7 +128,7 @@ impl UpscaleRequest {
 impl UpscaleRequest {
     // The requested vendor upscaler when `available` lacks it, reported once:
     // it is marked refused so a rebuild does not report it again.
-    fn take_unbundled_request(
+    fn take_unavailable_request(
         &mut self,
         available: UpscalerAvailability,
     ) -> Option<VendorUpscaler> {
@@ -267,20 +267,20 @@ mod tests {
     }
 
     #[test]
-    fn an_unbundled_request_is_reported_once() {
+    fn an_unavailable_request_is_reported_once() {
         let mut fsr = request(B::Fsr3);
         let available = avail(true, false, false);
         assert_eq!(
-            fsr.take_unbundled_request(available),
+            fsr.take_unavailable_request(available),
             Some(VendorUpscaler::Fsr)
         );
-        assert_eq!(fsr.take_unbundled_request(available), None);
+        assert_eq!(fsr.take_unavailable_request(available), None);
         assert_eq!(
-            request(B::Fsr3).take_unbundled_request(avail(false, false, true)),
+            request(B::Fsr3).take_unavailable_request(avail(false, false, true)),
             None
         );
         assert_eq!(
-            request(B::Auto).take_unbundled_request(avail(false, false, false)),
+            request(B::Auto).take_unavailable_request(avail(false, false, false)),
             None
         );
     }

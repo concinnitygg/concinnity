@@ -5,57 +5,17 @@
 //! the screen. Opening then commits what is already showing, so the world the
 //! user picked is not compiled twice.
 
-use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use super::{EditorHook, short_status};
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
-use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::{session_store, worlds};
 
 impl EditorHook {
-    // Everything a frame's input drives while the start screen is up. The panel
-    // is the only thing on screen, so the press it does not resolve is swallowed
-    // rather than offered to the world behind it (there is nothing there to
-    // pick, and a stray click must not disturb the preview).
-    pub(super) fn drive_start_input(
-        &mut self,
-        input: &FrameInput,
-        vp: [f32; 2],
-        world: &mut World,
-    ) {
-        if input.left_click {
-            // The confirmation dialog (a delete) swallows every press first.
-            if !self.route_modal_click(input, vp, world) {
-                self.route_start_click(input, vp, world);
-            }
-        }
-        if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
-            let o = self.origin(PanelKey::Worlds, vp);
-            if self
-                .worlds_layout()
-                .cursor_over_list(input.mouse_x, input.mouse_y, o)
-            {
-                self.scroll_worlds(input.scroll_delta);
-            }
-        }
-    }
-
-    // Resolve a press against the start screen's panel. Nothing else routes:
-    // the top bar is not drawn, the panel neither drags nor closes, and a press
-    // that misses the panel does nothing at all.
-    fn route_start_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
-        let (mx, my) = (input.mouse_x, input.mouse_y);
-        let o = self.origin(PanelKey::Worlds, vp);
-        let view = self.make_worlds_view([mx, my]);
-        if let Some(action) = worlds::hit_test(&view, mx, my, o) {
-            self.apply_worlds_action(action, world);
-        }
-    }
-
-    // Which presentation the panel draws and hit-tests in this frame.
+    // Which presentation the panel shows this frame.
     pub(super) fn worlds_mode(&self) -> worlds::Mode {
         if self.start_mode {
             worlds::Mode::Start
@@ -136,11 +96,11 @@ impl EditorHook {
     // flag the frame loop consumes once, so a burst of row clicks costs one
     // compile of the world last picked rather than one per click.
     fn preview_world(&mut self, path: &str) {
-        match worlds::files::read_entries(Path::new(path)) {
+        match worlds::files::read_entries(Path::new(path), &self.content_root) {
             Ok(entries) => {
                 self.worlds.status = None;
                 self.worlds.preview = Some(path.to_string());
-                self.stage_preview(entries);
+                self.stage_preview(entries, Some(path.to_string()));
             }
             // A world that will not parse cannot be shown: the screen says so
             // and keeps whatever was already behind it.
@@ -160,13 +120,13 @@ impl EditorHook {
     // session with no world to show opens on.
     fn clear_preview(&mut self) {
         self.worlds.preview = None;
-        self.stage_preview(EntryList::default());
+        self.stage_preview(EntryList::default(), None);
     }
 
     // Hold `entries` as the world the session is showing. Nothing here is an
     // edit: the list reads as saved and carries no history, so the start screen
     // can never present a world as having unsaved changes.
-    fn stage_preview(&mut self, entries: EntryList) {
+    fn stage_preview(&mut self, entries: EntryList, from: Option<String>) {
         // The world these entries replace is the one the attract camera was
         // framing, so the cycle starts again (on its first shot, from black)
         // over whatever the rebuild brings up.
@@ -175,6 +135,7 @@ impl EditorHook {
         self.baseline = entries.clone();
         self.saved = entries.clone();
         self.entries = entries;
+        self.entries_from = from;
         self.dirty = false;
         self.require_rebuild();
         // The compile blocks the frame it runs on, so it waits for the loading
@@ -182,11 +143,8 @@ impl EditorHook {
         self.rebuild_countdown = Self::COVER_FRAMES;
     }
 
-    // Open listed world `i` from the start screen. The world already showing is
-    // adopted as it stands -- it was compiled from these very entries -- so
-    // committing costs no second compile; a row that is not the one showing (a
-    // preview that failed, or a selection the deleted world left behind) is
-    // read and compiled the usual way.
+    // Open start-screen world `i`, adopting the preview as it stands when it is
+    // that world.
     pub(super) fn open_from_start(&mut self, i: usize, world: &mut World) {
         let Some(row) = self.worlds.rows.get(i) else {
             return;
@@ -200,7 +158,7 @@ impl EditorHook {
             self.retarget(path, entries, Adopt::Showing);
             return;
         }
-        match worlds::files::read_entries(Path::new(&path)) {
+        match worlds::files::read_entries(Path::new(&path), &self.content_root) {
             Ok(entries) => {
                 // The world showing gets its own camera back before it goes:
                 // should the compile fail, it is the world the session keeps.
@@ -242,18 +200,13 @@ impl EditorHook {
 }
 
 impl EditorHook {
-    // Draw the loading cover over the area the sidebar leaves to the render,
-    // or hide it. The sidebar itself is never covered: the listing stays
-    // readable and clickable through the wait.
-    pub(super) fn drive_loading_draw(&self, world: &mut World, shown: bool) {
-        if shown && self.loading_preview() {
-            worlds::loading::place(
-                world,
-                self.worlds_layout().preview_rect(),
-                self.loading_name().as_deref(),
-            );
-        } else {
-            worlds::loading::hide(world);
+    // The loading cover over the area the sidebar leaves to the render. The
+    // sidebar itself is never covered: the listing stays readable and
+    // clickable through the wait.
+    pub(super) fn push_loading(&self, shapes: &mut Shapes<'_>, caption: &mut String) {
+        if self.loading_preview() {
+            worlds::loading::caption(self.loading_name().as_deref(), caption);
+            worlds::loading::push(shapes, self.worlds_layout().preview_rect(), caption);
         }
     }
 }

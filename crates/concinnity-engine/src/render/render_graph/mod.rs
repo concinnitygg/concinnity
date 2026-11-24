@@ -56,15 +56,13 @@ pub use passes::{
 };
 pub use schedule::{CrossQueueWait, PassQueue};
 pub use selection::{Fact, Layer, Need, PassDecision, PassDecisions, PassInputs, Reason};
-pub use transient::{
-    PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots, pooled,
-};
+pub use transient::{PoolGates, TransientSlot, TransientTexture, plan_pool_slots, pooled};
 pub use types::{
     BarrierOp, BufferUsage, ClearValue, GraphResourceClass, PassKind, PixelFormat, ReadStages,
     ResourceId, ResourceState, TextureDesc, TextureHandle, TextureUsage,
 };
 pub(crate) use types::{BufferDesc, TextureSize};
 pub use validate::{
-    SyncGap, SyncGapKind, assert_serial_order_honors_schedule, barrier_coverage_gaps_for_driven,
+    CheckedGraphs, SyncGap, SyncGapKind, assert_driven_barriers_sound, assert_graph_sound,
     sync_point_gaps,
 };

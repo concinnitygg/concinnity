@@ -1,48 +1,32 @@
 use super::*;
-use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+use concinnity_engine::components::{Layout, UiState};
 use serde_json::json;
 
 use crate::editor::panels::planet;
-use crate::editor::planet_tools::{Brush, Tools};
+use crate::editor::planet_tools::{Tool, Tools};
 
-const IDLE: Tools = Tools {
-    active: None,
-    brush: Brush {
-        radius: 8.0,
-        strength: 0.5,
-        falloff: 0.5,
-    },
-    layer: 0,
-    cover: 0,
-};
-
-fn strip() -> f32 {
-    tool_strip::height(&IDLE)
-}
-
-fn planet_rows() -> Vec<Row> {
+fn planet_rows(covers: usize) -> Vec<Row> {
+    let covers: Vec<_> = (0..covers).map(|_| json!({"material": "sand"})).collect();
     let args = json!({
         "seed": 3,
         "sea": {"level": 0.0, "water": "sea"},
-        "covers": [{"material": "sand"}]
+        "covers": covers
     });
     planet::rows(Some(&planet::working(args.as_object().unwrap())))
 }
 
-fn view(rows: &[Row], scroll: usize) -> PlanetView<'_> {
-    PlanetView {
-        rows,
-        scroll,
-        focus: None,
-        status: None,
-        dirty: false,
-        mouse: [0.0, 0.0],
-        strip: StripView {
-            tools: &IDLE,
-            pick: "",
-            sliding: None,
-            mouse: [0.0, 0.0],
-        },
+fn built(world: &mut World, rows: &[Row]) -> (BuiltPanel, PlanetIds) {
+    let mut ui = UiBuilder::new(world, AssetId(9), None);
+    let mut panel = build(&mut ui).unwrap();
+    let ids = build_rows(world, &mut panel, rows);
+    (panel, ids)
+}
+
+fn event(name: &str, value: Option<UiValue>) -> UiEvent {
+    UiEvent {
+        name: name.into(),
+        element: None,
+        value,
     }
 }
 
@@ -52,140 +36,139 @@ fn position(rows: &[Row], key: &str) -> usize {
         .unwrap()
 }
 
-// Inside slot `j` of the window, clear of its buttons.
-fn in_slot(o: [f32; 2], j: usize) -> (f32, f32) {
-    let r = slot_rect(o, PLANET_W, strip(), j);
-    (r[0] + 5.0, r[1] + 5.0)
+fn text_of(world: &World, name: &str) -> Option<String> {
+    match world.resource::<UiState>()?.get(name) {
+        Some(UiValue::Text(t)) => Some(t.clone()),
+        _ => None,
+    }
+}
+
+fn shown(world: &World, id: AssetId) -> bool {
+    world.get_by_id::<Layout>(id).unwrap().visible
 }
 
 #[test]
-fn hit_test_resolves_each_control() {
-    let rows = planet_rows();
-    let v = view(&rows, 0);
-    let o = [30.0, 30.0];
-    let s = size(rows.len(), strip());
-    let a = apply_rect(o, PLANET_W);
+fn events_name_their_row_or_tool() {
     assert_eq!(
-        hit_test(&v, a[0] + 2.0, a[1] + 2.0, o, s),
-        Some(PlanetAction::Apply)
+        action(&event(ROW_BUTTON, Some(UiValue::Int(7)))),
+        Some(PlanetAction::RowButton { row: 3, slot: 1 })
     );
-    let radius = position(&rows, "radius");
-    let (x, y) = in_slot(o, radius);
-    assert_eq!(hit_test(&v, x, y, o, s), Some(PlanetAction::Focus(radius)));
+    assert_eq!(
+        action(&event(CYCLE_REF, Some(UiValue::Int(4)))),
+        Some(PlanetAction::CycleRef(4))
+    );
+    assert_eq!(action(&event(APPLY, None)), Some(PlanetAction::Apply));
+    assert_eq!(action(&event(ADD_SEA, None)), Some(PlanetAction::AddSea));
+    assert_eq!(
+        action(&event("editor.planet.tool", Some(UiValue::Int(1)))),
+        Some(PlanetAction::Strip(StripAction::Toggle(Tool::Lower)))
+    );
+    assert_eq!(action(&event(CYCLE_REF, None)), None);
+}
+
+// Each text row builds a text field and each reference row a picker; the
+// rows build again only when what they lay out changes.
+#[test]
+fn rows_build_their_controls_and_rebuild_on_a_new_layout() {
+    let mut world = World::new();
+    let rows = planet_rows(1);
+    let (_, ids) = built(&mut world, &rows);
     let seed = position(&rows, "seed");
-    let b = button_rect(slot_rect(o, PLANET_W, strip(), seed), 0);
-    assert_eq!(
-        hit_test(&v, b[0] + 2.0, b[1] + 2.0, o, s),
-        Some(PlanetAction::Button(Button::Reroll))
-    );
+    assert!(ids.texts[seed].is_some(), "a number row types");
     let water = position(&rows, "sea.water");
-    let (x, y) = in_slot(o, water);
-    assert_eq!(
-        hit_test(&v, x, y, o, s),
-        Some(PlanetAction::CycleRef(water))
-    );
-    let (x, y) = in_slot(o, 0);
-    assert_eq!(
-        hit_test(&v, x, y, o, s),
-        Some(PlanetAction::Consume),
-        "a heading"
-    );
-    assert_eq!(hit_test(&v, 5000.0, 5000.0, o, s), None);
+    assert!(ids.refs[water].is_some(), "a reference row picks");
+    assert!(ids.texts[water].is_none());
+    assert!(ids.lays_out(&planet_rows(1)));
+    assert!(!ids.lays_out(&planet_rows(2)), "a new cover adds rows");
+    let mut cycled = planet_rows(1);
+    if let RowKind::Field { field, .. } = &mut cycled[water].kind {
+        field.variant_idx += 1;
+    }
+    assert!(ids.lays_out(&cycled), "a picked value is not a new layout");
 }
 
-// The window starts at the scroll: slot 0 is the first row scrolled to.
+// The texts, the focus, the pickers' names and the title follow the hook's
+// model.
 #[test]
-fn hit_test_follows_the_scroll() {
-    let rows = planet_rows();
-    let gravity = position(&rows, "gravity");
-    let scroll = max_scroll(rows.len());
-    assert!(scroll > 0, "a planet with a cover overflows the window");
-    let v = view(&rows, scroll);
-    let o = [0.0, 0.0];
-    let (x, y) = in_slot(o, gravity - scroll);
+fn sync_writes_the_texts_pickers_and_title() {
+    let mut world = World::new();
+    let rows = planet_rows(1);
+    let (panel, ids) = built(&mut world, &rows);
+    let seed = position(&rows, "seed");
+    let mut texts = vec![String::new(); rows.len()];
+    texts[seed] = "42".into();
+    let tools = Tools::default();
+    let view = PlanetView {
+        rows: &rows,
+        texts: &texts,
+        focus: Some(seed),
+        status: Some("bad"),
+        dirty: true,
+        strip: StripView {
+            tools: &tools,
+            pick: "",
+        },
+    };
+    sync(&view, &ids, &panel, &mut world);
+    let field = world
+        .get_by_id::<TextField>(ids.texts[seed].unwrap())
+        .unwrap();
+    assert_eq!(field.content, "42");
+    assert!(field.focused);
+    assert_eq!(text_of(&world, TITLE).as_deref(), Some("Planet *"));
+    assert_eq!(text_of(&world, STATUS).as_deref(), Some("bad"));
+    let water = position(&rows, "sea.water");
     assert_eq!(
-        hit_test(&v, x, y, o, size(rows.len(), strip())),
-        Some(PlanetAction::Focus(gravity))
+        text_of(&world, ids.refs[water].as_ref().unwrap()).as_deref(),
+        Some("sea")
     );
+
+    // Typing into the field reads back, with its focus.
+    if let Some(f) = world.get_mut_by_id::<TextField>(ids.texts[seed].unwrap()) {
+        f.content = "7".into();
+    }
+    assert_eq!(observe(&world, &ids, &mut texts), Some(seed));
+    assert_eq!(texts[seed], "7");
+}
+
+// The brush rows show only under a picked tool, a paint tool adding its
+// pick.
+#[test]
+fn the_brush_rows_follow_the_picked_tool() {
+    let mut world = World::new();
+    let rows = planet_rows(0);
+    let (panel, ids) = built(&mut world, &rows);
+    let mut tools = Tools::default();
+    let sync_with = |world: &mut World, tools: &Tools| {
+        let view = PlanetView {
+            rows: &rows,
+            texts: &[],
+            focus: None,
+            status: None,
+            dirty: false,
+            strip: StripView {
+                tools,
+                pick: "meadow   1/2",
+            },
+        };
+        sync(&view, &ids, &panel, world);
+    };
+    let (brush, pick) = (panel.slots[BRUSH_SLOT], panel.slots[PICK_SLOT]);
+    sync_with(&mut world, &tools);
+    assert!(!shown(&world, brush), "no tool, no brush");
+    tools.toggle(Tool::Raise);
+    sync_with(&mut world, &tools);
+    assert!(shown(&world, brush) && !shown(&world, pick));
+    tools.toggle(Tool::PaintGrass);
+    sync_with(&mut world, &tools);
+    assert!(shown(&world, pick), "a paint tool shows its pick");
 }
 
 #[test]
 fn a_world_without_a_planet_offers_to_add_one() {
+    let mut world = World::new();
     let rows = planet::rows(None);
-    let v = view(&rows, 0);
-    let o = [0.0, 0.0];
-    let (x, y) = in_slot(o, 0);
-    assert_eq!(
-        hit_test(&v, x, y, o, size(rows.len(), strip())),
-        Some(PlanetAction::AddPlanet)
-    );
-}
-
-#[test]
-fn the_window_holds_at_most_its_rows() {
-    assert_eq!(size(3, strip())[1], size(1, strip())[1] + 2.0 * ROW_H);
-    assert_eq!(size(500, strip()), size(VISIBLE_ROWS, strip()));
-    assert_eq!(max_scroll(5), 0);
-}
-
-#[test]
-fn place_shows_the_window_and_hides_the_rest() {
-    let mut world = ids().test_world();
-    let rows = planet_rows();
-    let o = [20.0, 20.0];
-    place(&mut world, &view(&rows, 0), o, size(rows.len(), strip()));
-    let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
-    assert!(title.visible && title.content == "Planet");
-    assert_eq!(
-        world.get_by_id::<TextLabel>(row_label(0)).unwrap().content,
-        "Shape"
-    );
-    let radius = position(&rows, "radius");
-    assert!(world.get_by_id::<TextInput>(input(radius)).unwrap().visible);
-    let water = position(&rows, "sea.water");
-    assert!(world.get_by_id::<Sprite>(picker_bg(water)).unwrap().visible);
-    assert!(!world.get_by_id::<TextInput>(input(water)).unwrap().visible);
-    // A row past the window keeps its input hidden.
-    let gravity = position(&rows, "gravity");
-    assert!(gravity >= VISIBLE_ROWS);
-    assert!(
-        !world
-            .get_by_id::<TextInput>(input(gravity))
-            .unwrap()
-            .visible
-    );
-    assert!(!world.get_by_id::<TextLabel>(STATUS_LABEL).unwrap().visible);
-
-    // Scrolled to the end, gravity shows and the first rows are gone.
-    let scroll = max_scroll(rows.len());
-    place(
-        &mut world,
-        &view(&rows, scroll),
-        o,
-        size(rows.len(), strip()),
-    );
-    assert!(
-        world
-            .get_by_id::<TextInput>(input(gravity))
-            .unwrap()
-            .visible
-    );
-    assert!(!world.get_by_id::<TextInput>(input(radius)).unwrap().visible);
-}
-
-#[test]
-fn a_short_row_list_blanks_the_unused_slots() {
-    let mut world = ids().test_world();
-    let rows = planet::rows(None);
-    place(
-        &mut world,
-        &view(&rows, 0),
-        [0.0, 0.0],
-        size(rows.len(), strip()),
-    );
-    assert_eq!(
-        world.get_by_id::<TextLabel>(row_label(0)).unwrap().content,
-        "+ Add Planet"
-    );
-    assert!(!world.get_by_id::<Sprite>(row_bg(1)).unwrap().visible);
+    let (_, ids) = built(&mut world, &rows);
+    assert_eq!(ids.shapes.len(), 1);
+    assert_eq!(ids.shapes[0].control, Control::Add(ADD_PLANET));
 }

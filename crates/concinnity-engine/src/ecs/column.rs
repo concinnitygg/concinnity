@@ -1,14 +1,6 @@
-// A typed component column: the per-type storage primitive the closed-world
-// ComponentStorage is built from. It bundles the component data with a
-// row-aligned Entity id per row, a row-aligned change tick, and column-level
-// tick stamps. All structural edits go through helpers that keep the data, id,
-// and tick vectors the same length (checked with a debug assertion).
-//
-// Column derefs to its data slice, so read paths (iteration, indexing) behave
-// like a plain Vec. Whole-column mutable access goes through `values_mut`,
-// which stamps the bulk tick because any element may be written; a write aimed
-// at one row goes through `value_mut`, which stamps only that row, so a
-// consumer can recover exactly which entities were touched.
+// A typed component column with a row-aligned Entity and change tick per row
+// and column-level tick stamps. It derefs to its data. `values_mut` stamps the
+// bulk tick; `value_mut` stamps one row.
 
 use alloc::vec::Vec;
 

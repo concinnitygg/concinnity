@@ -24,12 +24,8 @@ use super::pipeline::{
 use super::pipeline_desc::compute_pipeline;
 use crate::vulkan::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
-// Rebuild a feature's pipeline(s) into a temporary only when `$cond` says the
-// feature is live, propagating any compile/create error out of the enclosing
-// `reload_shaders`. Expands to `Some(build?)` when live, `None` otherwise. A
-// feature whose resources sit behind an `Option` maps over that `Option`
-// instead, so its build borrows them directly. Mirrors
-// `directx/hot_reload.rs::rebuild_if_live!`.
+// Rebuild a feature's pipelines into a temporary when `$cond` says it is live,
+// propagating errors: `Some(build?)` when live, `None` otherwise.
 macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
@@ -37,24 +33,10 @@ macro_rules! rebuild_if_live {
 }
 
 impl VkContext {
-    // Rebuild every built-in Vulkan pipeline from disk-resident source.
-    // Each pipeline is constructed into a temporary first; only when every
-    // rebuild succeeds does the context swap them in (after destroying
-    // the displaced ones). Any shader compile or pipeline-create failure
-    // logs the underlying message and leaves the live pipelines untouched:
-    // a typo in a shader edit won't crash the running session.
-    //
-    // Covers every runtime-bundled pipeline built from the engine's HLSL
-    // sources (`builtin_shaders`): composite, text, bloom (prefilter / downsample /
-    // upsample), every shader bucket's main and G-buffer pre-pass pair (when
-    // the bindless main pass is live), GPU-cull compute, auto-exposure
-    // (build + average), projected-decal, volumetric-fog, SSAO (depth copy,
-    // kernel, blur), SSR (resolve), the reflection composite (blur, composite),
-    // TAA (resolve), the sky, and the G-buffer pre-pass with the sky's motion
-    // behind it. The shadow / instanced / skinned pipelines remain out of
-    // scope; same split as DirectX. The caller
-    // has already `device_wait_idle`'d so swapping pipelines out from
-    // under in-flight command buffers is safe.
+    // Rebuild every built-in pipeline from source into temporaries, swapping them
+    // in only when all succeed; a failure logs and keeps the live pipelines. The
+    // shadow, instanced and skinned pipelines are out of scope. The device is
+    // already idle.
     pub(in crate::vulkan) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
@@ -98,10 +80,7 @@ impl VkContext {
             concinnity_engine::render::post::bloom::build_pipelines(&self.post_device(0))
         );
 
-        // Every shader bucket's main and G-buffer pre-pass pipelines, from the
-        // engine's freshly compiled programs; a world Shader's own files are
-        // spliced into the same templates, so they are rebuilt against them
-        // too. Each bucket rebuilds as a pair, so shading and the G-buffer
+        // Every shader bucket's main and pre-pass pipelines, rebuilt as pairs so they
         // never compile from different templates.
         let bindless_main_pipeline = rebuild_if_live!(
             self.cull.bindless_pipeline_layout.is_some() && self.cull.bindless_pipeline.is_some(),
@@ -381,13 +360,8 @@ impl VkContext {
         Ok(())
     }
 
-    // Rebuild bucket 0 of the GPU-driven main pass and its G-buffer pre-pass
-    // from the world default Shader's freshly compiled programs and hot-swap
-    // them, for `update_world_shader`, or swap in `prepared` when a worker
-    // already built them. Mirrors the rebuild-then-swap safety pattern of
-    // `reload_shaders`: the replacements are constructed first and the swap only
-    // runs when the build succeeds, so a typo in a shader edit leaves the live
-    // pipelines untouched and the session keeps rendering.
+    // Rebuild bucket 0's main and pre-pass pipelines from the world default
+    // Shader, or install `prepared`. Built first, swapped only on success.
     pub(in crate::vulkan) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_engine::components::ShaderPrograms,
@@ -412,11 +386,9 @@ impl VkContext {
         Ok(())
     }
 
-    // Bucket 0's pipelines against the live layouts: the world default Shader's
-    // programs where `world` declares one, `engine` otherwise. Errors when the
-    // GPU-driven pass is not live, which means the world has nothing to draw,
-    // when the main pipeline fails, or when the rebuild would drop the live
-    // pre-pass, so a live pair is kept whole.
+    // Bucket 0's pipelines: the world default Shader's programs, else `engine`.
+    // Errors when the GPU-driven pass is not live, or the rebuild would drop the
+    // live pre-pass.
     fn build_world_main_pipeline(
         &self,
         world: Option<&concinnity_engine::components::ShaderPrograms>,

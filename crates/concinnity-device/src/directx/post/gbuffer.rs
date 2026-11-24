@@ -72,12 +72,9 @@ pub(in crate::directx) fn gbuffer_targets(pso: GraphicsPso<'_>) -> GraphicsPso<'
         .target(GBUFFER_VELOCITY_FORMAT, Blend::Opaque)
 }
 
-// Vertex input layout for the G-buffer pre-pass: the main pass's attributes on
-// slot 0, which the vertex hook reads in full, plus the previous-frame position
-// on slot 1. Both slots carry the 56-byte `Vertex`; the static prefix binds the
-// static VB to both slots (prev_pos == cur_pos), the skinned tail binds the
-// current deformed buffer to slot 0 and the previous-frame deformed buffer to
-// slot 1.
+// The main pass's attributes on slot 0 plus the previous-frame position on
+// slot 1. Static geometry binds the same buffer to both; the skinned tail
+// binds the current and previous deformed buffers.
 fn prepass_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     let mut layout = crate::directx::pipeline::main_input_layout();
     layout.push(D3D12_INPUT_ELEMENT_DESC {
@@ -92,11 +89,9 @@ fn prepass_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     layout
 }
 
-// Root signature every shader bucket's G-buffer pre-pass PSO binds: the
-// `SURFACE_PREPASS` declarations of `main_bindless.hlsl`, which keep the main
-// pass's registers for what both read. [0] is the per-command object-id root
-// constant (set by the `ExecuteIndirect` command signature, so it MUST stay at
-// root parameter 0).
+// Root signature every bucket's pre-pass PSO binds, keeping the main pass's
+// registers. [0] is the object-id constant the command signature sets, so it
+// must stay at 0.
 pub(in crate::directx) fn create_prepass_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -373,12 +368,8 @@ impl GbufferResources {
         })
     }
 
-    // Re-point the MRT views at the rebuilt pool and recreate the private depth
-    // at a new resolution. The descriptor *slots* stay put; only the resources
-    // behind them change, so no consumer needs a re-bind.
-    //
-    // The caller must have rebuilt the transient pool first: `pooled` names the
-    // new placed resources, and the old ones are freed with the pool.
+    // Re-point the MRT views at the rebuilt pool and recreate the private depth;
+    // the descriptor slots stay put. The pool must be rebuilt first.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -448,11 +439,9 @@ pub(in crate::directx) struct GbufferPrepassFrame<'a> {
 }
 
 impl DxContext {
-    // Give the G-buffer whatever its pre-pass still lacks to draw with: the
-    // model-history ring and its snapshot kernel, which init builds only for a
-    // world that starts with a G-buffer consumer, and each shader bucket's
-    // pre-pass PSO. Builds only what is missing, so it is safe to repeat. A
-    // world with no GPU-driven pass has nothing to draw here.
+    // Build whatever the pre-pass still lacks (model history, snapshot kernel,
+    // each bucket's PSO), since init builds them only when the world starts with a
+    // consumer. Safe to repeat.
     pub(in crate::directx) fn enable_gbuffer_prepass(&mut self) -> RenderResult<()> {
         if self.cull.main_bindless_pso.is_some() && self.cull.model_history_pso.is_none() {
             let device = self.hw.alloc.device();
@@ -556,11 +545,8 @@ impl DxContext {
             );
         }
 
-        // The pre-pass is GPU-driven: it reuses the main pass's per-frame indirect
-        // command buffer (same camera frustum + active LOD) with two
-        // `ExecuteIndirect` draws (static + instance prefix, then the skinned
-        // tail over the deformed VB). With nothing to draw the pass is the
-        // clears above, which is what "no geometry" means to every reader.
+        // Reuses the main pass's indirect buffer with two draws (static + instance,
+        // then the skinned tail). With nothing to draw the pass is just the clears.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
         if let Some(grass) = grass {
             self.encode_grass_prepass(cmd, frame_idx, view_gva, grass);
@@ -633,18 +619,9 @@ impl DxContext {
         }
     }
 
-    // GPU-driven G-buffer pre-pass raster. Reuses the main pass's per-frame
-    // indirect command buffer (the camera-frustum cull already produced it, so no
-    // extra cull dispatch): the static + instance prefix `[0,
-    // skinned_record_base())` once per shader bucket, each under that bucket's
-    // pre-pass PSO, over the static VB (bound to BOTH vertex streams, so prev_pos
-    // == cur_pos and the motion is the per-object model delta plus camera), then
-    // the skinned tail `[skinned_record_base(), record_count())` under bucket 0's
-    // over the current deformed VB (slot 0) + the previous-frame deformed VB
-    // (slot 1), so per-vertex skin deformation produces a correct motion vector.
-    // The vertex hook reads the main pass's view block and parameter table; the
-    // fragment samples the bindless pool. The CPU never walks the static /
-    // skinned draw lists.
+    // The GPU-driven pre-pass raster: the static + instance prefix once per bucket
+    // over the static VB bound to both streams, then the skinned tail over the
+    // current and previous deformed VBs for per-vertex motion.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -726,22 +703,13 @@ impl DxContext {
         // draw.
         self.inc_draw_calls(self.execute_prepass_bucket_regions(cmd, cmd_sig, indirect, frame_idx));
 
-        // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
-        // deformed VB (slot 1) + the skinned IB, then one `ExecuteIndirect`
-        // over `[skinned_record_base(), record_count())`. The records carry
-        // base_vertex = 0 (global skinned indexing). When velocity is inactive the
-        // previous deformed VB is the current one, so prev_pos == cur_pos and the
-        // motion channel stays zero (GbView prev_vp also equals cur_vp).
+        // Skinned tail: current deformed VB (0), previous deformed VB (1), skinned IB.
+        // Without velocity the previous buffer is the current one, so motion is zero.
         if self.state.draw.n_skinned > 0
             && let (Some(pso), Some(cur_vbv)) = (pso, self.skinned.deformed_vbvs.get(frame_idx))
         {
-            // Read the previous frame's deformed pose only once the ring has been
-            // primed (a prior frame's `encode_skin` filled that slot). On the
-            // first frame (or after a runtime ring rebuild) the prev slot is
-            // unposed, so bind the current deformed buffer as the previous one --
-            // prev_pos == cur_pos gives a harmless zero skinned motion vector
-            // instead of garbage. Same collapse `velocity_active == false` uses,
-            // and with one frame in flight the previous slot is this one anyway.
+            // Until the ring is primed, bind the current deformed buffer as the previous
+            // one, so an unposed slot gives zero motion instead of garbage.
             let frames = self.hw.frames();
             let use_prev_pose = velocity_active
                 && frames >= 2

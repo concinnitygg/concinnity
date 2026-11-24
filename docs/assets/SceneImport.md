@@ -7,9 +7,9 @@ Imports a 3D scene file as a single declaration.
 One `SceneImport` stands in for the whole asset graph a scene file
 describes: its [Texture](Texture.md)s, [Material](Material.md)s,
 [Mesh](Mesh.md)es, [Model](Model.md)s, and [Prop](Prop.md)s. The build expands the
-import into those concrete assets, so `world.jsonl` stays small and
+import into those concrete assets, so the authored file stays small and
 human-editable while the full graph lives in the lock file and compiled
-blob. Geometry and texture pixels are never inlined into `world.jsonl`.
+blob. Geometry and texture pixels are never inlined into a .jsonl file.
 
 Supported `source` formats: `.fbx` and `.glb`.
 
@@ -28,7 +28,7 @@ to the scene's size. It is suppressed when the world already declares a
 
 ## Parameters
 
-- `source`: A string. Path to the scene file, relative to the project root. `.fbx` or `.glb`. Defaults to `""`.
+- `source`: A string. Path to the scene file, relative to the root of the file holding the line. `.fbx` or `.glb`. Defaults to `""`.
 - `scene`: A string. [Scene](Scene.md) the generated [Prop](Prop.md)s belong to. Empty leaves them unbound, which makes them visible in every scene.
 - `texture_max_size`: An integer. Ceiling on the longest edge of each imported texture, in pixels. Large source maps (2K-4K) are box-filtered down so the compiled scene, which stores uncompressed pixels, stays within a sane memory budget. `0` keeps each texture at its source resolution. Defaults to `512`.
 - `emissive_map_strength`: A float. Emissive factor applied to a material that carries an emissive map. Scene files often ship a zero emissive factor that would cancel the map, so a textured emissive gets this punchy factor instead. Defaults to `3.0`.

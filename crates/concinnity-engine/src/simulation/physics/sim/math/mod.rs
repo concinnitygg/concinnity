@@ -1,10 +1,5 @@
-// The simulation's own small math layer. It is here rather than borrowed from
-// a general math crate because the simulation asks one thing of its arithmetic
-// that a general crate does not promise: identical bits on every platform.
-// That rules out the std float methods, whose transcendentals come from the
-// platform's libm and differ in the last unit in the last place between glibc,
-// musl, MSVC, and Apple; every function below is plain f32 arithmetic or a
-// `libm` call.
+// The simulation's own math, plain f32 arithmetic and `libm` rather than std's
+// platform transcendentals, so results are bit-identical across platforms.
 
 mod mat3;
 mod quat;

@@ -70,7 +70,7 @@ pub(super) fn take_hot_reload_sources(
         sdf_fields,
     };
     // Parked even when empty: the dev drive's watcher still subscribes to the
-    // host's world.jsonl.
+    // host's .jsonl.
     tracing::info!(
         "asset hot-reload: captured {} file-backed texture source(s), {} \
          ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \

@@ -161,12 +161,9 @@ pub(crate) enum TreeRow {
     },
 }
 
-// Flatten the groups into rows against the fold state and the filter. With a
-// blank filter every header shows and only the groups in `open` unfold; a live
-// filter unfolds every group with a match and drops the rest entirely, so a
-// match inside a folded group is never invisible. Groups are folded by default
-// -- a scene import expands to thousands of assets, so an open-by-default tree
-// would be unusable.
+// Flatten the groups into rows: with a blank filter only `open` groups unfold;
+// a live filter unfolds every matching group and drops the rest. Groups start
+// folded.
 pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<TreeRow> {
     let filtering = !filter.trim().is_empty();
     let mut out = Vec::new();

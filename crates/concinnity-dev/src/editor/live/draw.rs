@@ -70,11 +70,8 @@ pub(super) fn commit(world: &mut World, change: &DrawChange) {
     }
 }
 
-// The material the edit names, or `None` when the running world cannot be
-// swapped to it: the reference was cleared (what the draw falls back to is the
-// build's to resolve), the world never loaded a material under that name, the
-// placement draws from a Model (whose sub-meshes carry their own materials), or
-// the swap would move the draw to another pass or pipeline.
+// The material the edit names, or `None` when the running world cannot swap
+// to it.
 fn swap(world: &World, entity: Entity, args: &Map<String, Value>) -> Option<DrawMaterial> {
     let name = args.get("material")?.as_str()?;
     let next = draw_preview::material(world, asset_id::lookup(name)?)?;

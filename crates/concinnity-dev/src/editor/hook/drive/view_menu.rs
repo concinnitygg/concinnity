@@ -1,13 +1,14 @@
-//! `EditorHook`: the Display menu's open state, click routing, and draw. The
-//! menu's geometry lives in `editor/view_menu.rs`; the selections it edits
-//! (view mode, show flags, the billboard toggle) are published to the renderer
-//! each tick as the `ViewOverrides` resource.
+//! `EditorHook`: the Display menu's open state and picks. The menu itself is
+//! an engine `Menu` (`editor/view_menu.rs`); the selections it edits (view
+//! mode, show flags, the billboard toggle, the extent outlines) are published
+//! to the renderer each tick as the `ViewOverrides` resource.
 
-use concinnity_engine::components::FrameInput;
+use concinnity_engine::components::UiEvent;
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::{hud, view_menu};
+use crate::editor::ui::BuiltUi;
+use crate::editor::view_menu::{self, MenuRow};
 
 impl EditorHook {
     // The top bar's Display chip.
@@ -18,64 +19,56 @@ impl EditorHook {
         }
     }
 
-    // An open Display menu takes the press: a row acts (the menu stays up so
-    // several toggles land in one visit), anywhere else dismisses. A press on
-    // the top bar is left to the bar's own hit test, whose Display chip
-    // toggles the menu.
-    pub(in crate::editor::hook) fn route_display_menu_click(
-        &mut self,
-        input: &FrameInput,
-        vp: [f32; 2],
-    ) -> bool {
-        if !self.display_menu_open {
+    // Apply one Display menu row, picked from the menu or the palette.
+    pub(in crate::editor::hook) fn apply_display_row(&mut self, row: MenuRow) {
+        match row {
+            MenuRow::Mode(m) => self.view_mode = m,
+            MenuRow::Heading(_) => {}
+            MenuRow::Flag(f, _) => self.show_flags = self.show_flags.toggled(f),
+            MenuRow::Billboards => self.show_billboards = !self.show_billboards,
+            MenuRow::Extent(c, _) => self.extent_show = self.extent_show.toggled(c),
+        }
+    }
+
+    // A pick from the menu; whether `event` was one.
+    pub(in crate::editor::hook) fn on_display_menu_event(&mut self, event: &UiEvent) -> bool {
+        let Some(row) = view_menu::pick(event) else {
             return false;
-        }
-        let (mx, my) = (input.mouse_x, input.mouse_y);
-        if my <= hud::BAR_H {
-            return false;
-        }
-        if let Some(i) = view_menu::hit_row(mx, my, vp[0]) {
-            match view_menu::rows()[i] {
-                view_menu::MenuRow::Mode(m) => self.view_mode = m,
-                view_menu::MenuRow::Heading(_) => {}
-                view_menu::MenuRow::Flag(f, _) => {
-                    self.show_flags = self.show_flags.toggled(f);
-                }
-                view_menu::MenuRow::Billboards => self.show_billboards = !self.show_billboards,
-                view_menu::MenuRow::Extent(c, _) => {
-                    self.extent_show = self.extent_show.toggled(c);
-                }
-            }
-            return true;
-        }
-        if view_menu::over(mx, my, vp[0]) {
-            return true;
-        }
-        self.display_menu_open = false;
+        };
+        self.apply_display_row(row);
         true
     }
 
-    pub(in crate::editor::hook) fn drive_display_menu_draw(
-        &self,
+    // Take in a close the menu made itself: a click away or Escape. A world
+    // the menu was just built into has shown it open nowhere yet.
+    pub(in crate::editor::hook) fn observe_display_menu(&mut self, world: &World) {
+        let fresh = world.resource::<BuiltUi>().is_some_and(|b| b.fresh);
+        if !fresh && self.display_menu_open && !view_menu::is_open(world) {
+            self.display_menu_open = false;
+        }
+    }
+
+    // Bring the menu in line with the selections; it closes while the HUD is
+    // hidden or the world runs.
+    pub(in crate::editor::hook) fn drive_display_menu(
+        &mut self,
         world: &mut World,
         vp: [f32; 2],
         shown: bool,
-        mouse: [f32; 2],
     ) {
-        if !shown || !self.display_menu_open || self.sim.playing() {
-            view_menu::hide(world);
-            return;
+        if !shown || self.sim.playing() {
+            self.display_menu_open = false;
         }
-        view_menu::place(
-            world,
-            vp[0],
-            view_menu::MenuState {
-                mode: self.view_mode,
-                show: self.show_flags,
-                billboards: self.show_billboards,
-                extents: self.extent_show,
-            },
-            mouse,
-        );
+        let Some(id) = world.resource::<BuiltUi>().and_then(|b| b.display_menu) else {
+            return;
+        };
+        let state = view_menu::MenuState {
+            open: self.display_menu_open,
+            mode: self.view_mode,
+            show: self.show_flags,
+            billboards: self.show_billboards,
+            extents: self.extent_show,
+        };
+        view_menu::sync(world, id, &state, vp[0]);
     }
 }

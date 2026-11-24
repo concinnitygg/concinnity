@@ -83,21 +83,13 @@ fn create_descriptor_pool(
     let n_atlas = u32::saturating_from(text_atlas_count.max(1));
     let n_frames = u32::saturating_from(frames);
     let bindless_sets_count = if bindless_active { n_frames } else { 0 };
-    // GPU-driven G-buffer pre-pass: one set per frame (1 UBO + 2 SSBOs: the
-    // previous frame's model-history slot and this frame's draw args),
-    // reserved whenever the bindless cull path is active, since a quality
-    // change that adds a G-buffer consumer allocates them mid-session. The
-    // depth/MRT draw reuses the global and bindless sets, so it adds no further
-    // sets here. The snapshot kernel that fills the ring takes a square
-    // (frame, slot) table of its own, each set 1 UBO + 2 SSBOs.
+    // G-buffer pre-pass sets, one per frame, reserved on the bindless path since a
+    // consumer can be added mid-session; plus the snapshot kernel's square table.
     let gbuffer_sets_count = if bindless_active { n_frames } else { 0 };
     let history_sets_count = gbuffer_sets_count * n_frames;
 
-    // GPU-driven shadow: a cull set and a packing set per (frame, view) over
-    // the cascades, the spot slices and the far view. Allocated only when the
-    // bindless cull path is active AND shadows are enabled. The depth-only
-    // shadow draw reuses the shadow-global, spot-slice, far-view and bindless
-    // sets, so it adds no sets here.
+    // Shadow cull and packing sets per (frame, view), with the bindless path and
+    // shadows on.
     let shadow_cull_set_count = if bindless_active && shadow.enabled() {
         n_frames * shadow_views
     } else {
@@ -176,11 +168,9 @@ fn pool_sizes(c: &PoolCounts) -> PoolSizes {
             vk::DescriptorType::SAMPLER,
             c.atlases + c.frames * super::composite::COMPOSITE_SOURCES,
         )
-        // One per cluster per frame (instance matrices) + three per frame for
-        // the bindless set's GpuObjectData buffer, material parameter table and
-        // vertex stream + the G-buffer's model-history slot and draw args per frame and object
-        // buffer and history slot per snapshot set. The late cull sets
-        // (two-pass occlusion) draw from their own dedicated pool.
+        // Per frame: one per cluster, plus the bindless set's buffers, the G-buffer's
+        // history and draw args, and the snapshot sets. Late cull sets use their own
+        // pool.
         .add(
             vk::DescriptorType::STORAGE_BUFFER,
             c.clusters * c.frames + 3 * c.bindless_sets + 2 * c.gbuffer_sets + 2 * c.history_sets,

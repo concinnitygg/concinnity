@@ -56,8 +56,8 @@ mod tests {
             UiAction::Story(StoryCommand::Choose(2))
         );
         assert_eq!(
-            resolved(AuthoredAction::GroupToggle(3)),
-            UiAction::GroupToggle(3)
+            resolved(AuthoredAction::Emit("save".into())),
+            UiAction::Emit("save".into())
         );
     }
 }

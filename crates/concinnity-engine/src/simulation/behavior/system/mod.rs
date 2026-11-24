@@ -29,6 +29,7 @@ mod neighbors;
 mod resolve;
 mod state;
 mod trace;
+mod ui_vars;
 
 #[cfg(test)]
 mod bench;
@@ -80,6 +81,9 @@ pub struct BehaviorSystem {
     instances: Vec<Vec<Instance>>,
     vars: Vec<Val>,
     var_table: VarTable,
+    // The variables as last published for `var:` bindings to read.
+    published_vars: Vec<Val>,
+    variable_cursor: EventCursor,
     // Runs waiting on a clock: a whole body a `delay` postponed, or the block
     // an `after` node deferred with the bindings it captured.
     pending: Vec<Deferred>,
@@ -148,9 +152,12 @@ impl BehaviorSystem {
         Self::default()
     }
 
-    /// The system for a world that declares any `Behavior`.
+    /// The system for a world that declares any `Behavior`, or `Variables` a
+    /// UI binding can change and show.
     pub fn for_world(world: &World) -> Option<Self> {
-        world.query::<Behavior>().next().map(|_| Self::new())
+        let holds = world.query::<Behavior>().next().is_some()
+            || world.query::<Variables>().next().is_some();
+        holds.then(Self::new)
     }
 
     /// Keep this world's variables and `once` flags in `store`.
@@ -183,6 +190,7 @@ impl System for BehaviorSystem {
         self.sim_ticks = 0;
 
         self.restore_state();
+        self.publish_variables(ctx);
     }
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
@@ -191,7 +199,11 @@ impl System for BehaviorSystem {
         // run.
         self.reseed_if_edited(ctx);
 
+        // UI changes land even while the world is paused, as a menu's own
+        // edits should, and in a world whose variables no behavior uses.
+        self.apply_variable_commands(ctx);
         if self.programs.is_empty() {
+            self.publish_variables(ctx);
             return StepResult::Continue;
         }
 
@@ -206,6 +218,7 @@ impl System for BehaviorSystem {
 
         let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         if menu_active {
+            self.publish_variables(ctx);
             return StepResult::Continue;
         }
 
@@ -219,6 +232,7 @@ impl System for BehaviorSystem {
             let elapsed = narrow_f32(self.sim_ticks as f64 * f64::from(timing.tick_dt));
             self.tick(ctx, timing.tick_dt, elapsed);
         }
+        self.publish_variables(ctx);
         StepResult::Continue
     }
 }
@@ -458,14 +472,9 @@ impl BehaviorSystem {
             }
         }
 
-        // Read phase: every body runs against an unchanged world, so the
-        // borrow here is shared and the effects it produces are applied only
-        // after it ends. The job list splits into contiguous chunks, one per
-        // bucket: one bucket on the calling thread, or one per worker when the
-        // gate judges the tick worth fanning out. Either way a body observes
-        // only the tick's starting state, so the results are identical; only
-        // the apply order below is observable, and it walks jobs in list order
-        // in both modes.
+        // Read phase: bodies run against an unchanged world, in one bucket or
+        // one per worker. Results are identical either way; only the apply
+        // order below is observable, and it follows the job list.
         let scheduler = self
             .scheduler
             .as_deref()

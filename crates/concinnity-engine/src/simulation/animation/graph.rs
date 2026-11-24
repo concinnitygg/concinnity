@@ -73,11 +73,8 @@ pub enum AnimationBlend {
     },
 }
 
-// The authored JSON shape is internally tagged (`{"kind":"blend1d",...}`),
-// which serde can only deserialize from a self-describing format; the baked
-// postcard form is not one. Serde impls branch on the format through two
-// derived mirrors: human-readable keeps the `kind`-tagged schema, binary uses
-// the plain externally-indexed enum encoding.
+// The JSON form is internally tagged, which postcard cannot read, so the serde
+// impls branch on format through two derived mirrors.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum GraphBlendTagged {

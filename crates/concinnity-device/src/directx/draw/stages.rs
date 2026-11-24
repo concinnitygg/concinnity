@@ -31,12 +31,9 @@ impl DxContext {
         // main-pass PSOs; built here on the first wireframe frame so the `&self`
         // pass encoders can just read them.
         self.ensure_wireframe_pipelines();
-        // Shader hot-reload: if the debug `reload-shaders` command set the flag, rebuild every
-        // built-in PSO from disk-resident source before the frame's passes start using them. The
-        // flag is cleared regardless of outcome so a failed rebuild (typo in a shader edit) doesn't
-        // loop, and the previous pipelines stay live so the session keeps rendering; only a device
-        // failure propagates. Wait for the GPU to drain first so swapping PSOs out from under
-        // in-flight command lists is safe.
+        // Shader hot reload: once the GPU drains, rebuild every built-in PSO from
+        // source. The flag clears either way and a failed rebuild keeps the old PSOs;
+        // only a device failure propagates.
         if self.hot_reload.requested() {
             self.hot_reload.clear();
             self.wait_idle();
@@ -47,12 +44,8 @@ impl DxContext {
             }
         }
 
-        // Window resize: rebuild the swapchain back-buffers, the HDR / depth
-        // scene targets, the bloom mip chain, and the TAA / SSAO / SSR
-        // resource sets at the new size. A no-op when the size hasn't
-        // changed; skips the rebuild (and the frame) when the window is
-        // minimized so we never present 0×0. Failures other than a device
-        // failure are logged; the client keeps trying on subsequent frames.
+        // Resize the size-dependent resources when the window changed; a minimized
+        // window skips the frame. Non-device failures are logged and retried.
         match self.maybe_handle_resize() {
             Ok(()) => Ok(()),
             Err(e) if e.is_device_failure() => Err(e),
@@ -144,11 +137,7 @@ impl DxContext {
         // frame proceeds with whatever probes have baked.
         self.bake_pending_probes(elapsed);
 
-        // Auto-exposure EMA step. The `wait_frame_slot` fence wait ensured the GPU work
-        // that wrote this slot's readback buffer has completed, so the read
-        // is race-free. Must happen *before* the bloom prefilter / composite
-        // consume `self.post_process.exposure`. No-op when auto-exposure is
-        // disabled.
+        // Step the auto-exposure EMA before anything reads the exposure.
         self.update_auto_exposure(elapsed, frame);
         self.pre_exposure.advance(self.post_process.exposure);
         if let Some(up) = &self.upscale.backend
@@ -160,14 +149,8 @@ impl DxContext {
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
     pub(in crate::directx) fn read_gpu_timings(&self, frame: usize) -> pass_timing::FrameGpuTimes {
-        // Pull the most recently completed GPU times for this slot. The fence
-        // wait in `wait_frame_slot` already ensured the GPU work
-        // that wrote this slot's readback bytes has retired, so the
-        // persistently-mapped pointer reflects fully committed pairs (one ring
-        // cycle stale by construction). Zero before the slot has been visited
-        // a second time (the readback buffer starts zero-initialized). Inactive
-        // passes keep the frame-start timestamp in both slots (see the pre-init
-        // loop in `record_frame`), so they read 0 us.
+        // Read this slot's timestamps, committed by the fence wait; inactive passes
+        // read 0.
         if !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0 {
             // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer
             // sized for one block of SLOTS_PER_FRAME u64s per frame in flight (see
@@ -395,11 +378,8 @@ impl DxContext {
         submission.clear();
         self.submission = submission;
 
-        // Present. Sync interval 1 locks to the display refresh (vsync); 0 runs
-        // uncapped. The tearing present flag is required (and only valid) at
-        // sync interval 0 on a swapchain created with ALLOW_TEARING, so gate it
-        // on the current interval too -- `set_vsync` flips the interval at
-        // runtime, and ALLOW_TEARING with interval >= 1 is an invalid Present.
+        // Present at sync interval 1 (vsync) or 0; the tearing flag is valid only at
+        // interval 0 on an ALLOW_TEARING swapchain.
         let present_flags =
             if self.swapchain.present_sync_interval == 0 && self.swapchain.allow_tearing {
                 DXGI_PRESENT_ALLOW_TEARING

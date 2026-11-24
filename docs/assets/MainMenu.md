@@ -8,7 +8,7 @@ A ready-made menu declared in a single line.
 built from: a [Screen](Screen.md) layer, a dim backdrop [Sprite](Sprite.md), a
 [`TextLabel`](TextLabel.md) and [`HitRegion`](HitRegion.md) for each item, an
 optional [`KeyBinding`](KeyBinding.md) that toggles the menu, and an optional
-in-engine mouse cursor [Sprite](Sprite.md). So `world.jsonl` stays small.
+in-engine mouse cursor [Sprite](Sprite.md). So the authored file stays small.
 
 The bare form gives a centered Resume / Settings / Quit menu that starts
 closed, with Escape opening it, so the scene itself shows first. Set

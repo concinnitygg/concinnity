@@ -1,10 +1,5 @@
-// The handle a simulation addresses its bodies by. A slot index paired with a
-// generation, packed into one word: the generation is what makes a handle to a
-// removed body read as absent rather than silently addressing whatever took
-// its slot.
-//
-// Packed index-major so the derived `Ord` orders by slot, giving callers a
-// stable key for a body pair without reaching into the body storage.
+// A body handle: slot index and generation packed index-major, so a removed
+// body reads absent and `Ord` orders by slot.
 
 /// Opaque handle to a body inside a simulation.
 ///

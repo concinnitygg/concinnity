@@ -40,16 +40,9 @@ use crate::directx::raymarch::RaymarchResources;
 use crate::directx::texture::{create_fallback_white_resource, write_texture_srv};
 use crate::directx::transparent::TransparentResources;
 
-// Temporal upscaler (FSR3 via the FidelityFX SDK). Built ahead of the HDR /
-// depth / post-effect targets, because its resolved render dimensions decide
-// the size of every scene target. When the settings ask for an upscaler
-// (`ResolvedGraphics::upscaler_scale`) AND the FFX DLL loads + the
-// context creates successfully, the backend is `Some` and the scene renders at
-// `output * upscale_scale`; FSR reconstructs the drawable resolution into the
-// upscaler's output texture, which bloom + composite sample. Falls back
-// silently (logs a warning, leaves render == output) when the SDK isn't on
-// `PATH` or the GPU rejects the context build, so a missing SDK degrades to
-// native-resolution TAA rather than a low-res bilinear stretch.
+// The temporal upscaler, built first because its render dims size every scene
+// target. When the SDK or the context is unavailable it falls back, with a
+// warning, to native resolution.
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     descriptors: &Descriptors,
@@ -265,12 +258,8 @@ pub(super) fn build_ssgi(
     Ok(ssgi)
 }
 
-// Unified G-buffer pre-pass resources. Built whenever any screen-space
-// consumer drives it (see `Features::gbuffer_enabled`). Its three MRT RTVs sit
-// at the tail of the RTV heap (after the decal RTV), its private depth DSV
-// right after the shadow DSVs, and its three SRVs in the reserved
-// `gbuffer_srv_base_slot` block. The skinned PSO builds lazily in
-// `upload_skinned` once the joint-bound vertex layout exists.
+// The unified G-buffer pre-pass, built for any screen-space consumer. Its RTVs,
+// DSV and SRVs sit in reserved heap slots.
 pub(super) fn build_gbuffer(
     gpu: &InitGpu<'_>,
     targets: &Targets,
@@ -422,11 +411,8 @@ pub(super) fn build_fog(
     })
 }
 
-// Auto-exposure: build the histogram + average compute pipelines plus
-// the GPU buffers (histogram UAV, output UAV, per-frame readback)
-// only when the world's Exposure opted in. With auto-exposure
-// off every path below is None and the static authored EV continues
-// to drive `post_process.exposure` unchanged.
+// Auto-exposure, built when `Exposure` opts in; otherwise the authored EV
+// drives the exposure.
 pub(super) fn build_auto_exposure(
     gpu: &InitGpu<'_>,
     graphics: &ResolvedGraphics,
@@ -450,16 +436,8 @@ pub(super) fn build_auto_exposure(
     })
 }
 
-// Raymarched SDF volumes. Builds per-volume PSOs from each volume's
-// distance-field payload and writes the raymarch SRV + sampler tables into
-// their reserved blocks. With no volumes this returns `None` and the render
-// graph never adds `PassId::Raymarch`. The
-// shadow + IBL handles passed here mirror the matching slot-0/1/2
-// bindings the main pass uses, so raymarched surfaces sample the
-// same CSM cascades + IBL cubes as rasterized geometry.
-// The atmosphere, when the world declares one: its tables in the atmosphere's
-// heap slots, and its irradiance cube's SRV in the environment's irradiance
-// slot, so every pass that reaches the environment's diffuse light reads it.
+// The atmosphere, when the world declares one: its tables in its heap slots and
+// its irradiance cube in the environment's irradiance slot.
 #[expect(
     clippy::large_types_passed_by_value,
     reason = "handed on to the atmosphere, which stores it"
@@ -534,6 +512,8 @@ pub(super) fn build_atmosphere(
     .map(Some)
 }
 
+// The SDF volumes' raymarch resources and SRV and sampler tables, or `None`
+// with no volumes. Shadow and IBL bindings match the main pass's.
 pub(super) fn build_raymarch(
     gpu: &InitGpu<'_>,
     descriptors: &Descriptors,
@@ -593,13 +573,8 @@ pub(super) fn build_raymarch(
     Ok(raymarch)
 }
 
-// One mirror-render resolve per distinct reflector plane (the
-// `assign_planar_slots` representatives), each SRV in a reserved heap slot the
-// transparent pass binds per record. `None` when no reflector was assigned a
-// planar slot (no transparent content, or every plane degenerate / over
-// budget). `n_cull` is the build-time draw-record count (matches
-// `DxContext::cull_count`), which sizes each plane's region of the mirror-cull
-// indirect buffer.
+// One mirror resolve per distinct reflector plane, each SRV in a reserved slot.
+// `None` without planar reflectors. `n_cull` sizes each plane's cull region.
 pub(super) fn build_planar_reflection(
     gpu: &InitGpu<'_>,
     descriptors: &Descriptors,
@@ -651,15 +626,9 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) draw_objects: &'a [DrawObject],
 }
 
-// The shared transparent pass and its producers: water surfaces, translucent
-// glass panes, and see-through glass meshes. `Some` only when the world
-// declared at least one of the three; the mesh case additionally needs a
-// DXR-capable GPU, since its producer is ray-traced only and a pane-less,
-// water-less world would otherwise build the whole pass for a producer that
-// cannot exist. Shares the main-depth SRV with the decal pass; the scene-copy
-// snapshot uses its own reserved heap slot. `planar_slots` gives each
-// reflector its planar resolve slot (or `None` -> probe-cube fallback),
-// numbered water first to match `PlanarReflectors::plan`.
+// The transparent pass, when the world declares water, panes, or see-through
+// meshes on a DXR-capable GPU. `planar_slots` gives each reflector its planar
+// slot, numbered water first.
 pub(super) fn build_transparent(
     gpu: &InitGpu<'_>,
     inputs: TransparentInputs<'_>,
@@ -677,13 +646,8 @@ pub(super) fn build_transparent(
     } = inputs;
     let hw = gpu.hw;
     let scene_copy_slot = descriptors.layout.transparent_scene_copy_srv_slot;
-    // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
-    // arg, which implies `transparent`): see-through only looks right when the
-    // space behind the glass is modeled. A material that is `transparent` but
-    // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
-    // reflections) = tinted reflective glass that hides the interior. This list
-    // drives the transparent-pass producer, the opaque-pass skip and the
-    // RT-BLAS exclude together.
+    // See-through glass is opt-in per `Material::see_through`; this list drives the
+    // transparent producer, the opaque-pass skip and the BLAS exclusion together.
     let seethrough_mesh_indices: Vec<usize> = draw_objects
         .iter()
         .enumerate()

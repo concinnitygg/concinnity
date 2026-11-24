@@ -1,4 +1,4 @@
-//! Asset / shader / world.jsonl hot-reload machinery for dev sessions
+//! Asset / shader / .jsonl hot-reload machinery for dev sessions
 //! (`cn run -f` and `cn edit`). Moved out of the library into the binary
 //! tree: the watcher, off-thread decode, and the reload passes are driven once
 //! per frame from a `FrameHook::tick` (see `driver::HotReloadDriver`). The
@@ -13,7 +13,7 @@
 //!   watcher    the `notify` filesystem watcher
 //!   `watch_dirs` the directories each captured catalog's sources live in
 //!   decode     off-thread payload decode + poll/apply (textures, meshes, IBL)
-//!   passes     world.jsonl / `ProceduralMesh` / `VolumetricFog` / story reload
+//!   passes     .jsonl / `ProceduralMesh` / `VolumetricFog` / story reload
 //!   shader     per-Shader recompile: pipeline swap on the frame thread, and a
 //!              live override for a Shader whose scene is not loaded
 //!   sdf        per-SdfVolume field recompile: one compile per field and flag
@@ -25,7 +25,7 @@
 //!   animation  file-backed Animation clip re-import into the `AnimationSystem`
 //!   signals    `ReloadSignals`, the reload requests the watcher and the
 //!              `reload-assets` tool call raise for the frame thread
-//!   `world_path` the session's world.jsonl path, shared with the host that switches worlds
+//!   `world_path` the session's .jsonl path, shared with the host that switches worlds
 
 mod animation;
 mod apply;

@@ -167,3 +167,15 @@ fn a_default_settings_target_accepts_a_live_plan_and_refuses_a_rebuild() {
         })
     ));
 }
+
+#[test]
+fn only_the_reflection_features_touch_the_reflection_target() {
+    for feature in RebuildFeature::ALL {
+        let shares = matches!(
+            feature,
+            RebuildFeature::Ssr | RebuildFeature::Ssgi | RebuildFeature::RtReflections
+        );
+        assert_eq!(set(&[feature]).touches_reflections(), shares, "{feature:?}");
+    }
+    assert!(!RebuildSet::default().touches_reflections());
+}

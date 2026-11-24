@@ -68,21 +68,16 @@ pub(crate) fn with_file_name(declared: &str, name: &str) -> String {
 }
 
 // Copy every owned file `clone` declares and point it at the copies. A file
-// is resolved through `resolve` (as the build finds it); a bare name also
-// counts as taken wherever `find` finds it, since it resolves by name alone.
+// is resolved through `resolve`, as the build finds it.
 pub(crate) fn copy_owned(
     clone: &mut serde_json::Value,
     resolve: impl Fn(&str) -> PathBuf,
-    find: impl Fn(&str) -> bool,
 ) -> Vec<Copied> {
     let mut done: BTreeMap<String, String> = BTreeMap::new();
     let mut out = Vec::new();
     for from in declared_files(clone) {
         let source = resolve(&from);
-        let bare = !from.contains(['/', '\\']);
-        let target = copy_path(&source, |p| {
-            p.exists() || (bare && p.file_name().is_some_and(|n| find(&n.to_string_lossy())))
-        });
+        let target = copy_path(&source, Path::exists);
         let name = target.file_name().unwrap_or_default().to_string_lossy();
         let to = with_file_name(&from, &name);
         match std::fs::copy(&source, &target) {
@@ -210,7 +205,7 @@ mod tests {
         let mut clone = json!({"type": "Shader", "args": {
             "$id": "w_1", "fragment": declared("w.hlsl"), "vertex": declared("sway.hlsl"),
         }});
-        let copied = copy_owned(&mut clone, |d| PathBuf::from(d), |_| false);
+        let copied = copy_owned(&mut clone, |d| PathBuf::from(d));
         assert_eq!(copied.len(), 2);
         assert_eq!(clone["args"]["fragment"], declared("w_copy_1.hlsl"));
         assert_eq!(clone["args"]["vertex"], declared("sway_copy.hlsl"));
@@ -222,29 +217,28 @@ mod tests {
         assert!(message.contains("w.hlsl to w_copy_1.hlsl"), "{message}");
     }
 
-    // A bare name resolves by name anywhere under the assets, so a name used
-    // elsewhere there is taken too; a missing original is reported and the
-    // clone keeps naming it.
+    // A declared path keeps its folder in the copy's name, resolved under the
+    // root; a missing original is reported and the clone keeps naming it.
     #[test]
-    fn a_bare_name_skips_names_found_elsewhere_and_a_missing_file_is_reported() {
+    fn a_relative_path_copies_under_its_root_and_a_missing_file_is_reported() {
         let dir = tempfile::tempdir().unwrap();
         let shaders = dir.path().join("shaders");
         std::fs::create_dir_all(&shaders).unwrap();
         std::fs::write(shaders.join("blob.hlsl"), "sdf").unwrap();
-        let mut blob = json!({"type": "Shader", "args": {"fragment": "blob.hlsl"}});
-        let resolve = |d: &str| shaders.join(d);
-        let copied = copy_owned(&mut blob, resolve, |name| name == "blob_copy.hlsl");
+        let mut blob = json!({"type": "Shader", "args": {"fragment": "shaders/blob.hlsl"}});
+        let copied = copy_owned(&mut blob, |d| dir.path().join(d));
         assert_eq!(
             copied,
             [Copied::To {
-                from: "blob.hlsl".into(),
-                to: "blob_copy_1.hlsl".into()
+                from: "shaders/blob.hlsl".into(),
+                to: "shaders/blob_copy.hlsl".into()
             }]
         );
-        assert_eq!(blob["args"]["fragment"], "blob_copy_1.hlsl");
+        assert_eq!(blob["args"]["fragment"], "shaders/blob_copy.hlsl");
+        assert!(shaders.join("blob_copy.hlsl").exists());
 
         let mut gone = json!({"type": "StoryImport", "args": {"source": "/cn-none/tale.md"}});
-        let copied = copy_owned(&mut gone, |d| PathBuf::from(d), |_| false);
+        let copied = copy_owned(&mut gone, |d| PathBuf::from(d));
         assert!(matches!(&copied[..], [Copied::Failed { .. }]));
         assert_eq!(gone["args"]["source"], "/cn-none/tale.md");
         assert!(copied_message(&copied).unwrap().contains("could not copy"));

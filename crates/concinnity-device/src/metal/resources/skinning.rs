@@ -35,44 +35,25 @@ pub(super) fn upload_skinned_index_buffer(
     Ok(buffer)
 }
 
-// All skinned-mesh rendering state grouped into one feature unit: the shared
-// skinned vertex / index buffers, the per-mesh draw
-// objects, and the current + previous joint-palette matrices. All `None` /
-// empty until `upload_skinned` runs; with no `SkinnedMesh` in the world the
-// skinned passes are skipped entirely. Skinned geometry draws through the
-// GPU-driven pass from the pre-skinned `deformed` buffer, so there is no
-// skinned main pipeline. (The G-buffer pre-pass skinned pipeline lives on
-// `GBufferState` with its siblings.)
+// Skinned-mesh state: the shared skinned vertex and index buffers, the draw
+// objects and the joint palettes. Empty until `upload_skinned`. Skinned
+// geometry draws through the GPU-driven pass from the pre-skinned `deformed`
+// buffer.
 pub(crate) struct SkinnedState {
     // Shared vertex buffer holding every skinned mesh's `SkinnedVertex` data.
     pub vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Shared index buffer for skinned geometry.
     pub index_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // GPU-driven fold: the `rt_skin` compute pipeline that deforms
-    // bind-pose vertices into the per-frame `deformed` buffer, built here
-    // independently of RT (which keeps its own pipeline) so a skinned world with
-    // no ray tracing still gets the pre-skin. `None` until `upload_skinned` runs
-    // on a bindless world with static geometry.
+    // The `rt_skin` pipeline deforming into `deformed`, built apart from RT's so
+    // a world without ray tracing still pre-skins.
     pub skin_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    // One deformed-vertex buffer per frame-in-flight (56-byte static `Vertex`
-    // layout, mirroring the skinned VB's global indexing so the skinned
-    // index buffer addresses it directly with `base_vertex = 0`). The per-frame
-    // skin compute writes this frame's slot; the main-pass skinned ICB tail
-    // reads it. `StorageModeShared`, NOT Private: written and read in separate
-    // command buffers under the parallel per-pass encoder, where a Private
-    // buffer GPU-page-faults (the RT deformed buffer hit the same and uses
-    // Shared). Empty until `upload_skinned` allocates them.
+    // One deformed buffer per frame in flight, indexed like the skinned VB with
+    // `base_vertex = 0`. Shared, since a Private buffer written and read in
+    // separate command buffers page-faults.
     pub deformed: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // First-frame priming gate for the GPU-driven G-buffer velocity:
-    // the previous-frame deformed buffer is unposed on frame 0 (and after a
-    // deformed-ring rebuild in `upload_skinned`), so reading it would emit a
-    // garbage skinned motion vector for one frame. While `false`, the G-buffer
-    // skinned tail binds the CURRENT deformed buffer as the previous one (zero
-    // skinned motion); set `true` after the first skinned-tail draw. Atomic, not
-    // `Cell`: the G-buffer pass encodes on a render-graph worker thread (the
-    // parallel per-pass encoder shares `&self` across rayon workers), so any
-    // interior mutation reachable from `encode_pass_into` must be atomic, like
-    // `draw_calls_accum`. Reset to `false` on the main thread in `upload_skinned`.
+    // `false` until the deformed ring has been posed, while the G-buffer reads
+    // the current buffer as the previous one. Atomic because the G-buffer pass
+    // encodes on a worker.
     pub deformed_primed: std::sync::atomic::AtomicBool,
     // Per-object morph-target bindings, parallel to the scene's skinned slots;
     // `None` for a mesh without morph targets. Instance copies share their
@@ -103,13 +84,8 @@ pub(crate) struct MorphBinding {
 }
 
 impl SkinnedDraws for MtlContext {
-    // Build the GPU pipelines + buffers for skeletally animated meshes.
-    //
-    // Called once by `GraphicsSystem` after `MtlContext::new`, only when the
-    // world declares at least one `SkinnedMesh`. Skinned geometry draws through
-    // the GPU-driven pass: the pre-skin kernel deforms it into a per-frame
-    // buffer and the cull records draw it as rigid geometry. With no skinned
-    // meshes this is never called and every skinned pass is skipped.
+    // Build the skinned pipelines and buffers, once at init when the world
+    // declares a `SkinnedMesh`.
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
@@ -144,22 +120,15 @@ impl SkinnedDraws for MtlContext {
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
-        // GPU-driven skinned fold: build the per-frame pre-skin so skinned
-        // objects draw as rigid deformed geometry through the unified cull.
-        // A build failure is a startup error rather than a degraded render,
-        // as on every host. The skin pipeline is built independently of RT;
-        // RT keeps its own skin pipeline + deformed buffer.
+        // The pre-skin pipeline, which every skinned draw rides, so a failure is
+        // a startup error.
         if self.cull.bindless {
             let skin_pipeline = crate::metal::raytrace::build_rt_skin_pipeline(
                 &self.hw.device,
                 self.hot_reload.enabled,
             )?;
-            // One deformed buffer per frame-in-flight (the skin write and the
-            // main-pass read live in separate command buffers, so a per-frame
-            // ring lets frames pipeline without the next frame's skin racing this
-            // frame's draw). Sized to every skinned vertex (global indexing,
-            // base 0). Shared storage: a Private buffer page-faults in this
-            // cross-command-buffer producer/consumer pattern (see the RT path).
+            // One Shared deformed buffer per frame in flight, covering every
+            // skinned vertex.
             let stride = crate::metal::raytrace::VERTEX_STRIDE;
             let deformed_bytes = (vertices.len() * stride).max(stride);
             let mut deformed = Vec::with_capacity(self.frames_in_flight);
@@ -256,28 +225,11 @@ impl SkinnedDraws for MtlContext {
         Ok(())
     }
 
-    // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the
-    // shared skinned vertex / index buffers in place. Driven by asset
-    // hot-reload (`cn run -f` only).
-    //
-    // Like [`MtlContext::update_mesh_geometry`], this rewrites a live buffer
-    // region with no in-flight fence. There is no steady-state skinned
-    // streamer (skinned meshes upload once at init and are never evicted), so
-    // the only caller is the human-paced `cn run -f` hot-reload, which stalls
-    // for the reload: no frame racing this write is plausibly in flight.
-    // Production (non-debug) callers must not take this path.
-    //
-    // The slot's vertex region starts at
-    // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
-    // vertices wide; the index region lives at the slot's init-time
-    // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`
-    // before writing (the existing init-time draws followed the same
-    // rebasing convention). New `verts` / `idxs` must match the slot's
-    // init-time count -- size-changing reloads route through
-    // [`Self::rebuild_skinned_geometry`] instead. The shader
-    // libraries + pipelines stay untouched on every skinned reload path;
-    // joint-count changes resize the per-slot joint-matrix buffers via
-    // [`Self::update_skinned_skeleton`].
+    // Overwrite a `SkinnedMesh` slot's vertices and indices in place on hot
+    // reload, without a fence, which only a stalled reload can afford. Indices
+    // are rebased onto `vertex_base` and must match the init count; resizes go
+    // through `rebuild_skinned_geometry` and joint changes through
+    // `update_skinned_skeleton`.
     fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,

@@ -58,7 +58,7 @@ impl EditorHook {
         use crate::editor::panels::registry;
 
         crate::editor::app_menu::PanelMarks::from_open(
-            registry::view_toggles().map(|p| p.is_open(self)),
+            registry::view_toggles().map(|key| registry::is_open(key, self)),
         )
     }
 }

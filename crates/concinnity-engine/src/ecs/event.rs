@@ -1,13 +1,6 @@
-// Double-buffered event queue with per-reader cursors. Replaces the
-// drained-Vec-as-event pattern, which is lossy within a frame (one reader's
-// drain hides the events from every other reader, and multiple sends collapse
-// to last-write-wins). Here an event stays readable for two `update` cycles, so
-// any reader that runs after the writer sees it, and every reader sees every
-// event exactly once.
-//
-// Each event carries a monotonically increasing sequence id. A reader's cursor
-// stores the next id it has not yet seen; reading yields every buffered event
-// at or past the cursor and advances it.
+// Double-buffered event queue with per-reader cursors: an event stays readable
+// for two `update` cycles, so every reader after the writer sees each event
+// exactly once. Cursors hold the next unseen sequence id.
 
 use alloc::vec::Vec;
 

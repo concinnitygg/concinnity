@@ -1,14 +1,14 @@
 //! The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
 //! `TriggerVolume` publishes for its own shape.
 
-use concinnity_engine::components::{Sprite, TriggerVolume};
+use concinnity_engine::components::TriggerVolume;
 use concinnity_engine::protocol::WorldLines;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::{
-    active, click_at, hook, pick_world, release_at, select,
+    active, click_at, hook, marks, pick_world, release_at, select,
 };
 
 use crate::editor::{outlines, view_menu};
@@ -16,16 +16,13 @@ use crate::editor::{outlines, view_menu};
 use crate::editor::viewport::billboards;
 
 // Selecting a trigger volume publishes its collider outline through the line
-// pass (12 box edges alongside the 6 axis runs), the dotted sprite pool stays
-// hidden (it belongs to the drag ghost now), and clearing the selection
+// pass (12 box edges alongside the 6 axis runs), with no dotted outline over
+// the viewport (that belongs to the drag ghost), and clearing the selection
 // leaves only the axes.
 #[test]
 fn selected_trigger_volume_publishes_its_line_outline() {
     asset_id::begin_build();
     let mut world = pick_world([0.0; 3], Vec::new());
-    for (id, s) in billboards::sprites() {
-        world.push_identified(id, s);
-    }
     let entity = world.push(TriggerVolume {
         position: [0.0, 0.0, -6.0],
         ..Default::default()
@@ -47,15 +44,10 @@ fn selected_trigger_volume_publishes_its_line_outline() {
         6 + outlines::shapes::BOX_EDGES,
         "axes plus the volume's box edges"
     );
-    let ids: std::collections::HashSet<_> = billboards::ids().sprites.iter().copied().collect();
-    let icons = billboards::MAX_BILLBOARDS;
+    let tint = billboards::tint("TriggerVolume");
     assert!(
-        world
-            .join2::<Sprite, concinnity_engine::components::Identity>()
-            .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
-            .count()
-            <= icons,
-        "no dotted outline segments show; only the icon chips do"
+        marks(&world).iter().filter(|m| m.fill == tint).count() == 0,
+        "no dotted outline draws; the volume shows only as its icon"
     );
 
     // Clearing the selection leaves only the axes (the button is released

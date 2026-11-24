@@ -267,35 +267,42 @@ pub enum CursorShape {
 /// The silhouette the in-engine cursor sprite should draw this frame.
 pub struct DesiredCursor(pub CursorShape);
 
-/// Per-frame draw-layer overrides for HUD Sprites / `TextLabels` / `TextInputs`, keyed
-/// by asset id and published by the `cn edit` HUD so its floating panels occlude
-/// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
-/// so two overlapping panels' contents merge -- one panel's text draws over the
-/// other's background. The renderer stable-sorts the overlay calls by this layer
-/// (higher draws on top) when the map is non-empty, so the focused panel's whole
-/// content sits above the others'. An id absent from the map is layer 0; an empty /
-/// absent resource (the shipped runtime) leaves draw order at insertion order,
-/// unchanged.
-#[derive(Debug, Clone, Default)]
-pub struct HudLayers(pub alloc::collections::BTreeMap<AssetId, i32>);
-
-/// The active screen stack, published by `UiInputSystem` at init and whenever the
-/// stack changes, and read a frame later (the same one-frame lag screen
-/// visibility flips already have). `layers` maps each active Screen's id to its
-/// computed draw layer (authored layer band + stack position; screen-less HUD
-/// elements sit at 0); the overlay build spreads these onto the elements each
-/// screen owns. `pauses_world` is true while any active screen pauses the
-/// world; `captures_input` is true while any active screen captures input
-/// (gameplay keys are suppressed even when the world keeps simulating).
-/// Absent / empty in a world with no active screen.
+/// The active screen stack, published by `UiInputSystem` at init and whenever the stack
+/// changes, and read a frame later (the same one-frame lag screen visibility flips
+/// already have). `layers` maps each open Screen's id to its computed draw layer
+/// (authored layer band + stack position; a persistent screen in the HUD band sits at 0
+/// and is left out); the overlay build spreads these onto the elements each screen
+/// owns. `pauses_world` is true while any active screen pauses the world;
+/// `captures_input` is true while any active screen captures input (gameplay keys are
+/// suppressed even when the world keeps simulating). Absent / empty in a world with no
+/// active screen.
 #[derive(Debug, Clone, Default)]
 pub struct ScreenStack {
     /// Each active screen's computed draw layer, keyed by screen id.
     pub layers: alloc::collections::BTreeMap<AssetId, i32>,
+    /// Every screen drawn now: the stack's, and the persistent ones.
+    pub open: Vec<AssetId>,
     /// `true` while any active screen pauses the world.
     pub pauses_world: bool,
     /// `true` while any active screen captures input.
     pub captures_input: bool,
+}
+
+/// The screens whose elements lay out in window pixels rather than on the
+/// reference canvas, published by `UiInputSystem` at init (empty when every
+/// screen is on the canvas). Absent in a world with no UI system, where every
+/// element is screen-less and uses window pixels.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenSpaces {
+    /// The window-space screens, in id order.
+    pub window: Vec<AssetId>,
+}
+
+impl ScreenSpaces {
+    /// Whether an element of `screen` is laid out on the reference canvas.
+    pub fn on_canvas(&self, screen: Option<AssetId>) -> bool {
+        screen.is_some_and(|id| self.window.binary_search(&id).is_err())
+    }
 }
 
 /// World-space lines to draw this frame (trajectories, tethers, path previews,

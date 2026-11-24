@@ -66,6 +66,16 @@ impl Win32Window {
         &mut *self.win_state
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "every platform window answers alike, and GLFW's has none"
+    )]
+    pub(crate) fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        Some(Box::new(crate::win32::clipboard::WindowClipboard::new(
+            self.win_state.hwnd,
+        )))
+    }
+
     // Arm click-to-capture rather than grabbing the cursor immediately: a
     // freshly spawned window may not be focused, and grabbing before the user
     // interacts is jarring. The first content click captures (the same flow

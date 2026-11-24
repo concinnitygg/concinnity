@@ -32,15 +32,8 @@ pub(super) fn build_shadow(
 ) -> RenderResult<ShadowState> {
     let hw = gpu.hw;
     let dsv_descriptor_size = heaps::descriptor_size(&hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-    // Shadow map array
-    // Real path: NUM_SHADOW_CASCADES-slice Texture2DArray with per-slice DSVs.
-    // Fallback: 1x1 single-slice R32_FLOAT array holding the depth clear value
-    // (every shadow compare passes, so fully lit), declared as Texture2DArray
-    // so the shader's binding type stays identical between disabled and
-    // enabled cases.
-    // CSM is gated on `Shadows.map_size` (0 disables
-    // shadows). The casters draw through the GPU-driven shadow pipeline the
-    // cull builds.
+    // Shadow cascades, gated on `Shadows.map_size` (0 disables). Disabled, a
+    // 1x1 far-plane Texture2DArray keeps the binding type and lights everything.
     let effective_shadow_size = shadows.map_size;
     let extent = render_types::shadow_array_extent(
         effective_shadow_size,
@@ -161,12 +154,8 @@ pub(super) fn build_spot_shadow(
     let hw = gpu.hw;
     let spot_shadow_srv_slot = descriptors.layout.spot_shadow_srv_slot;
     let dsv_descriptor_size = heaps::descriptor_size(&hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-    // Spot shadow map array: one slice per shadow-casting spot light, at a
-    // quarter the cascade resolution (a spot slice covers a single cone, not
-    // a view-frustum slab). Local lights are static, so the slice count and
-    // every light-space matrix are fixed here; only the depth refreshes.
-    // A world with no shadowed spot still binds a 1x1 fallback so the main
-    // pass's SRV is never unwritten.
+    // Spot shadows: one slice per shadow-casting spot at a quarter the cascade
+    // resolution, fixed here. A 1x1 fallback keeps the SRV valid.
     let spot_shadow_slice_size = render_types::spot_shadow_slice_size(shadow_map_size);
     let (spot_shadow_resource, spot_shadow_dsvs) = if spot_shadows.is_empty() {
         let fb = create_fallback_shadow_array(

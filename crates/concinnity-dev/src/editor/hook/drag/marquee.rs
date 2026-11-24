@@ -14,6 +14,7 @@ use concinnity_engine::protocol::PickIndex;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::{highlight, marquee};
 
 pub(in crate::editor::hook) struct MarqueeDrag {
@@ -43,7 +44,7 @@ impl EditorHook {
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) {
         let Some(m) = &mut self.marquee else {
             return;
@@ -84,16 +85,13 @@ impl EditorHook {
             self.selection.set(hits);
         }
         self.pick_last = None;
-        self.follow_active(world);
+        self.follow_active();
     }
 
-    // Show or hide the marquee rect for this frame.
-    pub(in crate::editor::hook) fn drive_marquee_draw(&self, world: &mut World, shown: bool) {
-        match &self.marquee {
-            Some(m) if shown && m.moved => {
-                marquee::place(world, marquee::rect_from_corners(m.anchor, m.current));
-            }
-            _ => marquee::hide(world),
+    // The marquee rect, once the drag has moved.
+    pub(in crate::editor::hook) fn push_marquee(&self, shapes: &mut Shapes<'_>) {
+        if let Some(m) = self.marquee.as_ref().filter(|m| m.moved) {
+            marquee::push(shapes, marquee::rect_from_corners(m.anchor, m.current));
         }
     }
 }

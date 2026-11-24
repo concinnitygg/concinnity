@@ -11,11 +11,9 @@ use concinnity_engine::protocol::MenuOverride;
 use super::EditorHook;
 
 impl EditorHook {
-    // Transport shortcuts: Ctrl+P plays / pauses, Ctrl+Shift+P stops,
-    // Ctrl+Period steps. Unlike the history shortcuts these stay live while
-    // the world runs (pausing it is their whole point; key events surface
-    // through play mode), standing down only while a text field
-    // owns the keyboard or a gizmo drag is mid-flight.
+    // Transport shortcuts: Ctrl+P plays or pauses, Ctrl+Shift+P stops,
+    // Ctrl+Period steps. Live during play; they stand down for a text field or
+    // a gizmo drag.
     pub(super) fn sim_keys(&mut self, input: &FrameInput) {
         if !input.ctrl || self.text_focus_active() || self.gizmo_drag.is_some() {
             return;

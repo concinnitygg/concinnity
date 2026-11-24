@@ -1,115 +1,70 @@
-//! The Planet panel's layout half: a floating panel over the world's `Planet`
-//! (see `mod.rs` for its rows) with a status line and Apply button in its
-//! header row, the tool strip under it (`tool_strip.rs`), and a scrolling
-//! window of rows below. A row is a caption plus a
-//! text input, a reference picker cycled by clicking, or an add row, with up to
-//! two buttons at its right end. Every number row keeps its own text input, so
-//! a typed edit survives scrolling it out of view until Apply.
+//! The Planet panel: a status line and Apply button, the tool strip
+//! (`tool_strip.rs`), and a scrolling column of the planet's rows (see
+//! `mod.rs`). A row is a caption and a text field, a reference picker a click
+//! cycles, or an add button, with up to two buttons at its right end. The
+//! rows are built again only when what they lay out changes; the hook owns the
+//! texts and focus, so a typed edit survives until Apply.
 
-use concinnity_engine::components::TextAlign;
+use concinnity_engine::components::{
+    Binding, Button as UiButton, LayoutChild, LayoutSize, TextAlign, TextField, UiEvent, UiValue,
+};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::super::form::FieldKind;
 use super::super::registry::PanelKey;
-use super::tool_strip::{self, StripAction, StripView};
+use super::tool_strip::{self, StripAction, StripIds, StripView};
 use super::{Button, Row, RowKind};
-use crate::editor::hud_ids::{hud_ids, panel_base};
-use crate::editor::icons;
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::ui::build::{emit, fill};
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
-/// Rows the window shows at once.
+/// Rows the panel shows before its column scrolls, until it is resized taller.
 pub(crate) const VISIBLE_ROWS: usize = 22;
 
 // Buttons a row carries at most.
 const ROW_BUTTONS: usize = 2;
 
-hud_ids! {
-    base: panel_base(PanelKey::Planet);
-    sprites: [
-        pub(crate) PANEL_BG,
-        pub(crate) CLOSE_BG,
-        pub(crate) APPLY_BG,
-        pub(crate) row_bg[VISIBLE_ROWS],
-        pub(crate) picker_bg[VISIBLE_ROWS],
-        pub(crate) button_bg[VISIBLE_ROWS * ROW_BUTTONS],
-        pub(crate) tool_bg[tool_strip::TOOLS],
-        pub(crate) tool_part[tool_strip::TOOLS * icons::MAX_PARTS],
-        pub(crate) slider_track[tool_strip::SETTINGS],
-        pub(crate) slider_fill[tool_strip::SETTINGS],
-        pub(crate) slider_handle[tool_strip::SETTINGS],
-        pub(crate) PICK_BG,
-    ];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        pub(crate) APPLY_LABEL,
-        pub(crate) STATUS_LABEL,
-        pub(crate) row_label[VISIBLE_ROWS],
-        pub(crate) picker_label[VISIBLE_ROWS],
-        pub(crate) button_label[VISIBLE_ROWS * ROW_BUTTONS],
-        pub(crate) TOOL_CAPTION,
-        pub(crate) TOOL_HINT,
-        pub(crate) setting_label[tool_strip::SETTINGS],
-        pub(crate) setting_value[tool_strip::SETTINGS],
-        pub(crate) PICK_CAPTION,
-        pub(crate) PICK_LABEL,
-    ];
-    fields: [pub(crate) input[super::MAX_ROWS] = ""];
-}
-
-// Geometry, in window pixels, every rect from the panel origin `o`.
 pub(crate) const PLANET_W: f32 = 400.0;
-const PAD: f32 = 10.0;
-const HEADER_H: f32 = 32.0;
+const HEADER_H: f32 = 30.0;
 const APPLY_W: f32 = 70.0;
 const ROW_H: f32 = 26.0;
+const ROW_GAP: f32 = 2.0;
 const LABEL_COL: f32 = 150.0;
 const BUTTON_W: f32 = 58.0;
-const GAP: f32 = 4.0;
-// Rows indented under a list entry's heading.
+// Captions indented under a list entry's heading.
 const INDENT: f32 = 14.0;
+// The tool strip's height with no tool picked.
+const STRIP_H: f32 = 44.0;
 
-const SECTION_TINT: [f32; 4] = [0.16, 0.17, 0.22, 1.0];
-const ITEM_TINT: [f32; 4] = [0.13, 0.14, 0.18, 1.0];
-const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-const APPLY_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const APPLY_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const SECTION_LABEL: [f32; 3] = [0.70, 0.74, 0.84];
-const ADD_LABEL: [f32; 3] = [0.55, 0.80, 0.60];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
-const LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 
-/// The per-frame view the hook assembles: the rows (their reference pickers'
-/// options filled), the first row the window shows, the focused row's input,
-/// and the status line from the last rejected edit.
-pub(crate) struct PlanetView<'a> {
-    pub rows: &'a [Row],
-    pub scroll: usize,
-    pub focus: Option<usize>,
-    pub status: Option<&'a str>,
-    /// Typed edits are waiting on Apply: the heading marks them.
-    pub dirty: bool,
-    pub mouse: [f32; 2],
-    pub strip: StripView<'a>,
-}
+// The state the panel shows, and the events its controls send.
+const TITLE: &str = "editor.planet.title";
+const STATUS: &str = "editor.planet.status";
+const APPLY: &str = "editor.planet.apply";
+const ADD_PLANET: &str = "editor.planet.add_planet";
+const ADD_SEA: &str = "editor.planet.add_sea";
+// A reference picker's click, its row the value.
+const CYCLE_REF: &str = "editor.planet.ref";
+// A row's button, its row and slot the value.
+const ROW_BUTTON: &str = "editor.planet.button";
+// Each reference picker's shown name, its row after the prefix.
+const REF_TEXT: &str = "editor.planet.ref_text.";
 
-impl PlanetView<'_> {
-    // The tool strip's height.
-    fn strip(&self) -> f32 {
-        tool_strip::height(self.strip.tools)
-    }
-}
+// The panel's slots.
+const COLUMN_SLOT: usize = 0;
+const BRUSH_SLOT: usize = 1;
+const PICK_SLOT: usize = 2;
 
-/// A resolved Planet-panel click.
+/// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PlanetAction {
-    /// Give row `r`'s text input keyboard focus.
-    Focus(usize),
     /// Move row `r`'s reference picker to its next option.
     CycleRef(usize),
-    /// A row's button.
-    Button(Button),
+    /// Slot `slot` of row `row`'s buttons, counted from its right end.
+    RowButton { row: usize, slot: usize },
     /// Add a Planet to a world without one.
     AddPlanet,
     /// Give the planet a sea.
@@ -118,8 +73,35 @@ pub(crate) enum PlanetAction {
     Apply,
     /// A press on the tool strip.
     Strip(StripAction),
-    /// Elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
+}
+
+fn index(value: Option<&UiValue>) -> Option<usize> {
+    match value {
+        Some(UiValue::Int(i)) => usize::try_from(*i).ok(),
+        _ => None,
+    }
+}
+
+fn int(i: usize) -> UiValue {
+    UiValue::Int(i32::try_from(i).unwrap_or(i32::MAX))
+}
+
+/// The action a Planet event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<PlanetAction> {
+    if let Some(a) = tool_strip::action(event) {
+        return Some(PlanetAction::Strip(a));
+    }
+    match event.name.as_str() {
+        APPLY => Some(PlanetAction::Apply),
+        ADD_PLANET => Some(PlanetAction::AddPlanet),
+        ADD_SEA => Some(PlanetAction::AddSea),
+        CYCLE_REF => index(event.value.as_ref()).map(PlanetAction::CycleRef),
+        ROW_BUTTON => index(event.value.as_ref()).map(|i| PlanetAction::RowButton {
+            row: i / ROW_BUTTONS,
+            slot: i % ROW_BUTTONS,
+        }),
+        _ => None,
+    }
 }
 
 /// Where the panel sits until it is dragged: the window's right edge.
@@ -127,74 +109,64 @@ pub(crate) fn default_origin(vp: [f32; 2]) -> [f32; 2] {
     [(vp[0] - PLANET_W - 8.0).max(8.0), 48.0]
 }
 
-/// The panel footprint for `n_rows` rows under a tool strip `strip` tall,
-/// the window showing at most [`VISIBLE_ROWS`] of them.
-pub(crate) fn size(n_rows: usize, strip: f32) -> [f32; 2] {
-    let shown = n_rows.min(VISIBLE_ROWS);
+/// The panel's size showing `rows` rows under an idle tool strip.
+pub(crate) fn size(rows: usize) -> [f32; 2] {
+    let shown = rows.max(1) as f32;
     [
         PLANET_W,
-        widget::TITLE_H + HEADER_H + strip + shown as f32 * ROW_H + PAD,
+        panel_height(HEADER_H + STRIP_H + shown * (ROW_H + ROW_GAP)),
     ]
 }
 
-/// The furthest the window scrolls over `n_rows` rows.
-pub(crate) fn max_scroll(n_rows: usize) -> usize {
-    n_rows.saturating_sub(VISIBLE_ROWS)
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
+    let apply = ui.button("Apply", APPLY, None, [APPLY_W, HEADER_H - 6.0])?;
+    let header = ui.row(vec![status, apply], HEADER_H)?;
+    let (strip, strip_ids) = tool_strip::build(ui)?;
+    let column = ui.scroll_column(Vec::new(), ROW_GAP)?;
+    let mut children = vec![header];
+    children.extend(strip);
+    children.push(fill(column));
+    let spec = PanelSpec {
+        key: PanelKey::Planet,
+        title: "Planet",
+        title_state: Some(TITLE),
+        size: size(VISIBLE_ROWS),
+        min_size: Some(size(4)),
+    };
+    let mut panel = ui.panel(&spec, children)?;
+    panel.slots = vec![column, strip_ids.brush, strip_ids.pick];
+    Some(panel)
 }
 
-fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - APPLY_W,
-        o[1] + widget::TITLE_H + 4.0,
-        APPLY_W,
-        HEADER_H - 8.0,
-    ]
+/// The control a row holds beside its caption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Control {
+    None,
+    Text,
+    Ref,
+    // An add button sending this event in place of a caption.
+    Add(&'static str),
 }
 
-/// Where the tool strip starts: under the header row.
-pub(crate) fn strip_top(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + HEADER_H
+/// What one row lays out: when any row's changes, the rows are built again.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RowShape {
+    caption: String,
+    control: Control,
+    heading: bool,
+    indented: bool,
+    buttons: [Option<Button>; ROW_BUTTONS],
 }
 
-/// The window's slot `j`, under a tool strip `strip` tall.
-fn slot_rect(o: [f32; 2], w: f32, strip: f32, j: usize) -> [f32; 4] {
-    [o[0], strip_top(o) + strip + j as f32 * ROW_H, w, ROW_H]
-}
-
-/// The rows' scrolling region under a tool strip `strip` tall.
-pub(crate) fn body_rect(o: [f32; 2], w: f32, strip: f32, n_rows: usize) -> [f32; 4] {
-    [
-        o[0],
-        strip_top(o) + strip,
-        w,
-        n_rows.min(VISIBLE_ROWS) as f32 * ROW_H,
-    ]
-}
-
-// Button `k` of a row, counted from its right end.
-fn button_rect(row: [f32; 4], k: usize) -> [f32; 4] {
-    let right = row[0] + row[2] - PAD - k as f32 * (BUTTON_W + GAP);
-    [right - BUTTON_W, row[1] + 3.0, BUTTON_W, row[3] - 6.0]
-}
-
-// The control on a field row, left of its buttons.
-fn control_rect(row: [f32; 4], buttons: usize) -> [f32; 4] {
-    let x = row[0] + LABEL_COL;
-    let reserved = buttons as f32 * (BUTTON_W + GAP);
-    let w = (row[0] + row[2] - PAD - reserved - x).max(0.0);
-    [x, row[1] + 3.0, w, row[3] - 6.0]
-}
-
-// Where a label centered in `rect` is anchored.
-fn center(rect: [f32; 4]) -> [f32; 2] {
-    [
-        rect[0] + rect[2] * 0.5,
-        rect[1] + rect[3] * 0.5 - theme::TEXT_HALF,
-    ]
-}
-
-fn button_count(row: &Row) -> usize {
-    row.buttons.iter().flatten().count()
+fn control(row: &Row) -> Control {
+    match &row.kind {
+        RowKind::AddPlanet => Control::Add(ADD_PLANET),
+        RowKind::AddSea => Control::Add(ADD_SEA),
+        RowKind::Field { field, .. } if matches!(field.kind, FieldKind::Ref { .. }) => Control::Ref,
+        RowKind::Field { field, .. } if field.kind.has_text_field() => Control::Text,
+        _ => Control::None,
+    }
 }
 
 // Whether a row sits under a list entry's heading.
@@ -204,224 +176,212 @@ fn indented(row: &Row) -> bool {
     })
 }
 
-/// Resolve a click at `(mx, my)` on the panel at origin `o`, size `s`; `None`
-/// when it missed the panel.
-pub(crate) fn hit_test(
-    view: &PlanetView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<PlanetAction> {
-    let w = s[0];
-    if point_in(mx, my, apply_rect(o, w)) {
-        return Some(PlanetAction::Apply);
+fn shape(row: &Row) -> RowShape {
+    RowShape {
+        caption: row.caption.clone(),
+        control: control(row),
+        heading: matches!(row.kind, RowKind::Header(_)),
+        indented: indented(row),
+        buttons: row.buttons,
     }
-    if let Some(a) = tool_strip::hit_test(&view.strip, mx, my, o, strip_top(o), w) {
-        return Some(PlanetAction::Strip(a));
+}
+
+/// Whether `rows` lay out as the rows `shapes` were built from.
+pub(crate) fn same_layout(shapes: &[RowShape], rows: &[Row]) -> bool {
+    shapes.len() == rows.len()
+        && shapes.iter().zip(rows).all(|(s, r)| {
+            s.caption == r.caption
+                && s.control == control(r)
+                && s.heading == matches!(r.kind, RowKind::Header(_))
+                && s.indented == indented(r)
+                && s.buttons == r.buttons
+        })
+}
+
+/// The rows built into one world: what they lay out, and each row's text
+/// field and reference picker state.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PlanetIds {
+    pub shapes: Vec<RowShape>,
+    texts: Vec<Option<AssetId>>,
+    refs: Vec<Option<String>>,
+}
+
+impl PlanetIds {
+    /// Whether the rows lay out as `rows` do.
+    pub(crate) fn lays_out(&self, rows: &[Row]) -> bool {
+        same_layout(&self.shapes, rows)
     }
-    let strip = view.strip();
-    let window = view
-        .rows
-        .iter()
-        .enumerate()
-        .skip(view.scroll)
-        .take(VISIBLE_ROWS);
-    for (j, (r, row)) in window.enumerate() {
-        let rect = slot_rect(o, w, strip, j);
-        if !point_in(mx, my, rect) {
-            continue;
-        }
-        let pressed = row
-            .buttons
-            .iter()
-            .flatten()
-            .enumerate()
-            .find(|(k, _)| point_in(mx, my, button_rect(rect, *k)));
-        if let Some((_, b)) = pressed {
-            return Some(PlanetAction::Button(*b));
-        }
-        return Some(match &row.kind {
-            RowKind::AddPlanet => PlanetAction::AddPlanet,
-            RowKind::AddSea => PlanetAction::AddSea,
-            RowKind::Field { field, .. } if matches!(field.kind, FieldKind::Ref { .. }) => {
-                PlanetAction::CycleRef(r)
-            }
-            RowKind::Field { field, .. } if field.kind.has_text_input() => PlanetAction::Focus(r),
-            _ => PlanetAction::Consume,
+}
+
+// Row `r`'s caption and control, and its buttons at its right end.
+fn row(
+    ui: &mut UiBuilder<'_>,
+    r: usize,
+    shape: &RowShape,
+    ids: &mut PlanetIds,
+) -> Option<LayoutChild> {
+    let mut children = Vec::new();
+    if let Control::Add(event) = shape.control {
+        let add = ui.button(&shape.caption, event, None, [0.0, ROW_H - 4.0])?;
+        children.push(LayoutChild {
+            width: LayoutSize::Fill(1.0),
+            ..add
+        });
+        return ui.row(children, ROW_H);
+    }
+    if shape.indented {
+        let pad = ui.label("", theme::LABEL)?;
+        children.push(LayoutChild {
+            width: LayoutSize::Fixed(INDENT),
+            ..pad
         });
     }
-    point_in(mx, my, widget::outer_rect(o, s)).then_some(PlanetAction::Consume)
-}
-
-/// Position and show the panel at size `s`.
-pub(crate) fn place(world: &mut World, view: &PlanetView<'_>, o: [f32; 2], s: [f32; 2]) {
-    let w = s[0];
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
-    let title = widget::title_rect(o, w);
-    let heading = if view.dirty { "Planet *" } else { "Planet" };
-    widget::place_heading(world, TITLE_LABEL, title, heading);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-    place_header(world, view, o, w);
-    tool_strip::place(world, &view.strip, o, strip_top(o), w);
-    let strip = view.strip();
-
-    for r in 0..super::MAX_ROWS {
-        widget::hide_field(world, input(r));
-    }
-    for j in 0..VISIBLE_ROWS {
-        match view.rows.get(view.scroll + j) {
-            Some(row) => place_row(world, view, view.scroll + j, row, slot_rect(o, w, strip, j)),
-            None => hide_slot(world, j),
-        }
-    }
-}
-
-// The status line, shown after a rejected edit, beside the Apply button.
-fn place_header(world: &mut World, view: &PlanetView<'_>, o: [f32; 2], w: f32) {
-    let apply = apply_rect(o, w);
-    let hover = point_in(view.mouse[0], view.mouse[1], apply);
-    let tint = if hover { APPLY_TINT_HOVER } else { APPLY_TINT };
-    place_rounded(world, APPLY_BG, apply, tint, theme::CONTROL_RADIUS, true);
-    widget::place_center_label(
-        world,
-        APPLY_LABEL,
-        center(apply),
-        "Apply",
-        [1.0, 1.0, 1.0],
-        true,
-    );
-    let left = o[0] + PAD;
-    widget::place_message(
-        world,
-        STATUS_LABEL,
-        [
-            left,
-            o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF,
-            (apply[0] - PAD - left).max(0.0),
-            widget::LINE_H,
-        ],
-        view.status.unwrap_or(""),
-        ERROR_LABEL,
-        view.status.is_some(),
-    );
-}
-
-// Row `r` in the window slot at `rect`.
-fn place_row(world: &mut World, view: &PlanetView<'_>, r: usize, row: &Row, rect: [f32; 4]) {
-    let j = r - view.scroll;
-    let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-    let (tint, color) = match row.kind {
-        RowKind::Header(_) => (SECTION_TINT, SECTION_LABEL),
-        RowKind::List { .. } | RowKind::Item { .. } => (ITEM_TINT, theme::LABEL),
-        RowKind::AddPlanet | RowKind::AddSea if hovered => (theme::HOVER_TINT, ADD_LABEL),
-        RowKind::AddPlanet | RowKind::AddSea => (ROW_TINT, ADD_LABEL),
-        RowKind::Field { .. } => (ROW_TINT, theme::LABEL),
+    let color = if shape.heading {
+        SECTION_LABEL
+    } else {
+        theme::LABEL
     };
-    place_rounded(
-        world,
-        row_bg(j),
-        theme::highlight_rect(rect),
-        tint,
-        theme::CONTROL_RADIUS,
-        true,
-    );
-    let indent = if indented(row) { INDENT } else { 0.0 };
-    if let Some(l) = widget::label_mut(world, row_label(j)) {
-        l.x = rect[0] + PAD + indent;
-        l.y = rect[1] + LABEL_TOP;
-        l.align = TextAlign::Left;
-        l.color = color;
-        l.visible = true;
-        l.content.clone_from(&row.caption);
-    }
-    place_buttons(world, view, row, rect, j);
-
-    let buttons = button_count(row);
-    let picker = row
-        .field()
-        .filter(|f| matches!(f.kind, FieldKind::Ref { .. }));
-    match (row.field(), picker) {
-        (_, Some(field)) => {
-            let control = control_rect(rect, buttons);
-            let tint = if point_in(view.mouse[0], view.mouse[1], control) {
-                theme::HOVER_TINT
-            } else {
-                theme::BUTTON_TINT
-            };
-            place_rounded(
-                world,
-                picker_bg(j),
-                control,
-                tint,
-                theme::CONTROL_RADIUS,
-                true,
-            );
-            let shown = field
-                .variants
-                .get(field.variant_idx)
-                .map_or(field.initial.as_str(), String::as_str);
-            let at = [
-                control[0] + GAP * 2.0,
-                control[1] + control[3] * 0.5 - theme::TEXT_HALF,
-            ];
-            widget::place_left_label(world, picker_label(j), at, shown, theme::LABEL, true);
+    let caption_w = LABEL_COL - if shape.indented { INDENT } else { 0.0 };
+    let caption = ui.clipped_label(&shape.caption, color, caption_w)?;
+    let caption_width = if shape.control == Control::None {
+        LayoutSize::Fill(1.0)
+    } else {
+        LayoutSize::Fixed(caption_w)
+    };
+    children.push(LayoutChild {
+        width: caption_width,
+        ..caption
+    });
+    match shape.control {
+        Control::Text => {
+            let text = ui.text_field(TextField {
+                height: ROW_H - 6.0,
+                ..Default::default()
+            })?;
+            ids.texts[r] = text.item.map(concinnity_engine::ecs::Ref::id);
+            children.push(text);
         }
-        (Some(field), None) if field.kind.has_text_input() => {
-            widget::show_field(
-                world,
-                input(r),
-                control_rect(rect, buttons),
-                view.focus == Some(r),
-            );
-            hide_picker(world, j);
+        Control::Ref => {
+            let key = format!("{REF_TEXT}{r}");
+            let picker = ui.button_with(
+                UiButton {
+                    text_binding: Some(Binding::State(key.clone())),
+                    action: Some(emit(CYCLE_REF, Some(int(r)))),
+                    ..Default::default()
+                },
+                [0.0, ROW_H - 6.0],
+            )?;
+            ids.refs[r] = Some(key);
+            children.push(LayoutChild {
+                width: LayoutSize::Fill(1.0),
+                ..picker
+            });
         }
-        _ => hide_picker(world, j),
+        Control::None | Control::Add(_) => {}
     }
+    for (slot, button) in shape.buttons.iter().enumerate().rev() {
+        if let Some(b) = button {
+            let pressed = ui.button(
+                b.label(),
+                ROW_BUTTON,
+                Some(int(r * ROW_BUTTONS + slot)),
+                [BUTTON_W, ROW_H - 6.0],
+            )?;
+            children.push(LayoutChild {
+                width: LayoutSize::Fixed(BUTTON_W),
+                ..pressed
+            });
+        }
+    }
+    ui.row(children, ROW_H)
 }
 
-fn place_buttons(world: &mut World, view: &PlanetView<'_>, row: &Row, rect: [f32; 4], j: usize) {
-    let mut placed = 0;
-    for (k, button) in row.buttons.iter().flatten().enumerate() {
-        let b = button_rect(rect, k);
-        let tint = if point_in(view.mouse[0], view.mouse[1], b) {
-            theme::HOVER_TINT
-        } else {
-            theme::BUTTON_TINT
+/// Build `rows` into the panel's column, replacing what it held.
+pub(crate) fn build_rows(world: &mut World, panel: &mut BuiltPanel, rows: &[Row]) -> PlanetIds {
+    let mut ids = PlanetIds {
+        shapes: rows.iter().map(shape).collect(),
+        texts: vec![None; rows.len()],
+        refs: vec![None; rows.len()],
+    };
+    let Some(column) = panel.slots.get(COLUMN_SLOT).copied() else {
+        return ids;
+    };
+    let shapes = ids.shapes.clone();
+    crate::editor::ui::rows::rebuild(world, panel, column, |ui| {
+        let mut built = Vec::with_capacity(shapes.len());
+        for (r, s) in shapes.iter().enumerate() {
+            built.push(row(ui, r, s, &mut ids)?);
+        }
+        Some(built)
+    });
+    ids
+}
+
+/// What the panel shows this frame.
+pub(crate) struct PlanetView<'a> {
+    pub rows: &'a [Row],
+    /// Each row's typed text, empty for one with no text field.
+    pub texts: &'a [String],
+    pub focus: Option<usize>,
+    pub status: Option<&'a str>,
+    /// Typed edits are waiting on Apply: the title marks them.
+    pub dirty: bool,
+    pub strip: StripView<'a>,
+}
+
+pub(crate) fn sync(view: &PlanetView<'_>, ids: &PlanetIds, panel: &BuiltPanel, world: &mut World) {
+    let dirty = if view.dirty { " *" } else { "" };
+    state::set_text(world, TITLE, format_args!("Planet{dirty}"));
+    state::set_text(world, STATUS, format_args!("{}", view.status.unwrap_or("")));
+    for (r, id) in ids.texts.iter().enumerate() {
+        let Some(f) = id.and_then(|id| world.get_mut_by_id::<TextField>(id)) else {
+            continue;
         };
-        let id = j * ROW_BUTTONS + k;
-        place_rounded(world, button_bg(id), b, tint, theme::CONTROL_RADIUS, true);
-        let label = button.label();
-        widget::place_center_label(
-            world,
-            button_label(id),
-            center(b),
-            label,
-            theme::LABEL,
-            true,
-        );
-        placed += 1;
+        let text = view.texts.get(r).map_or("", String::as_str);
+        if f.content != text {
+            f.content.clear();
+            f.content.push_str(text);
+            f.caret = text.chars().count();
+        }
+        let focused = view.focus == Some(r);
+        if f.focused != focused {
+            f.focused = focused;
+        }
     }
-    for k in placed..ROW_BUTTONS {
-        widget::set_sprite_visible(world, button_bg(j * ROW_BUTTONS + k), false);
-        widget::set_label_visible(world, button_label(j * ROW_BUTTONS + k), false);
+    for (r, key) in ids.refs.iter().enumerate() {
+        let (Some(key), Some(field)) = (key, view.rows.get(r).and_then(Row::field)) else {
+            continue;
+        };
+        let shown = field
+            .variants
+            .get(field.variant_idx)
+            .map_or(field.initial.as_str(), String::as_str);
+        state::set_text(world, key, format_args!("{shown}"));
+    }
+    if let (Some(&brush), Some(&pick)) = (panel.slots.get(BRUSH_SLOT), panel.slots.get(PICK_SLOT)) {
+        tool_strip::sync(&view.strip, StripIds { brush, pick }, world);
     }
 }
 
-fn hide_picker(world: &mut World, j: usize) {
-    widget::set_sprite_visible(world, picker_bg(j), false);
-    widget::set_label_visible(world, picker_label(j), false);
-}
-
-fn hide_slot(world: &mut World, j: usize) {
-    widget::set_sprite_visible(world, row_bg(j), false);
-    widget::set_label_visible(world, row_label(j), false);
-    hide_picker(world, j);
-    for k in 0..ROW_BUTTONS {
-        widget::set_sprite_visible(world, button_bg(j * ROW_BUTTONS + k), false);
-        widget::set_label_visible(world, button_label(j * ROW_BUTTONS + k), false);
+/// What was typed into the panel's text fields, and which of them holds the
+/// keyboard.
+pub(crate) fn observe(world: &World, ids: &PlanetIds, texts: &mut [String]) -> Option<usize> {
+    let mut focus = None;
+    for (r, id) in ids.texts.iter().enumerate() {
+        let Some(f) = id.and_then(|id| world.get_by_id::<TextField>(id)) else {
+            continue;
+        };
+        if let Some(text) = texts.get_mut(r)
+            && f.content != *text
+        {
+            text.clone_from(&f.content);
+        }
+        if f.focused {
+            focus = Some(r);
+        }
     }
+    focus
 }
 
 #[cfg(test)]

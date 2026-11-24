@@ -50,11 +50,8 @@ impl WindowControl for MtlContext {
         self.window_mut().appkit.set_camera_capture(capture);
     }
 
-    // Turn display sync on or off through the view's backing CAMetalLayer.
-    // Setting displaySyncEnabled is an idempotent property write (no swapchain
-    // rebuild on Metal), so a redundant call is cheap. Vulkan reaches the same
-    // end by rebuilding the swapchain with a different present mode, so this
-    // does not live on the shared window layer.
+    // Turn display sync on or off through the CAMetalLayer, a cheap property
+    // write with no swapchain rebuild.
     fn set_vsync(&mut self, on: bool) {
         super::init::set_display_sync(&self.window().view, on);
     }
@@ -85,5 +82,9 @@ impl WindowControl for MtlContext {
 
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
         Some(self.window_mut().appkit.clipboard())
+    }
+
+    fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        Some(Box::new(crate::appkit::clipboard::SystemClipboard))
     }
 }

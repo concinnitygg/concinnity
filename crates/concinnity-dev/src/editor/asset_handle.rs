@@ -19,11 +19,8 @@ use crate::editor::entry_list::EntryId;
 pub(crate) enum AssetHandle {
     // An authored world.jsonl entry, by its session key.
     Entry(EntryId),
-    // An asset a build-time expansion produced (a `SceneImport`'s props, a
-    // `MainMenu`'s buttons), by the identity that expansion gave it. The
-    // expansion mints it from the entry list, so it survives a rebuild; it
-    // stops resolving when the entry that generated it stops generating it,
-    // which is the same moment the asset itself goes away.
+    // An asset a build-time expansion produced, by the identity it was given;
+    // it stops resolving when the expansion stops producing it.
     Generated(String),
 }
 

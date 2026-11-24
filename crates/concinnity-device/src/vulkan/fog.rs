@@ -75,13 +75,8 @@ pub(in crate::vulkan) struct FogResources {
     pub(in crate::vulkan) _froxel_set_layout: OwnedSetLayout,
     pub(in crate::vulkan) froxel_sets: Vec<vk::DescriptorSet>,
 
-    // Shared 3D RGBA16F volume: written by the compute kernel (GENERAL),
-    // sampled by the fog fragment (SHADER_READ_ONLY). The open
-    // (SHADER_READ_ONLY -> GENERAL) and close (GENERAL -> SHADER_READ_ONLY)
-    // transitions are graph-driven (fog_froxel_volume's FogFroxel producer + Fog
-    // consumer barriers, emitted by the executor); the cross-frame hazard chain
-    // spans submission order on the one queue (same reasoning as the Hi-Z
-    // pyramid).
+    // The 3D RGBA16F froxel volume, written by the compute kernel in GENERAL and
+    // sampled by the fog fragment; the graph drives both transitions.
     pub(in crate::vulkan) volume: PooledImage,
 
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
@@ -286,12 +281,8 @@ impl FogResources {
         })
     }
 
-    // Rebuild the framebuffers + re-point the per-frame view set's depth
-    // binding after a swapchain resize. Called from
-    // `VkContext::rebuild_swapchain`; same pattern as `DecalResources`. The
-    // pipelines, layouts, buffers, the froxel sets, the 3D volume, and the
-    // samplers all survive (the volume is screen-aligned via the per-froxel
-    // reconstruction, not tied to render resolution).
+    // Rebuild the framebuffers and re-point the view set's depth after a resize;
+    // the volume is not tied to render resolution.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkDevice,
@@ -354,11 +345,8 @@ fn alloc_ubo_ring(
 // Render pass / pipeline construction
 
 fn create_fog_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
-    // One color attachment: the resolved HDR scene. The main pass (and
-    // any preceding decal pass) left it in SHADER_READ_ONLY_OPTIMAL; we
-    // want it in COLOR_ATTACHMENT during the subpass and
-    // SHADER_READ_ONLY_OPTIMAL again on exit so SSR / TAA / bloom /
-    // composite can sample it. Mirrors the decal render pass.
+    // The resolved HDR scene as the one attachment, returned to SHADER_READ_ONLY on
+    // exit for the post passes.
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -654,11 +642,8 @@ fn create_fog_pipeline(
 // Encoder
 
 impl VkContext {
-    // Encode the volumetric-fog froxel-volume compute pass. Populates the 3D
-    // `(scattered, 1 - T)` volume the fog fragment shader samples. The shared
-    // graph seeds `PassId::FogFroxel` before `Fog` so the RAW edge orders the
-    // dispatch ahead of the render-pass read. Uploads both per-frame UBOs
-    // (`FogParams` + `FogFroxelParams`) so `encode_fog` only reads them.
+    // Encode the froxel volume compute pass ahead of `Fog`, uploading both
+    // per-frame UBOs so `encode_fog` only binds.
     pub(in crate::vulkan) fn encode_fog_froxel(
         &self,
         rec: &Recorder<'_>,
@@ -671,12 +656,8 @@ impl VkContext {
         fog.params_ubos[frame_idx].write_val(0, &blocks.params);
         fog.froxel_ubos[frame_idx].write_val(0, &blocks.froxel);
 
-        // Both of this pass's transitions are graph-driven. The froxel volume's
-        // SHADER_READ_ONLY -> GENERAL open comes from the FogFroxel producer
-        // barrier, whose source scope also orders the previous frame's fog
-        // fragment read before this write; the shadow map's cascade tap is a
-        // declared read of this pass, so the Shadow consumer barrier's stage union
-        // carries the compute stage.
+        // Both transitions are graph-driven, including the order after last frame's
+        // fog read; the shadow map's compute tap is a declared read.
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &fog.froxel_pipeline);
         rec.bind_descriptor_sets(
             vk::PipelineBindPoint::COMPUTE,
@@ -693,14 +674,8 @@ impl VkContext {
         // is ordered against it.
     }
 
-    // Encode the volumetric-fog pass. Samples the 3D froxel volume the
-    // `FogFroxel` compute pass populated this frame. Caller has already ended
-    // the main HDR resolve and the projected-decal pass (if any), so
-    // `depth_images[frame_idx]` holds the scene depth and
-    // `hdr_resolve_images[frame_idx]` holds the resolved scene + decal color
-    // in SHADER_READ_ONLY_OPTIMAL. Alpha-blends `(scattered, 1 - T)` over the
-    // resolved HDR target. `FogParams` / `FogFroxelParams` were uploaded by
-    // `encode_fog_froxel` for this frame's slot, so this pass only binds.
+    // Encode the fog pass: alpha-blend the froxel volume's `(scattered, 1 - T)`
+    // over the resolved HDR scene, using the UBOs `encode_fog_froxel` uploaded.
     pub(in crate::vulkan) fn encode_fog(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(fog) = &self.fog.resources else {
             return;

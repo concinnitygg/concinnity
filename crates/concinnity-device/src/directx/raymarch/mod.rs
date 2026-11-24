@@ -44,7 +44,6 @@ use concinnity_engine::gfx::render_types::LightUniforms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::SdfVolumeSource;
 use concinnity_engine::render::sdf::programs::SdfPrograms;
-use concinnity_engine::render::sdf::volume::SdfVolume;
 use concinnity_engine::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -52,7 +51,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported so `crate::directx::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
-// stay the paths the encode and `volume_uniforms_from` sites use.
+// stay the paths the encode sites use.
 pub(in crate::directx) use concinnity_engine::render::uniforms::{
     RaymarchView, RaymarchVolumeUniforms,
 };
@@ -78,20 +77,6 @@ use crate::shader::raymarch_source::{face_artifacts, family_artifacts};
 
 mod swap;
 
-fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
-    RaymarchVolumeUniforms {
-        center: v.center,
-        _pad0: 0.0,
-        extent: v.extent,
-        _pad1: 0.0,
-        cone_ratio: v.cone_ratio(),
-        max_distance: v.max_distance,
-        max_steps: i32::saturating_from(v.max_steps),
-        receive_shadows: i32::from(v.receive_shadows),
-        params: v.params,
-    }
-}
-
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static
 // per-volume cbuffer (uploaded once at init) and the optional
 // shadow-cast PSO.
@@ -106,11 +91,7 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     pub(in crate::directx) pso: ID3D12PipelineState,
     // The surface's front-face PSO; `None` for a medium.
     pub(in crate::directx) front_pso: Option<ID3D12PipelineState>,
-    // Depth-only shadow PSO. `Some` when the asset's `cast_shadows`
-    // is true at init; the shadow encoder iterates only the records
-    // where this is `Some` AND `visible` AND `cast_shadows` (the
-    // runtime flag, currently can't toggle, but the field is
-    // preserved for future runtime mutation).
+    // Depth-only shadow PSO, `Some` when the asset casts shadows.
     pub(in crate::directx) shadow_pso: Option<ID3D12PipelineState>,
     // The surface's G-buffer pre-pass PSOs; `None` for a medium.
     pub(in crate::directx) prepass_psos: Option<FacePsos>,
@@ -221,13 +202,8 @@ pub(in crate::directx) struct RaymarchResources {
         reason = "holds the scene_color slot open during init; the live SRV is re-pointed before the first frame"
     )]
     scene_color_fallback: PooledTexture,
-    // Pre-raymarch HDR scene snapshot. At the top of `encode_raymarch` we
-    // `CopyResource` from `hdr_resolve` (or `hdr_color` when MSAA is off) into
-    // this resource, so refractive user shaders that sample `scene_color`
-    // through `sampleSceneRefracted` see the scene as it stood after Main +
-    // AutoExposure but before raymarch itself writes / decals / fog /
-    // particles. Sized to render dims; recreated by `resize_to` on window
-    // resize.
+    // The scene as it stood before this pass, copied from the spine at the top of
+    // `encode_raymarch` for refractive shaders. Sized to render dims.
     hdr_resolve_copy: ID3D12Resource,
     // CPU descriptor handle of the `scene_color` SRV slot, captured
     // at init so `resize_to` can rewrite the descriptor in place after
@@ -246,14 +222,10 @@ pub(in crate::directx) struct RaymarchResources {
     pub(in crate::directx) volumes: Vec<RaymarchVolumeRecord>,
 }
 
-// Root signature shared by every per-volume raymarch PSO.
-//
-//   [0] CBV (RaymarchView)               : root descriptor
-//   [1] CBV (SdfVolumeUniforms)          : root descriptor
-//   [2] CBV (RaymarchLights)             : root descriptor
-//   [3] CBV (RaymarchShadowUniforms)     : root descriptor
-//   [4] Descriptor table SRV             : shadow / IBL / scene fallback
-//   [5] Descriptor table Sampler         : shadow_samp / cube_samp / scene_samp
+// Root signature shared by every per-volume raymarch PSO:
+//   [0] CBV RaymarchView, [1] CBV SdfVolumeUniforms, [2] CBV RaymarchLights,
+//   [3] CBV RaymarchShadowUniforms, [4] SRV table (shadow / IBL / scene),
+//   [5] sampler table (shadow / cube / scene).
 fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
     use concinnity_engine::render::shader::programs::abi::raymarch::dx as raymarch;
@@ -281,12 +253,8 @@ fn create_raymarch_pso(
     msaa_samples: u32,
 ) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
-    // Hardware z-test against the existing MSAA main depth, and write
-    // hit depth back as conservative depth so downstream
-    // depth-sampling passes (decals, fog, SSR) see the raymarched
-    // surface. Renders into the MSAA `hdr_color` target so the depth
-    // sample-count matches; the encoder re-resolves `hdr_color →
-    // hdr_resolve` after the pass.
+    // Depth-tested against the main depth, writing hit depth as conservative depth
+    // for decals, fog and SSR, into the MSAA `hdr_color`.
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&input_layout)
         .target(HDR_FORMAT, Blend::Opaque)
@@ -327,11 +295,8 @@ fn compile_volume_pso(
     create_raymarch_pso(t.device, t.root_sig, &vs, &ps, faces, t.msaa_samples)
 }
 
-// Volumetric variant of the raymarch PSO: same root signature + same
-// vertex layout (cube proxy back faces), but the color output
-// alpha-blends over the existing scene and the depth stencil keeps
-// early-z through the read-only camera test: volumetrics are
-// translucent and never update the depth buffer.
+// The volumetric variant: alpha-blended, depth-tested without writing, since
+// the medium is translucent.
 fn create_raymarch_volumetric_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -433,15 +398,9 @@ fn compile_volume_volumetric_pso(
     create_raymarch_volumetric_pso(device, root_sig, &vs, &ps, msaa_samples)
 }
 
-// Root signature for the depth-only shadow PSO. Smaller surface than
-// the main pass: no SRV / sampler tables since the shadow template
-// only marches the SDF and writes depth.
-//
-//   [0] CBV (RaymarchView)               : root descriptor
-//   [1] CBV (SdfVolumeUniforms)          : root descriptor
-//   [2] CBV (RaymarchLights)             : root descriptor
-//   [3] CBV (RaymarchShadowUniforms)     : root descriptor
-//   [4] Root constants (cascade_idx)     : 4 DWORDs
+// Root signature for the depth-only shadow PSO: [0]-[3] the CBVs of
+// `create_raymarch_root_signature`, [4] `cascade_idx` as 4 root-constant
+// DWORDs; no tables.
 fn create_raymarch_shadow_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -460,12 +419,8 @@ fn create_raymarch_shadow_root_signature(
         .build(device, "raymarch shadow root sig")
 }
 
-// Build the depth-only shadow PSO for one volume. No RTV, no MSAA
-// (shadow map is single-sample), front-face cull so back-face
-// fragments produce rays through the bbox. Writes hit depth through the
-// conservative-depth semantic; the writable shadow DSV at draw time supplies
-// the comparison. Format matches the existing `create_shadow_pso`:
-// D32_FLOAT, sample count 1.
+// The depth-only shadow PSO: single-sample D32_FLOAT, front-face culled, hit
+// depth written as conservative depth.
 fn create_raymarch_shadow_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -606,11 +561,8 @@ pub(in crate::directx) fn build_volume_psos(
     })
 }
 
-// Build the shared unit-cube proxy geometry. 8 corners at ±1; 36 CCW
-// indices.
-// The vertex shader scales positions by `vol_extent` to land at the
-// AABB corners, matching the asset semantic where `extent` is the
-// half-widths.
+// The shared unit-cube proxy (8 corners at ±1, 36 CCW indices), scaled by
+// `vol_extent` in the vertex shader.
 fn build_cube_buffers(
     alloc: &DeviceAllocator,
 ) -> RenderResult<(
@@ -690,19 +642,9 @@ fn v(pos: [f32; 3]) -> Vertex {
     }
 }
 
-// Write the 4-SRV descriptor table for the raymarch pass into the SRV
-// heap, starting at `base_slot`. The slots are:
-//   [+0] shadow_map  (Texture2DArray<float>)
-//   [+1] irradiance  (TextureCube<float4>)
-//   [+2] prefilter   (TextureCube<float4>)
-//   [+3] scene_color (Texture2D<float4>, written separately by
-//                     `write_scene_color_srv` so resize can re-point
-//                     just this slot)
-//
-// The shadow / IBL descriptors duplicate views the engine already binds
-// elsewhere (slots 0 / 1 / 2 of the SRV heap); we re-write them here so
-// the raymarch root sig can bind a single contiguous descriptor table
-// without multi-range offset trickery.
+// Write the raymarch SRV table at `base_slot`: shadow map, irradiance,
+// prefilter, then scene color (rewritten alone on resize). The first three
+// duplicate global views so the root signature binds one contiguous table.
 fn write_raymarch_srvs(
     device: &ID3D12Device,
     shadow_resource: Option<&ID3D12Resource>,
@@ -792,11 +734,8 @@ fn write_scene_color_srv(
     unsafe { device.CreateShaderResourceView(scene_resource, Some(&raw const desc), srv_cpu) };
 }
 
-// Write the 3-sampler descriptor table for the raymarch pass into the
-// sampler heap, starting at `base_slot`. The slots are:
-//   [+0] shadow_samp (shadow comparison sampler)
-//   [+1] cube_samp   (linear-clamp + mip linear, for IBL cubes)
-//   [+2] scene_samp  (linear-clamp, for the scene_color tap)
+// Write the raymarch sampler table at `base_slot`: shadow compare, cube
+// linear, scene linear-clamp.
 fn write_raymarch_samplers(
     device: &ID3D12Device,
     base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -959,11 +898,7 @@ impl RaymarchResources {
         // slot away from the snapshot).
         let scene_color_fallback = create_fallback_white_resource(alloc)?;
 
-        // Pre-raymarch HDR scene snapshot; `encode_raymarch` copies
-        // `hdr_resolve` / `hdr_color` into this resource on a frame some
-        // visible volume taps the scene. Sized to render dims; created in
-        // PIXEL_SHADER_RESOURCE, which is where it rests between copies and
-        // where a frame that skips the copy leaves it.
+        // The scene snapshot, resting in PIXEL_SHADER_RESOURCE between copies.
         let hdr_resolve_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
 
         // Build per-volume records. Any failure here aborts init: a compile
@@ -997,7 +932,7 @@ impl RaymarchResources {
             )?;
             // Per-volume cbuffer (static: `center`, `extent`,
             // `params` don't change frame-to-frame).
-            let uniforms = volume_uniforms_from(vol);
+            let uniforms = RaymarchVolumeUniforms::from(vol);
             let cb_size = align256(size_of::<RaymarchVolumeUniforms>() as u64);
             let cb = alloc.alloc_buffer(
                 cb_size,
@@ -1084,11 +1019,7 @@ impl RaymarchResources {
         }))
     }
 
-    // Recreate the HDR scene snapshot at new render-target dimensions
-    // and rewrite the `scene_color` SRV descriptor in place. Called
-    // from the swapchain-resize handler. The descriptor *slot* itself
-    // doesn't move; the live raymarch root-table binding (which holds
-    // the GPU handle) stays valid without a re-bind.
+    // Recreate the snapshot at new dims and rewrite its SRV in the same slot.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -1122,21 +1053,15 @@ impl RaymarchResources {
     }
 }
 
-// Pointer drops in the resources struct are POD-style raw pointers; the
-// underlying mapped upload buffers stay alive through the `Vec<ID3D12Resource>`
-// fields, and the pointers are read on the render thread only.
+// The mapped ring pointers stay alive with their buffers and are read on the
+// render thread only.
 // SAFETY: sharing `&RaymarchResources` hands out the pointer values but no way to dereference them;
 // every write goes through a `&mut self` method on the context.
 unsafe impl Sync for RaymarchResources {}
 
 impl DxContext {
-    // Encode the raymarched SDF volume pass onto `cmd`. Called from the
-    // render graph executor for `PassId::Raymarch`. Assumes the main
-    // HDR target was resolved into `hdr_resolve` by the Main pass and
-    // that resolve sits in `PIXEL_SHADER_RESOURCE` state (the post-
-    // Main pipeline contract). Restores the same state at the end so
-    // Decals + Fog + SSR / TAA / Bloom continue to see the resolve as
-    // a sampler input.
+    // Encode the raymarch pass; the spine enters and leaves in the graph's resting
+    // state.
     pub(in crate::directx) fn encode_raymarch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1170,37 +1095,14 @@ impl DxContext {
         let light_gva = com::gpu_va(&self.uniforms.light_ubo_resources[frame_idx]);
         let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
-        // State entering this pass (post-Main, post-AutoExposure):
-        //   * hdr_color (MSAA):  RENDER_TARGET  (the Main pass resolved
-        //                        into hdr_resolve and restored hdr_color
-        //                        back to RENDER_TARGET; see the resolve
-        //                        block in `directx/draw/main.rs`).
-        //   * hdr_color (no MSAA): PIXEL_SHADER_RESOURCE.
-        //   * hdr_resolve:       PIXEL_SHADER_RESOURCE  (AutoExposure
-        //                        sampled it; only present when MSAA on).
-        //   * depth.resource:    DEPTH_WRITE.
-        //
-        // We snapshot the single-sample scene for the refraction SRV,
-        // then render the raymarch into the MSAA `hdr_color` target
-        // with the writable MSAA DSV bound. After the draws we
-        // re-resolve hdr_color → hdr_resolve so all downstream
-        // single-sample post-stack passes (Decals, Fog, SsrResolve,
-        // TaaResolve, Bloom, Composite) pick up the raymarched
-        // color AND the raymarched-surface depth (which flowed into
-        // `depth.resource` as conservative depth). The MSAA-off path
-        // skips the resolve and renders into hdr_color directly.
+        // Render into the MSAA `hdr_color` with the writable depth, then re-resolve
+        // into `hdr_resolve` so later passes see the raymarched color and depth.
+        // Without MSAA the spine is `hdr_color` itself.
         let msaa = self.targets.hdr.resolve.is_some();
 
-        // Pre-pass: snapshot the scene spine into `hdr_resolve_copy` for
-        // refractive user shaders. A fragment cannot read the attachment it is
-        // writing, so the copy and its restore both live inside this node and
-        // leave no net state at the boundary. The spine is graph-driven and
-        // enters in RENDER_TARGET (this pass declares its read-modify-write).
-        //
-        // The copy feeds the scene tap and nothing else, so a frame whose
-        // visible volumes never call it skips the copy and all four
-        // transitions; `hdr_resolve_copy` stays rested in PIXEL_SHADER_RESOURCE
-        // where its SRV expects it, holding an earlier frame nothing reads.
+        // Snapshot the spine for refractive shaders; the copy and its restore stay
+        // inside this pass. A frame whose visible volumes never sample the scene skips
+        // the copy entirely.
         if rm.any_refractive_drawn(frustum) {
             let snapshot_src_to_copy = transition_barrier(
                 self.hdr_scene_target(),
@@ -1296,16 +1198,7 @@ impl DxContext {
             self.inc_draw_calls(1);
         }
 
-        // Post-pass.
-        //
-        // MSAA path: re-resolve hdr_color → hdr_resolve so downstream
-        // single-sample readers see the composited scene + raymarched
-        // pixels. Both targets return to RENDER_TARGET, the state the
-        // graph rests them in for the rest of the decoration chain; the
-        // resolve step's own transitions are finer than the graph models.
-        //
-        // MSAA-off path: hdr_color *is* the single-sample spine and the
-        // draws above already wrote it, so there is nothing to resolve.
+        // With MSAA, re-resolve into the spine; both targets return to RENDER_TARGET.
         if msaa {
             let hdr_color_to_resolve_src = transition_barrier(
                 &self.targets.hdr.color,
@@ -1350,13 +1243,8 @@ impl DxContext {
 }
 
 impl DxContext {
-    // Draw every visible surface volume into the G-buffer pre-pass, whose
-    // targets the caller has bound, after the rasterized surfaces and before
-    // the sky: the march writes normal, depth, roughness and motion under the
-    // same depth test, so volumes and meshes occlude each other there as they
-    // do in the frame. The volumes march from the camera `prepass` rasterizes
-    // through and reproject through `gbuffer`. Leaves the root signature for the
-    // next draw to set.
+    // Draw every visible surface volume into the G-buffer pre-pass the caller
+    // bound, under the same depth test as the meshes.
     pub(in crate::directx) fn encode_raymarch_prepass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1454,23 +1342,11 @@ impl RaymarchResources {
 }
 
 impl DxContext {
-    // Encode the raymarched SDF shadow casters into the existing CSM
-    // shadow DSVs, right before `encode_shadow_pass` transitions the
-    // shadow map array to `PIXEL_SHADER_RESOURCE`. One draw per visible
-    // caster per cascade; the proxy unit cube rasterizes through the
-    // cascade's light VP (its back faces give one fragment per texel
-    // inside the box), the depth-only fragment
-    // marches the SDF, and writes the hit's NDC.z through the
-    // conservative-depth semantic, so the cascade DSV's write test keeps
-    // only the caster nearest the light between rasterized and raymarched.
-    //
-    // Uploads `view` into the same per-frame cbuffer ring
-    // `encode_raymarch` uses. Bytes for the same frame_idx are written
-    // twice (once here, once by `encode_raymarch` later in the frame);
-    // both writes are byte-identical when the caller passes the same
-    // view, and the shadow march only reads `view_time` so even if the
-    // later write differs in fields the shadow path ignores, behavior
-    // is unchanged.
+    // Draw the SDF shadow casters into the cascade DSVs before the shadow map is
+    // transitioned for sampling: one draw per visible caster per cascade, keeping
+    // the caster nearest the light by depth test. Uploads `view` into the same
+    // ring `encode_raymarch` writes later this frame; the shadow march reads only
+    // `view_time`.
     pub(in crate::directx) fn encode_sdf_shadow_casters(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1529,10 +1405,7 @@ impl DxContext {
         // SAFETY: the list is recording, and the scissor slice is a live local.
         unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
-        // Shared cbuffers (view (b0), lights (b2), shadow (b3)) stay
-        // bound across all cascades and all volumes. Volume cbuffer
-        // (b1) + cascade root constant (b4) + PSO get updated inside
-        // the loop.
+        // The view, lights and shadow CBVs stay bound across the loop.
         // SAFETY: the signature declares the view CBV at 0, and the shared view ring is live.
         unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
         // SAFETY: the signature declares the light CBV at 2, and this frame's lights are live.

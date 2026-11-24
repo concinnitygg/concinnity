@@ -33,13 +33,8 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderRes
     })
 }
 
-// Render-graph transient texture pool: `ao_output` (SSAO's blurred
-// occlusion), `bloom_top` (the bloom chain's top octave, half output
-// resolution), and the G-buffer pre-pass's normal+depth / roughness / velocity
-// channels, planned for every feature a settings change can turn on so a
-// toggle never repacks it. The planner packs whichever of them have disjoint
-// lifetimes onto shared heap slots. The bloom chain, the composite and the
-// pre-pass read their targets back out of it by label.
+// The graph's transient pool (`ao_output`, `bloom_top`, the G-buffer channels),
+// planned for every toggleable feature so a toggle never repacks it.
 fn build_transient_pool(
     device: &ProtocolObject<dyn MTLDevice>,
     render: (u32, u32),

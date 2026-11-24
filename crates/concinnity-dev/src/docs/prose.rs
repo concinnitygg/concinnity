@@ -22,7 +22,7 @@ pub(super) fn first_paragraph(doc: &str) -> String {
 }
 
 // Drop ```rust blocks. They are for the Rust caller reading `concinnity::components`;
-// this reference is for the world.jsonl author, who is never shown a Rust name.
+// this reference is for the .jsonl file author, who is never shown a Rust name.
 pub(super) fn strip_rust_blocks(doc: &str) -> String {
     let mut out = String::new();
     let mut in_rust = false;
@@ -45,7 +45,7 @@ pub(super) fn strip_rust_blocks(doc: &str) -> String {
 }
 
 // Rewrite each ```json block that holds a world entry as the line the world
-// file takes, so an example copies into world.jsonl as it stands. The source
+// file takes, so an example copies into a .jsonl file as it stands. The source
 // may spread the entry over several lines for rustdoc; the page shows the
 // writer's compact form. A block that is not an entry is left as written.
 pub(super) fn entry_examples_as_lines(doc: &str) -> String {

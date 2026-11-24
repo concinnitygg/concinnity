@@ -44,7 +44,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: &assets,
         };
         let payload = VoxelChunk::compile_payload(&args(), &ctx).expect("chunk compiles");
@@ -63,7 +63,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: &assets,
         };
         let err = VoxelChunk::compile_payload(&args(), &ctx).unwrap_err();
@@ -82,7 +82,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: &[],
         };
         let err = VoxelChunk::compile_payload(&serde_json::json!({}), &ctx).unwrap_err();

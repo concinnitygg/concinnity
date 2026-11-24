@@ -46,7 +46,10 @@ pub fn validate_story_source(src: &str) -> Result<(), String> {
 // source expands to. Generated names are prefixed with the import's (unique)
 // asset name, so they never collide with hand-authored assets; a collision is
 // a hard error, as is any parse or graph-validation failure in the source.
-pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
+pub(crate) fn expand_stories(
+    assets: &mut Vec<serde_json::Value>,
+    root: Option<&std::path::Path>,
+) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::StoryImport))
@@ -82,13 +85,15 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             ));
         }
 
-        let content = std::fs::read_to_string(&source).map_err(|e| {
-            Diagnostic::asset(
-                "StoryImport",
-                &import_name,
-                format!("cannot read '{source}': {e}"),
-            )
-        })?;
+        let content =
+            std::fs::read_to_string(concinnity_host::store::source::resolve(&source, root))
+                .map_err(|e| {
+                    Diagnostic::asset(
+                        "StoryImport",
+                        &import_name,
+                        format!("cannot read '{source}': {e}"),
+                    )
+                })?;
         let story = parse_story(&content).map_err(|e| {
             Diagnostic::asset("StoryImport", &import_name, format!("{source}: {e}"))
         })?;

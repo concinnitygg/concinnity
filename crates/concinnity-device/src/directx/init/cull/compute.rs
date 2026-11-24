@@ -50,12 +50,8 @@ pub(super) struct ComputeInputs<'a> {
     pub(super) targets: &'a Targets,
 }
 
-// Commands a default-heap indirect-command buffer holds (UAV target for the
-// cull's packing; ExecuteIndirect source for the bindless static pass): one
-// region per shader bucket, of the records it can take, each holding its
-// stream's list from its start. The lists' counts follow (see
-// `compact::indirect_buffer_bytes`), and the main pass issues one
-// `ExecuteIndirect` per list under that bucket's pipeline.
+// Commands in an indirect buffer: one region per shader bucket, each holding
+// its stream's list, followed by the counts (`compact::indirect_buffer_bytes`).
 pub(super) fn indirect_commands(variants: &render_types::GpuCullVariants, buckets: usize) -> usize {
     render_types::region_commands(&variants.regions, buckets)
 }
@@ -186,11 +182,8 @@ pub(super) fn build_compute_cull(
     })
 }
 
-// Hi-Z pyramid. Built under the same condition as the cull pipeline. The
-// resource owns its descriptors at the reserved Hi-Z heap slots; when the
-// gating condition fails the slots stay empty and the cull kernel's
-// `hiz_enabled` flag stays zero so it never samples them. The init kernel
-// reads the main-depth SRV the render targets wrote.
+// The Hi-Z pyramid, built with the cull pipeline in its reserved slots. Without
+// it the cull's `hiz_enabled` stays zero.
 fn build_hiz(
     gpu: &InitGpu<'_>,
     descriptors: &Descriptors,

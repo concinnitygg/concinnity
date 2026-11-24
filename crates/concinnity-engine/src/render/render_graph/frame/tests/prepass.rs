@@ -17,11 +17,8 @@ fn ssao_orders_before_main_via_ao_output() {
 
 #[test]
 fn ao_output_barriers_are_graph_driven() {
-    // The DirectX + Vulkan executors emit `ao_output`'s transitions from
-    // these barriers (resolving them to RENDER_TARGET / COLOR_ATTACHMENT on
-    // SsaoBlur and back to the sampled state on Main). Pin the exact pair
-    // so the executor's stripped inline / render-pass-baked transitions
-    // stay matched to what the graph derives.
+    // Executors emit `ao_output`'s transitions from these barriers, so pin the
+    // exact pair.
     use crate::render::render_graph::ResourceState;
     let mut i = all_off();
     i.ssao_enabled = true;
@@ -41,15 +38,9 @@ fn ao_output_barriers_are_graph_driven() {
 
 #[test]
 fn shadow_map_barriers_are_graph_driven() {
-    // The executors emit `shadow_map`'s transitions from these barriers. The
-    // graph derives the producer (Undefined -> Write) + the Main consumer
-    // (Write -> Read); each backend resolves the producer against the
-    // resource's resting state. DirectX rests it sampled, so the producer is
-    // the real PIXEL_SHADER_RESOURCE -> DEPTH_WRITE cross-frame reset (folded
-    // off the old inline restore); Main's consumer replaces the encoder's
-    // stripped sampled transition. With SSAO also on, Main carries both
-    // shadow_map and ao_output barriers, exercising multi-resource emission
-    // in one pass.
+    // Executors emit `shadow_map`'s transitions from these barriers: the
+    // producer resolved against its resting state and Main's consumer. With
+    // SSAO on, Main carries two barriers.
     use crate::render::render_graph::ResourceState;
     let mut i = all_off();
     i.shadow_enabled = true;
@@ -78,13 +69,8 @@ fn shadow_map_barriers_are_graph_driven() {
 
 #[test]
 fn fog_froxel_volume_barriers_are_graph_driven() {
-    // The executors emit `fog_froxel_volume`'s transitions from these
-    // barriers. FogFroxel's producer (Undefined -> Write) is the compute
-    // write, a real sampled -> storage open on both backends now: DirectX
-    // resolves it to PIXEL_SHADER_RESOURCE -> UNORDERED_ACCESS, Vulkan to
-    // SHADER_READ_ONLY -> GENERAL (both rest the volume sampled, with no
-    // inline reset). Fog's consumer (Write -> Read) is the storage-write ->
-    // sampled close the fragment reads through.
+    // Executors emit `fog_froxel_volume`'s transitions from these barriers: the
+    // compute write's open and the fragment read's close.
     use crate::render::render_graph::ResourceState;
     let mut i = all_off();
     i.fog_enabled = true;

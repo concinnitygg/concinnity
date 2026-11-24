@@ -1,13 +1,6 @@
-// Length-delimited postcard decoding.
-//
-// Every decode the runtime performs on blob bytes reads a frame whose length
-// the container already recorded: the header's `meta_len` for the metadata
-// block, the length prefix serde_bytes writes on a def's `args_bytes`, the same
-// on a resource record's `data_bytes`. postcard is positional and stops as soon
-// as the target type is satisfied, so a frame holding more bytes than the type
-// reads decodes without complaint. Requiring the frame to be consumed exactly
-// turns a type that lost a field since the blob was written into a load error
-// instead of a silent partial decode.
+// Length-delimited postcard decoding: every blob frame's length is recorded, so
+// requiring it to be consumed exactly turns a type that lost a field into a
+// load error rather than a silent partial decode.
 
 use serde::Deserialize;
 use thiserror::Error;

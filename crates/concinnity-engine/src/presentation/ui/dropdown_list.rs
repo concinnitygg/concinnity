@@ -17,19 +17,12 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::platform::CompiledPlatforms;
 
-// A settings dropdown whose floating option list is open. Owned by
-// UiInputSystem: while set, the list overlays the menu and consumes the frame's
-// input (a pick sends a SetIndex command; an outside click or Escape dismisses
-// it; the wheel scrolls a list longer than the shown window). Published each
-// frame as an `OpenDropdown` resource so the renderer can draw the list. The
-// style fields mirror the row's value label so the list text matches it.
+// A settings dropdown whose option list is open, consuming the frame's input
+// and published as `OpenDropdown` for the renderer.
 #[derive(Debug)]
 pub(super) struct OpenDropdownState {
     // The setting the list picks a value for.
     pub(super) setting: SettingKey,
-    // The row's value label, forwarded on the pick so the renderer refreshes
-    // it.
-    pub(super) value_label: Option<AssetId>,
     // The control button's rect `[x, y, w, h]` the list anchors to (reference
     // space for a screen-owned row, window pixels otherwise).
     pub(super) anchor: [f32; 4],
@@ -100,14 +93,9 @@ impl DropdownPulses {
 }
 
 impl UiInputSystem {
-    // Advance an open dropdown for one frame: track the option under the
-    // cursor, and on a click pick it (a SetIndex command) or dismiss (a click
-    // outside the list); Escape / back also dismiss. Nav pulses move the
-    // selection highlight and confirm picks it, sharing the hover slot with
-    // the cursor (whichever moved last wins). The wheel and a scrollbar-thumb
-    // drag scroll the shown window of a list longer than
-    // `dropdown::MAX_VISIBLE` (never dismissing). Clears `open_dropdown` when
-    // the list closes.
+    // Advance an open dropdown one frame: hover, click to pick or dismiss,
+    // navigation, and scrolling a list longer than `dropdown::MAX_VISIBLE`.
+    // Clears `open_dropdown` when it closes.
     pub(super) fn step_open_dropdown(
         &mut self,
         input: &FrameInput,
@@ -124,14 +112,12 @@ impl UiInputSystem {
             return;
         };
         let count = state.options.len();
-        // Screen-owned rows hit-test in reference space; a screen-less row in window
-        // pixels (matches the region hit-test in `step`).
+        // Rows on the reference canvas hit-test in reference space, others in
+        // window pixels (matches the region hit-test in `step`).
         let overlay = OverlayTransform::from_viewport(input.viewport);
-        let (qx, qy) = if state.screen.is_some() {
-            overlay.inverse(input.mouse_x, input.mouse_y)
-        } else {
-            (input.mouse_x, input.mouse_y)
-        };
+        let (qx, qy) = self
+            .screens
+            .cursor(state.screen, &overlay, input.mouse_x, input.mouse_y);
         let max = dropdown::max_first(count) as f32;
         // Wheel: scroll the shown window (same feel as the settings panel:
         // wheel distance in pixels, converted to rows by the row height).
@@ -208,12 +194,10 @@ impl UiInputSystem {
         if confirm {
             let pick = state.hovered.unwrap_or(state.selected);
             let setting = state.setting;
-            let value_label = state.value_label;
             self.open_dropdown = None;
             ctx.events_mut::<SettingCommand>().send(SettingCommand {
                 setting,
                 op: SettingOp::SetIndex(pick),
-                value_label,
                 persist: true,
             });
             return;
@@ -223,12 +207,10 @@ impl UiInputSystem {
                 // Pick the hovered option: send the absolute index, then close.
                 Some(i) => {
                     let setting = state.setting;
-                    let value_label = state.value_label;
                     self.open_dropdown = None;
                     ctx.events_mut::<SettingCommand>().send(SettingCommand {
                         setting,
                         op: SettingOp::SetIndex(i),
-                        value_label,
                         persist: true,
                     });
                 }
@@ -239,11 +221,9 @@ impl UiInputSystem {
         }
     }
 
-    // Resolve a captured dropdown-row click into an open list: read the option
-    // labels from the shared registry (or, for a runtime-enumerated setting
-    // like `resolution`, from the resource its owner publishes) and the current
-    // value from the row's value label to seed the selection. Returns `None`
-    // (stays closed) when the setting has no options to offer.
+    // Open a list for a dropdown-row click, seeded from the registry or the
+    // setting's published options and the row's current value. `None` with no
+    // options.
     pub(super) fn build_open_dropdown(
         req: &OpenRequest,
         ctx: &PipelineContext<'_>,
@@ -283,7 +263,6 @@ impl UiInputSystem {
         let selected = options.iter().position(|o| *o == current).unwrap_or(0);
         Some(OpenDropdownState {
             setting: req.setting,
-            value_label: req.value_label,
             anchor: req.anchor,
             // Open with the selection near the middle of a scrolled window.
             scroll_rows: dropdown::first_for_selected(selected, options.len()) as f32,
@@ -298,11 +277,8 @@ impl UiInputSystem {
         })
     }
 
-    // Publish the current dropdown state as an `OpenDropdown` resource for
-    // the renderer to draw next tick (`None` while closed). The published
-    // view is updated in place: the option labels only change when a list
-    // opens, so the steady-state frames of an open list refresh the cheap
-    // fields without recloning the options.
+    // Publish the dropdown state as `OpenDropdown`, updating the cheap fields
+    // in place while the list stays open.
     pub(super) fn publish_dropdown(&self, ctx: &mut PipelineContext<'_>) {
         let mut published = ctx.take_resource::<OpenDropdown>().unwrap_or_default();
         match &self.open_dropdown {

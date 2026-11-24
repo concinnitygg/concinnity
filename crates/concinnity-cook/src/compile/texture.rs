@@ -46,11 +46,9 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
 // with the mip chain an RGBA8 image minifies through.
 pub(crate) fn compile_texture_payload(
     args: &serde_json::Value,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<Vec<u8>, CompileError> {
-    Ok(serialize(
-        &texture_image(args, assets_dir)?.with_mip_chain(),
-    ))
+    Ok(serialize(&texture_image(args, root)?.with_mip_chain()))
 }
 
 // A Texture's args decoded to RGBA8 pixels: (width, height, pixels). For the
@@ -58,9 +56,9 @@ pub(crate) fn compile_texture_payload(
 // the GPU; a block-compressed source has none to read and is refused.
 pub(crate) fn texture_rgba8(
     args: &serde_json::Value,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<(u32, u32, Vec<u8>), CompileError> {
-    texture_image(args, assets_dir)?
+    texture_image(args, root)?
         .into_rgba8()
         .map_err(CompileError::from)
 }
@@ -68,7 +66,7 @@ pub(crate) fn texture_rgba8(
 // The image a Texture's args describe, before it is tagged into a payload.
 fn texture_image(
     args: &serde_json::Value,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<TextureImage, CompileError> {
     let tex: Texture = Deserialize::deserialize(args)
         .map_err(|e| CompileError::Invalid(format!("Texture: invalid args: {e}")))?;
@@ -106,7 +104,7 @@ fn texture_image(
                     "file-backed Texture requires a `source` path".to_string(),
                 ));
             }
-            compile_image_source(&tex.source, tex.image_index, tex.max_size, assets_dir)?
+            compile_image_source(&tex.source, tex.image_index, tex.max_size, root)?
         }
         other => {
             return Err(CompileError::Invalid(format!(
@@ -120,29 +118,31 @@ fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
     TextureImage::rgba8(width, height, pixels)
 }
 
-// Compile a file-backed texture source into a tagged image. KTX2 and DDS keep
-// their block-compressed mip chains; everything else decodes to RGBA8.
+// Compile a file-backed texture source, read under `root`, into a tagged image.
+// KTX2 and DDS keep their block-compressed mip chains; everything else decodes
+// to RGBA8.
 fn compile_image_source(
     source: &str,
     image_index: u32,
     max_size: u32,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<TextureImage, CompileError> {
     let lower = source.to_lowercase();
+    let path = concinnity_host::store::source::resolve(source, root);
     let image = if Path::new(&lower)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("ktx2"))
     {
-        let bytes = read_source(source, "KTX2 texture")?;
+        let bytes = read_source(&path.to_string_lossy(), "KTX2 texture")?;
         crate::codec::ktx2::compile_ktx2(&bytes)
             .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?
     } else if Path::new(&lower)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("dds"))
     {
-        compile_dds_source(source, max_size)?
+        compile_dds_source(&path.to_string_lossy(), max_size)?
     } else {
-        let (w, h, px) = decode_source(source, image_index, assets_dir)?;
+        let (w, h, px) = decode_source(source, image_index, root)?;
         TextureImage::rgba8(w, h, px)
     };
     Ok(cap_image(image, max_size))
@@ -212,9 +212,8 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 /// Dispatches on the lower-cased extension: an image embedded in a `.glb`, a
 /// `.jpg` / `.jpeg`, a `.dds`, a `.ktx2`, a `.tga`, or a PNG (the default).
 /// The single dispatch behind both the compiled payload and a re-decode of an
-/// edited file, so a texture that builds also reloads. Only a `.glb` / `.gltf`
-/// source is searched for under `assets_dir`; the flat image formats read the
-/// path the world declared.
+/// edited file, so a texture that builds also reloads. The source is read
+/// under `root`.
 ///
 /// # Errors
 ///
@@ -223,7 +222,7 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 pub fn decode_source(
     source: &str,
     image_index: u32,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let lower = source.to_lowercase();
     if Path::new(&lower)
@@ -233,8 +232,11 @@ pub fn decode_source(
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
     {
-        load_gltf_image(source, image_index, assets_dir)
-    } else if Path::new(&lower)
+        return load_gltf_image(source, image_index, root);
+    }
+    let path = concinnity_host::store::source::resolve(source, root);
+    let source = &*path.to_string_lossy();
+    if Path::new(&lower)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
         || Path::new(&lower)
@@ -469,9 +471,9 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 fn load_gltf_image(
     source: &str,
     image_index: u32,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<(u32, u32, Vec<u8>), CompileError> {
-    let doc = crate::import::glb::parse_glb(source, assets_dir)?;
+    let doc = crate::import::glb::parse_glb(source, root)?;
     decode_glb_image_from_doc(&doc, source, image_index)
 }
 
@@ -1911,6 +1913,18 @@ mod tests {
                 (res * res * 4) as usize,
                 "{generator} payload length"
             );
+        }
+    }
+
+    // A block-compressed source is read under the root like every other
+    // format: the read error names the file there.
+    #[test]
+    fn a_block_compressed_source_reads_under_the_root() {
+        let root = Path::new("/cn-none/project");
+        for name in ["tex/bark.ktx2", "tex/bark.dds"] {
+            let err = compile_image_source(name, 0, 0, Some(root)).unwrap_err();
+            let shown = root.join(name).display().to_string();
+            assert!(err.to_string().contains(&shown), "{err}");
         }
     }
 }

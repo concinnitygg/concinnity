@@ -2,13 +2,9 @@
 
 use crate::render::shader::embedded::WATER;
 
-// The water fragments take the pixel's footprint from camera rays
-// (`water_footprint`), never from screen derivatives. Over the ocean's far-field
-// slivers most quads are only partly covered, and Apple GPUs return different
-// derivatives for the same quad from one draw to the next; every fade, the
-// cascade filtering and the roughness read the footprint, so whole far
-// triangles shaded differently from run to run. No pixel comparison catches it
-// reliably: the flicker shows in some frames of some launches.
+// The water fragments take the pixel footprint from camera rays, never screen
+// derivatives, which Apple GPUs return inconsistently on partly covered quads
+// and so made far triangles flicker between runs.
 #[test]
 fn the_water_shader_takes_no_screen_derivatives() {
     for (number, line) in WATER.lines().enumerate() {

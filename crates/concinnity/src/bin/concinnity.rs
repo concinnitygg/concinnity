@@ -4,16 +4,9 @@
 //! and the crash hooks. The command line it reads and every command's actual
 //! work live in concinnity-dev.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use concinnity::player;
-
-// The directory a dev project keeps its derived state in, hidden inside the
-// project so a checkout carries its build output without a stray visible
-// folder. What a person authors stays beside it, in sight. The engine crates
-// have no default: they are handed whatever tree a host builds, so this is the
-// binary's convention and nobody else's.
-const STATE_DIR: &str = ".concinnity";
 
 fn main() -> std::process::ExitCode {
     // Parses argv, and on macOS may replace this process image to bring up
@@ -38,18 +31,15 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-// The tree rooted at the directory the command was run from: `assets/` and the
-// world files in sight there, everything a build derives under `.concinnity/`
-// beside them. Resolved once so every subcommand addresses the same tree.
+// The unsplit tree rooted at the directory the command was run from: the
+// authored `assets/` and .jsonl files, and everything a build or run writes,
+// side by side. Resolved once so every subcommand addresses the same tree.
 //
 // Falls back to the working directory as a relative path when it cannot be
 // read, which keeps the layout correct for the process already sitting in it.
 fn project_tree() -> player::StateTree {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let state = root.join(Path::new(STATE_DIR));
     player::StateTree::at(root)
-        .with_writable(&state)
-        .with_build(state)
 }
 
 #[cfg(test)]
@@ -87,26 +77,24 @@ mod tests {
             "{:?} should be anchored to the cwd",
             tree.content_root()
         );
-        assert!(tree.build_root().ends_with(super::STATE_DIR));
-        assert!(tree.writable_root().ends_with(super::STATE_DIR));
     }
 
-    // What the CLI's layout is: authored content in sight at the project root,
-    // every derived byte under the one hidden directory.
+    // What the CLI's layout is: authored content and every byte a build or run
+    // writes share the working directory.
     #[test]
-    fn authored_content_is_visible_and_derived_state_is_hidden() {
+    fn every_output_lands_in_the_working_directory() {
         let tree = super::project_tree();
         let root = tree.content_root();
 
+        assert_eq!(tree.build_root(), root);
+        assert_eq!(tree.writable_root(), root);
         assert_eq!(tree.assets_dir(), root.join("assets"));
-
-        let hidden = root.join(super::STATE_DIR);
-        assert_eq!(tree.data_dir(), hidden.join("data"));
-        assert_eq!(tree.world_lock_path(), hidden.join("world-lock.json"));
-        assert_eq!(tree.settings_path(), hidden.join("settings"));
-        assert_eq!(tree.crashes_dir(), hidden.join("crashes"));
-        assert_eq!(tree.editor_session_path(), hidden.join("editor"));
-        assert_eq!(tree.build_cache_path(), hidden.join("cache").join("1"));
-        assert_eq!(tree.runtime_cache_path(), hidden.join("cache").join("0"));
+        assert_eq!(tree.data_dir(), root.join("data"));
+        assert_eq!(tree.cook_lock_path().parent(), Some(root));
+        assert_eq!(tree.settings_path(), root.join("settings"));
+        assert_eq!(tree.crashes_dir(), root.join("crashes"));
+        assert_eq!(tree.editor_session_path(), root.join("editor"));
+        assert_eq!(tree.build_cache_path(), root.join("cache").join("1"));
+        assert_eq!(tree.runtime_cache_path(), root.join("cache").join("0"));
     }
 }

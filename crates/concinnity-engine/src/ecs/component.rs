@@ -101,11 +101,8 @@ mod tests {
     fn runtime<C: RuntimeComponent>() {}
     fn resource<A: ResourceAsset>() {}
 
-    // One representative per group. The calls are the assertion: each fails to
-    // compile if an entry moves between the registry's groups, and the storage
-    // half is generated from the same grouping, so a type reaching the wrong
-    // marker also loses (or gains) its column. The authoring-only group's
-    // marker lives with its list in concinnity-cook.
+    // One representative per group; each call fails to compile if an entry
+    // moves between groups.
     #[test]
     fn origin_markers_follow_the_registry() {
         runtime::<TextLabel>();

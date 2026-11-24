@@ -4,13 +4,12 @@
 //! undo step; an open source panel on an affected file closes first.
 
 use concinnity_engine::components::ShaderStage;
+use concinnity_engine::ecs::World;
 
 use super::shader_fixtures::{
     args, click, in_project, key, material, message, pick, shader, shader_names, write,
 };
-use crate::editor::hook::tests::fixtures::{
-    hook, press_modal, press_modal_check, world_with_name_field,
-};
+use crate::editor::hook::tests::fixtures::{hook, press_modal, press_modal_check, toasted};
 use crate::editor::panels::shader;
 use crate::editor::panels::shader::list::{MenuItem, RowKind};
 
@@ -24,9 +23,9 @@ fn a_duplicate_owns_copies_of_its_files() {
     let mut entry = shader("water", &water);
     entry["args"]["vertex"] = serde_json::json!(sway.to_string_lossy());
     let mut h = hook(vec![entry, material("sea", "water")]);
-    let mut world = world_with_name_field();
+    let world = World::new();
 
-    pick(&mut h, &mut world, &RowKind::Header(0), MenuItem::Duplicate);
+    pick(&mut h, &world, &RowKind::Header(0), MenuItem::Duplicate);
     assert_eq!(shader_names(&h), ["water", "water_1"]);
     let copy = dir.path().join("water_copy.hlsl");
     assert_eq!(
@@ -40,16 +39,15 @@ fn a_duplicate_owns_copies_of_its_files() {
         water.to_string_lossy().as_ref()
     );
     assert_eq!(args(&h, "sea")["shader"], "water", "references stay");
-    let toast = h.notifier.stack();
+    let toast = toasted(&mut h);
     assert!(
         toast
-            .cards
             .iter()
-            .any(|c| c.message.contains("water.hlsl to water_copy.hlsl")),
+            .any(|c| c.contains("water.hlsl to water_copy.hlsl")),
         "{toast:?}"
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(shader_names(&h), ["water"]);
     assert!(copy.exists(), "the copy stays");
     assert!(!h.can_undo(), "one step");
@@ -63,9 +61,9 @@ fn a_vertex_file_is_added_and_removed() {
     in_project(|root| {
         let lit = write(root, "lit.hlsl");
         let mut h = hook(vec![shader("lit", &lit)]);
-        let mut world = world_with_name_field();
+        let mut world = World::new();
 
-        click(&mut h, &mut world, &RowKind::AddVertex(0));
+        click(&mut h, &world, &RowKind::AddVertex(0));
         let declared = args(&h, "lit")["vertex"].as_str().unwrap().to_string();
         assert_eq!(declared, "assets/shaders/lit_vertex.hlsl");
         let path = root.join(&declared);
@@ -81,7 +79,7 @@ fn a_vertex_file_is_added_and_removed() {
         h.shaders.source.as_mut().unwrap().area.type_char('x');
         pick(
             &mut h,
-            &mut world,
+            &world,
             &RowKind::File(vertex.clone()),
             MenuItem::RemoveVertex,
         );
@@ -91,7 +89,7 @@ fn a_vertex_file_is_added_and_removed() {
 
         pick(
             &mut h,
-            &mut world,
+            &world,
             &RowKind::File(vertex),
             MenuItem::RemoveVertex,
         );
@@ -100,7 +98,7 @@ fn a_vertex_file_is_added_and_removed() {
         assert!(h.shaders.source.is_none());
         assert!(path.exists(), "the file stays");
 
-        h.undo(&mut world);
+        h.undo();
         assert_eq!(args(&h, "lit")["vertex"], declared.as_str());
     });
 }
@@ -119,9 +117,9 @@ fn a_delete_is_one_step_and_keeps_the_files_by_default() {
         material("sea", "lit"),
         material("pond", "lit"),
     ]);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
 
-    pick(&mut h, &mut world, &RowKind::Header(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Header(0), MenuItem::Delete);
     let text = message(&h);
     assert!(
         text.contains("2 Materials fall back to the default Shader"),
@@ -137,7 +135,7 @@ fn a_delete_is_one_step_and_keeps_the_files_by_default() {
     assert!(args(&h, "pond").get("shader").is_none());
     assert!(lit.exists(), "unchecked: the file stays");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(shader_names(&h), ["lit", "water"]);
     assert_eq!(args(&h, "sea")["shader"], "lit");
     assert_eq!(args(&h, "pond")["shader"], "lit");
@@ -155,16 +153,16 @@ fn checked_deletes_only_the_files_no_other_shader_reads() {
     let mut reeds = shader("reeds", &common);
     reeds["args"]["vertex"] = serde_json::json!(sway.to_string_lossy());
     let mut h = hook(vec![shader("lit", &common), reeds]);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
 
-    pick(&mut h, &mut world, &RowKind::Header(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Header(0), MenuItem::Delete);
     press_modal_check(&mut h, &mut world);
     let check = h.modal.as_ref().unwrap().check.clone().unwrap();
     assert!(!check.enabled && !check.on, "every file is shared");
     press_modal(&mut h, &mut world, "Cancel");
     assert_eq!(shader_names(&h), ["lit", "reeds"], "Cancel deletes nothing");
 
-    pick(&mut h, &mut world, &RowKind::Header(1), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Header(1), MenuItem::Delete);
     press_modal_check(&mut h, &mut world);
     assert!(h.modal.as_ref().unwrap().check.as_ref().unwrap().on);
     press_modal(&mut h, &mut world, "Delete");
@@ -172,7 +170,7 @@ fn checked_deletes_only_the_files_no_other_shader_reads() {
     assert!(!sway.exists(), "its own file is deleted");
     assert!(common.exists(), "the shared file stays");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         shader_names(&h),
         ["lit", "reeds"],
@@ -189,18 +187,18 @@ fn a_delete_closes_the_open_file_first() {
     let lit = write(dir.path(), "lit.hlsl");
     let water = write(dir.path(), "water.hlsl");
     let mut h = hook(vec![shader("lit", &lit), shader("water", &water)]);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.open_shader_file(key("water", ShaderStage::Fragment));
     h.shaders.source.as_mut().unwrap().area.type_char('x');
 
-    pick(&mut h, &mut world, &RowKind::Header(1), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Header(1), MenuItem::Delete);
     press_modal(&mut h, &mut world, "Delete");
     assert!(message(&h).contains("unsaved changes"), "{}", message(&h));
     press_modal(&mut h, &mut world, "Cancel");
     assert_eq!(shader_names(&h), ["lit", "water"]);
     assert!(h.shaders.source.is_some());
 
-    pick(&mut h, &mut world, &RowKind::Header(1), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Header(1), MenuItem::Delete);
     press_modal(&mut h, &mut world, "Delete");
     press_modal(&mut h, &mut world, "Save");
     assert_eq!(shader_names(&h), ["lit"]);

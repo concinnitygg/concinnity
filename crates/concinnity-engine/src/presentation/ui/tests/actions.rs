@@ -26,6 +26,7 @@ fn hover_applies_and_restores_label_style() {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {
@@ -37,6 +38,7 @@ fn hover_applies_and_restores_label_style() {
         hover_color: Some([1.0, 0.0, 0.0]),
         hover_scale: Some(2.0),
         action: None,
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -112,6 +114,7 @@ fn hover_style_restored_when_region_screen_is_hidden() {
             screen: Some(Ref::new(menu)),
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {
@@ -123,6 +126,7 @@ fn hover_style_restored_when_region_screen_is_hidden() {
         hover_color: Some([1.0, 0.85, 0.3]),
         hover_scale: Some(1.0),
         action: Some(act(serde_json::json!({"show": 81}))),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(menu)),
         disabled: false,
@@ -184,6 +188,7 @@ fn hover_with_matching_scale_changes_color_only() {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {
@@ -196,6 +201,7 @@ fn hover_with_matching_scale_changes_color_only() {
         // Matches the label's scale, so hover must not resize it.
         hover_scale: Some(0.66),
         action: None,
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -228,6 +234,7 @@ fn click_pushes_scene_command() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"scene": 3}))),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -258,6 +265,7 @@ fn quit_action_returns_stop() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!("quit"))),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,

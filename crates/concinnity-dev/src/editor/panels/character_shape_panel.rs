@@ -1,104 +1,55 @@
-//! The `CharacterShape` panel's layout half: a floating panel of the schema's
-//! sections (see `character_shape.rs` for the rows), preset rows, Reset /
-//! Randomize buttons and a status line in its header row. Each slider row is a caption plus one drag
-//! slider (`widget_slider.rs`) backed by a per-visible-row control pool at
-//! reserved ids; the row list scrolls through a window sized by the panel
-//! height. Plain `Sprite` / `TextLabel` components driven each frame by the
-//! editor hook, which owns the drag, the commit path, and the selection.
+//! The `CharacterShape` panel: a status line and Reset / Randomize buttons over
+//! a scrolling column of the shape's rows (see `character_shape.rs`): the
+//! schema's presets, then each section's heading and a captioned slider per
+//! row, or the add row alone while the selected mesh has no shape. The rows are
+//! built again only when what they lay out changes; the hook owns the values,
+//! the drag preview, and the commit path.
 
-use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::components::TextAlign;
+use concinnity_engine::components::{
+    Binding, Layout, LayoutChild, LayoutSize, TextAlign, TextLabel, UiEvent, UiValue, ValueSlider,
+};
 use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::character_shape::{Row, SliderRow};
 use super::registry::PanelKey;
-use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
-use crate::editor::widget_slider::{self, SliderIds};
+use crate::editor::ui::build::fill;
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
-// The visible-row pool: the most rows the window can show at once. A mesh
-// with more rows than fit scrolls.
-pub(crate) const MAX_ROWS: usize = 40;
-
-// Chrome, row backgrounds, then the slider parts above them, each pool indexed
-// by visible row.
-hud_ids! {
-    base: panel_base(PanelKey::CharacterShape);
-    sprites: [
-        pub(crate) PANEL_BG,
-        pub(crate) CLOSE_BG,
-        pub(crate) RESET_BG,
-        pub(crate) RANDOM_BG,
-        pub(crate) row_bg[MAX_ROWS],
-        slider_track[MAX_ROWS],
-        slider_fill[MAX_ROWS],
-        slider_handle[MAX_ROWS],
-    ];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        pub(crate) RESET_LABEL,
-        pub(crate) RANDOM_LABEL,
-        pub(crate) STATUS_LABEL,
-        pub(crate) row_label[MAX_ROWS],
-        slider_value[MAX_ROWS],
-    ];
-}
-
-pub(crate) fn slider_ids(i: usize) -> SliderIds {
-    SliderIds {
-        track: slider_track(i),
-        fill: slider_fill(i),
-        handle: slider_handle(i),
-        value: slider_value(i),
-    }
-}
-
-// Geometry, in window pixels. Every rect derives from the panel origin `o`.
-pub(crate) const SHAPE_W: f32 = 400.0;
-// Rows shown before the user resizes the panel taller.
+// The default (and minimum) panel width; the user can widen it past this.
+const SHAPE_W: f32 = 400.0;
+// Rows shown before the column scrolls, until the panel is resized taller.
 pub(crate) const DEFAULT_ROWS: usize = 18;
-const PAD: f32 = 10.0;
-const HEADER_H: f32 = 32.0;
+const HEADER_H: f32 = 30.0;
 const BTN_W: f32 = 86.0;
-const BTN_GAP: f32 = 6.0;
-pub(crate) const ROW_H: f32 = 24.0;
+const BTN_GAP: f32 = 4.0;
+const ROW_H: f32 = 24.0;
+const ROW_GAP: f32 = 2.0;
 const LABEL_COL: f32 = 130.0;
+const VALUE_W: f32 = 44.0;
 
-const HEADER_ROW_TINT: [f32; 4] = [0.16, 0.17, 0.22, 1.0];
-const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
-const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const HEADER_LABEL: [f32; 3] = [0.70, 0.74, 0.84];
-const ADD_LABEL: [f32; 3] = [0.55, 0.80, 0.60];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
-const LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 
-// The per-frame view the hook assembles.
-pub(crate) struct ShapeView<'a> {
-    pub rows: &'a [Row],
-    // Section captions `Row::Header` indexes.
-    pub sections: &'a [String],
-    pub sliders: &'a [SliderRow],
-    // Preset names `Row::Preset` indexes.
-    pub presets: &'a [String],
-    // One current value per slider row.
-    pub values: &'a [f32],
-    // First visible row.
-    pub scroll: usize,
-    // The slider row being dragged, if any.
-    pub dragging: Option<usize>,
-    // The edited shape's name in the heading; `None` while nothing is
-    // selected (the status line then says what to select).
-    pub shape: Option<&'a str>,
-    pub status: Option<&'a str>,
-    pub mouse: [f32; 2],
-}
+// The state the panel shows, and the events its controls send.
+const TITLE: &str = "editor.shape.title";
+const STATUS: &str = "editor.shape.status";
+const RESET: &str = "editor.shape.reset";
+const RANDOMIZE: &str = "editor.shape.randomize";
+const ADD: &str = "editor.shape.add";
+const PRESET: &str = "editor.shape.preset";
+// Each slider's value, change and commit name carry its slider index after
+// the prefix: a slider's events carry its number, not which slider it is.
+const VALUE: &str = "editor.shape.value.";
+const CHANGE: &str = "editor.shape.change.";
+const COMMIT: &str = "editor.shape.commit.";
 
-// A resolved panel click.
+// The panel's slots.
+const STATUS_SLOT: usize = 0;
+const BUTTONS_SLOT: usize = 1;
+const COLUMN_SLOT: usize = 2;
+
+// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ShapeAction {
     Reset,
@@ -107,10 +58,38 @@ pub(crate) enum ShapeAction {
     Add,
     // Apply the schema preset at this index.
     Preset(usize),
-    // Start dragging slider row `slider` on the slider drawn at `rect`.
-    Drag { slider: usize, rect: [f32; 4] },
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
+    // Slider `slider` moved to `value` while held.
+    Change { slider: usize, value: f32 },
+    // Slider `slider` was let go at `value`.
+    Commit { slider: usize, value: f32 },
+}
+
+fn slider_event(event: &UiEvent, prefix: &str) -> Option<(usize, f32)> {
+    let slider = event.name.strip_prefix(prefix)?.parse().ok()?;
+    match event.value {
+        Some(UiValue::Float(value)) => Some((slider, value)),
+        _ => None,
+    }
+}
+
+// The action a Character Shape event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<ShapeAction> {
+    if let Some((slider, value)) = slider_event(event, CHANGE) {
+        return Some(ShapeAction::Change { slider, value });
+    }
+    if let Some((slider, value)) = slider_event(event, COMMIT) {
+        return Some(ShapeAction::Commit { slider, value });
+    }
+    match event.name.as_str() {
+        RESET => Some(ShapeAction::Reset),
+        RANDOMIZE => Some(ShapeAction::Randomize),
+        ADD => Some(ShapeAction::Add),
+        PRESET => match event.value {
+            Some(UiValue::Int(p)) => usize::try_from(p).ok().map(ShapeAction::Preset),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 // Where the panel sits until the user drags it: below the Lighting panel's
@@ -120,422 +99,181 @@ pub(crate) fn default_origin() -> [f32; 2] {
     [light[0], light[1] + 40.0]
 }
 
-// The panel footprint for `n_rows` visible rows.
-pub(crate) fn size(n_rows: usize) -> [f32; 2] {
-    [
-        SHAPE_W,
-        widget::TITLE_H + HEADER_H + n_rows as f32 * ROW_H + PAD,
-    ]
+// The panel's size showing `rows` rows.
+pub(crate) fn size(rows: usize) -> [f32; 2] {
+    let shown = rows.max(1) as f32;
+    [SHAPE_W, panel_height(HEADER_H + shown * (ROW_H + ROW_GAP))]
 }
 
-// How many rows a panel `h` tall shows, capped by the pool.
-pub(crate) fn window(h: f32) -> usize {
-    usize::saturating_from(((h - widget::TITLE_H - HEADER_H - PAD) / ROW_H).floor()).min(MAX_ROWS)
-}
-
-// The header buttons, pinned to the header row's right end: Randomize at the
-// edge, Reset beside it.
-pub(crate) fn random_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - BTN_W,
-        o[1] + widget::TITLE_H + 4.0,
-        BTN_W,
-        HEADER_H - 8.0,
-    ]
-}
-pub(crate) fn reset_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    let r = random_rect(o, w);
-    [r[0] - BTN_GAP - BTN_W, r[1], BTN_W, r[3]]
-}
-
-// Visible row `i`, stacked below the header row.
-pub(crate) fn row_rect(o: [f32; 2], w: f32, i: usize) -> [f32; 4] {
-    [
-        o[0],
-        o[1] + widget::TITLE_H + HEADER_H + i as f32 * ROW_H,
-        w,
-        ROW_H,
-    ]
-}
-
-// The slider on a row's right side.
-pub(crate) fn slider_rect(row: [f32; 4]) -> [f32; 4] {
-    let x = row[0] + LABEL_COL;
-    [x, row[1], (row[0] + row[2] - PAD - x).max(1.0), row[3]]
-}
-
-// Whether the cursor is over the scrolling row area.
-pub(crate) fn cursor_over_rows(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    let top = o[1] + widget::TITLE_H + HEADER_H;
-    point_in(mx, my, [o[0], top, s[0], (o[1] + s[1] - top).max(0.0)])
-}
-
-// Resolve a click at `(mx, my)` against the panel at origin `o`, effective
-// size `s`. `None` means the click missed the panel. Title-bar presses never
-// reach this: the shared routing intercepts them first.
-pub(crate) fn hit_test(
-    view: &ShapeView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<ShapeAction> {
-    let w = s[0];
-    if view.shape.is_some() {
-        if point_in(mx, my, reset_rect(o, w)) {
-            return Some(ShapeAction::Reset);
-        }
-        if point_in(mx, my, random_rect(o, w)) {
-            return Some(ShapeAction::Randomize);
-        }
-    }
-    let window = window(s[1]);
-    for (i, row) in view.rows.iter().skip(view.scroll).take(window).enumerate() {
-        let r = row_rect(o, w, i);
-        if !point_in(mx, my, r) {
-            continue;
-        }
-        return Some(match *row {
-            Row::Header(_) | Row::PresetHeader => ShapeAction::Consume,
-            Row::Add => ShapeAction::Add,
-            Row::Preset(i) => ShapeAction::Preset(i),
-            Row::Slider(slider) => {
-                let rect = slider_rect(r);
-                if widget_slider::hit(rect, mx, my) {
-                    ShapeAction::Drag { slider, rect }
-                } else {
-                    ShapeAction::Consume
-                }
-            }
-        });
-    }
-    point_in(mx, my, widget::outer_rect(o, s)).then_some(ShapeAction::Consume)
-}
-
-fn place_button(
-    world: &mut World,
-    bg: AssetId,
-    label: AssetId,
-    rect: [f32; 4],
-    caption: &str,
-    hovered: bool,
-    shown: bool,
-) {
-    let tint = if hovered { BTN_TINT_HOVER } else { BTN_TINT };
-    place_rounded(world, bg, rect, tint, theme::CONTROL_RADIUS, shown);
-    if let Some(l) = widget::label_mut(world, label) {
-        l.x = rect[0] + rect[2] * 0.5;
-        l.y = rect[1] + rect[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = [1.0, 1.0, 1.0];
-        l.visible = shown;
-        l.content = caption.to_string();
-    }
-}
-
-// Position + show the panel at effective size `s`.
-pub(crate) fn place(world: &mut World, view: &ShapeView<'_>, o: [f32; 2], s: [f32; 2]) {
-    let w = s[0];
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
-    let title = widget::title_rect(o, w);
-    let heading = match view.shape {
-        Some(name) => format!("Character Shape: {name}"),
-        None => "Character Shape".to_string(),
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
+    let status_id = status.item?.id();
+    let reset = ui.button("Reset", RESET, None, [BTN_W, HEADER_H - 6.0])?;
+    let random = ui.button("Randomize", RANDOMIZE, None, [BTN_W, HEADER_H - 6.0])?;
+    let buttons = ui.row(vec![reset, random], HEADER_H)?;
+    let buttons_id = buttons.item?.id();
+    let buttons = LayoutChild {
+        width: LayoutSize::Fixed(2.0 * BTN_W + BTN_GAP),
+        ..buttons
     };
-    widget::place_heading(world, TITLE_LABEL, title, &heading);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
+    let header = ui.row(vec![status, buttons], HEADER_H)?;
+    let column = ui.scroll_column(Vec::new(), ROW_GAP)?;
+    let spec = PanelSpec {
+        key: PanelKey::CharacterShape,
+        title: "Character Shape",
+        title_state: Some(TITLE),
+        size: size(DEFAULT_ROWS),
+        min_size: Some(size(4)),
+    };
+    let mut panel = ui.panel(&spec, vec![header, fill(column)])?;
+    panel.slots = vec![status_id, buttons_id, column];
+    Some(panel)
+}
 
-    let has_shape = view.shape.is_some();
-    let reset = reset_rect(o, w);
-    let random = random_rect(o, w);
-    let (mx, my) = (view.mouse[0], view.mouse[1]);
-    place_button(
-        world,
-        RESET_BG,
-        RESET_LABEL,
-        reset,
-        "Reset",
-        point_in(mx, my, reset),
-        has_shape,
-    );
-    place_button(
-        world,
-        RANDOM_BG,
-        RANDOM_LABEL,
-        random,
-        "Randomize",
-        point_in(mx, my, random),
-        has_shape,
-    );
-    let left = o[0] + PAD;
-    let status_right = if has_shape { reset[0] } else { o[0] + w };
-    widget::place_message(
-        world,
-        STATUS_LABEL,
-        [
-            left,
-            o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF,
-            (status_right - PAD - left).max(0.0),
-            widget::LINE_H,
-        ],
-        view.status.unwrap_or(""),
-        if has_shape {
-            ERROR_LABEL
-        } else {
-            theme::LABEL_DIM
+// What the panel's rows lay out: when this changes, the rows are built again.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ShapeLayout {
+    pub rows: Vec<Row>,
+    // Section captions `Row::Header` indexes.
+    pub sections: Vec<String>,
+    pub sliders: Vec<SliderRow>,
+    // Preset names `Row::Preset` indexes.
+    pub presets: Vec<String>,
+}
+
+// The rows built into one world: what they lay out, and each slider's value
+// state.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ShapeIds {
+    pub layout: ShapeLayout,
+    values: Vec<String>,
+}
+
+fn slider_row(ui: &mut UiBuilder<'_>, i: usize, row: &SliderRow) -> Option<LayoutChild> {
+    let caption = ui.clipped_label(&row.caption, theme::LABEL, LABEL_COL)?;
+    let caption = LayoutChild {
+        width: LayoutSize::Fixed(LABEL_COL),
+        ..caption
+    };
+    let (min, max) = row.kind.range();
+    let slider = ui.value_slider(
+        ValueSlider {
+            value: Some(Binding::State(format!("{VALUE}{i}"))),
+            min,
+            max,
+            step: 0.01,
+            decimals: 2,
+            value_width: VALUE_W,
+            on_change: format!("{CHANGE}{i}"),
+            on_commit: format!("{COMMIT}{i}"),
+            ..Default::default()
         },
-        view.status.is_some(),
-    );
+        ROW_H,
+    )?;
+    ui.row(vec![caption, slider], ROW_H)
+}
 
-    let window = window(s[1]);
-    let mut shown = 0;
-    for (i, row) in view.rows.iter().skip(view.scroll).take(window).enumerate() {
-        shown = i + 1;
-        let r = row_rect(o, w, i);
-        let hovered = point_in(mx, my, r);
-        let click_tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
-        let (bg, caption, color) = match *row {
-            Row::Header(section) => (
-                HEADER_ROW_TINT,
-                view.sections.get(section).cloned().unwrap_or_default(),
-                HEADER_LABEL,
-            ),
-            Row::PresetHeader => (HEADER_ROW_TINT, "Presets".to_string(), HEADER_LABEL),
-            Row::Preset(pi) => (
-                click_tint,
-                format!("apply {}", view.presets.get(pi).map_or("", String::as_str)),
-                ADD_LABEL,
-            ),
-            Row::Add => (click_tint, "+ Add CharacterShape".to_string(), ADD_LABEL),
-            Row::Slider(si) => (ROW_TINT, view.sliders[si].caption.clone(), theme::LABEL),
-        };
-        place_rounded(
-            world,
-            row_bg(i),
-            theme::highlight_rect(r),
-            bg,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        if let Some(l) = widget::label_mut(world, row_label(i)) {
-            l.x = r[0] + PAD;
-            l.y = r[1] + LABEL_TOP;
-            l.align = TextAlign::Left;
-            l.color = color;
-            l.visible = true;
-            l.content = caption;
+fn wide_button(
+    ui: &mut UiBuilder<'_>,
+    caption: &str,
+    event: &str,
+    value: Option<UiValue>,
+) -> Option<LayoutChild> {
+    let button = ui.button(caption, event, value, [0.0, ROW_H - 2.0])?;
+    ui.row(
+        vec![LayoutChild {
+            width: LayoutSize::Fill(1.0),
+            ..button
+        }],
+        ROW_H,
+    )
+}
+
+// Build `layout`'s rows into the panel's column, replacing what it held.
+pub(crate) fn build_rows(
+    world: &mut World,
+    panel: &mut BuiltPanel,
+    layout: &ShapeLayout,
+) -> ShapeIds {
+    let ids = ShapeIds {
+        layout: layout.clone(),
+        values: (0..layout.sliders.len())
+            .map(|i| format!("{VALUE}{i}"))
+            .collect(),
+    };
+    let Some(column) = panel.slots.get(COLUMN_SLOT).copied() else {
+        return ids;
+    };
+    crate::editor::ui::rows::rebuild(world, panel, column, |ui| {
+        let mut rows = Vec::with_capacity(layout.rows.len());
+        for row in &layout.rows {
+            rows.push(match *row {
+                Row::Header(s) => {
+                    let caption = layout.sections.get(s).map_or("", String::as_str);
+                    let heading = ui.label(caption, HEADER_LABEL)?;
+                    ui.row(vec![heading], ROW_H)?
+                }
+                Row::PresetHeader => {
+                    let heading = ui.label("Presets", HEADER_LABEL)?;
+                    ui.row(vec![heading], ROW_H)?
+                }
+                Row::Preset(p) => {
+                    let name = layout.presets.get(p).map_or("", String::as_str);
+                    let value = Some(UiValue::Int(i32::try_from(p).unwrap_or(i32::MAX)));
+                    wide_button(ui, &format!("apply {name}"), PRESET, value)?
+                }
+                Row::Add => wide_button(ui, "+ Add CharacterShape", ADD, None)?,
+                Row::Slider(i) => slider_row(ui, i, layout.sliders.get(i)?)?,
+            });
         }
-        match *row {
-            Row::Slider(si) => {
-                let rect = slider_rect(r);
-                let hot = view.dragging == Some(si)
-                    || (view.dragging.is_none() && widget_slider::hit(rect, mx, my));
-                widget_slider::place(
-                    world,
-                    slider_ids(i),
-                    rect,
-                    view.values.get(si).copied().unwrap_or(0.0),
-                    view.sliders[si].kind.range(),
-                    hot,
-                );
-            }
-            _ => widget_slider::hide(world, slider_ids(i)),
+        Some(rows)
+    });
+    ids
+}
+
+// What the panel shows this frame.
+pub(crate) struct ShapeView<'a> {
+    // The edited shape's name in the title; `None` while the selected mesh
+    // has no shape, which also hides the buttons.
+    pub shape: Option<&'a str>,
+    pub status: Option<&'a str>,
+    // One value per slider row.
+    pub values: &'a [f32],
+}
+
+pub(crate) fn sync(view: &ShapeView<'_>, ids: &ShapeIds, panel: &BuiltPanel, world: &mut World) {
+    match view.shape {
+        Some(name) => state::set_text(world, TITLE, format_args!("Character Shape: {name}")),
+        None => state::set_text(world, TITLE, format_args!("Character Shape")),
+    }
+    state::set_text(world, STATUS, format_args!("{}", view.status.unwrap_or("")));
+    let has_shape = view.shape.is_some();
+    let color = if has_shape {
+        ERROR_LABEL
+    } else {
+        theme::LABEL_DIM
+    };
+    if let Some(label) = panel
+        .slots
+        .get(STATUS_SLOT)
+        .and_then(|&id| world.get_mut_by_id::<TextLabel>(id))
+    {
+        state::set_if_changed(&mut label.color, color);
+    }
+    if let Some(buttons) = panel
+        .slots
+        .get(BUTTONS_SLOT)
+        .and_then(|&id| world.get_mut_by_id::<Layout>(id))
+        && buttons.visible != has_shape
+    {
+        buttons.visible = has_shape;
+    }
+    state::with_state(world, |s| {
+        for (key, &value) in ids.values.iter().zip(view.values) {
+            s.set(key, UiValue::Float(value));
         }
-    }
-    for i in shown..MAX_ROWS {
-        widget::set_sprite_visible(world, row_bg(i), false);
-        widget::set_label_visible(world, row_label(i), false);
-        widget_slider::hide(world, slider_ids(i));
-    }
+    });
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::character_shape::{self, Rows};
-    use super::*;
-    use concinnity_cook::compile::character::builtin_schema;
-    use concinnity_engine::components::{Sprite, TextLabel};
-
-    fn injected_world() -> World {
-        ids().test_world()
-    }
-
-    fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(ToString::to_string).collect()
-    }
-
-    fn fixture() -> (Rows, Vec<Row>, Vec<f32>) {
-        let derived = character_shape::derive_rows(
-            builtin_schema::humanoid(),
-            &names(&["jaw+", "jaw-", "muscle"]),
-            &names(&["thigh_l", "thigh_r"]),
-        );
-        let rows = character_shape::rows(&derived, 0, true);
-        let values = vec![0.25, 0.5, -0.5];
-        (derived, rows, values)
-    }
-
-    fn view<'a>(
-        rows: &'a [Row],
-        derived: &'a Rows,
-        values: &'a [f32],
-        shape: Option<&'a str>,
-    ) -> ShapeView<'a> {
-        ShapeView {
-            rows,
-            sections: &derived.sections,
-            sliders: &derived.sliders,
-            presets: &[],
-            values,
-            scroll: 0,
-            dragging: None,
-            shape,
-            status: None,
-            mouse: [0.0, 0.0],
-        }
-    }
-
-    #[test]
-    fn hit_test_resolves_buttons_rows_and_sliders() {
-        let (derived, rows, values) = fixture();
-        let v = view(&rows, &derived, &values, Some("body_shape"));
-        let o = [40.0, 40.0];
-        let s = size(rows.len());
-        let r = reset_rect(o, SHAPE_W);
-        assert_eq!(
-            hit_test(&v, r[0] + 5.0, r[1] + 5.0, o, s),
-            Some(ShapeAction::Reset)
-        );
-        let r = random_rect(o, SHAPE_W);
-        assert_eq!(
-            hit_test(&v, r[0] + 5.0, r[1] + 5.0, o, s),
-            Some(ShapeAction::Randomize)
-        );
-        // Row 0 is the Face header; row 1 the jaw slider.
-        let r0 = row_rect(o, SHAPE_W, 0);
-        assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, s),
-            Some(ShapeAction::Consume)
-        );
-        let r1 = row_rect(o, SHAPE_W, 1);
-        let rect = slider_rect(r1);
-        assert_eq!(
-            hit_test(&v, rect[0] + 20.0, r1[1] + 5.0, o, s),
-            Some(ShapeAction::Drag { slider: 0, rect })
-        );
-        // The caption column does not start a drag.
-        assert_eq!(
-            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o, s),
-            Some(ShapeAction::Consume)
-        );
-        assert_eq!(hit_test(&v, 5000.0, 5000.0, o, s), None);
-    }
-
-    #[test]
-    fn hit_test_without_a_shape_offers_only_the_add_row() {
-        let derived = Rows::default();
-        let rows = character_shape::rows(&derived, 0, false);
-        let v = view(&rows, &derived, &[], None);
-        let o = [0.0, 0.0];
-        let s = size(rows.len());
-        let r = reset_rect(o, SHAPE_W);
-        assert_eq!(
-            hit_test(&v, r[0] + 5.0, r[1] + 5.0, o, s),
-            Some(ShapeAction::Consume),
-            "hidden buttons do not act"
-        );
-        let r0 = row_rect(o, SHAPE_W, 0);
-        assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, s),
-            Some(ShapeAction::Add)
-        );
-    }
-
-    #[test]
-    fn scrolled_rows_shift_the_pool() {
-        let (derived, rows, values) = fixture();
-        let mut v = view(&rows, &derived, &values, Some("body_shape"));
-        v.scroll = 1;
-        let o = [0.0, 0.0];
-        // Two visible rows: the jaw slider and the Torso header.
-        let s = size(2);
-        assert_eq!(window(s[1]), 2);
-        let r0 = row_rect(o, SHAPE_W, 0);
-        let rect = slider_rect(r0);
-        assert_eq!(
-            hit_test(&v, rect[0] + 20.0, r0[1] + 5.0, o, s),
-            Some(ShapeAction::Drag { slider: 0, rect })
-        );
-        // The row past the window is not drawn: its slider cannot be grabbed.
-        let r2 = row_rect(o, SHAPE_W, 2);
-        let rect = slider_rect(r2);
-        assert_eq!(
-            hit_test(&v, rect[0] + 20.0, r2[1] + 5.0, o, s),
-            Some(ShapeAction::Consume)
-        );
-    }
-
-    #[test]
-    fn place_draws_sections_sliders_and_values() {
-        let mut world = injected_world();
-        let (derived, rows, values) = fixture();
-        let v = view(&rows, &derived, &values, Some("body_shape"));
-        place(&mut world, &v, [20.0, 20.0], size(rows.len()));
-        let label = |world: &World, id: AssetId| world.get_by_id::<TextLabel>(id).unwrap().clone();
-        let sprite_visible =
-            |world: &World, id: AssetId| world.get_by_id::<Sprite>(id).unwrap().visible;
-        assert_eq!(
-            label(&world, TITLE_LABEL).content,
-            "Character Shape: body_shape"
-        );
-        assert_eq!(label(&world, row_label(0)).content, "Face");
-        assert_eq!(label(&world, row_label(1)).content, "jaw");
-        assert_eq!(label(&world, slider_ids(1).value).content, "+0.25");
-        assert!(sprite_visible(&world, slider_ids(1).handle));
-        assert!(
-            !sprite_visible(&world, slider_ids(0).handle),
-            "a header row has no slider"
-        );
-        assert!(sprite_visible(&world, RESET_BG));
-        // Without a shape the buttons hide and the status shows.
-        let none = Rows::default();
-        let no_rows = character_shape::rows(&none, 0, false);
-        let mut nv = view(&no_rows, &none, &[], None);
-        nv.status = Some("Select a SkinnedMesh");
-        place(&mut world, &nv, [20.0, 20.0], size(1));
-        assert!(!sprite_visible(&world, RESET_BG));
-        assert!(label(&world, STATUS_LABEL).visible);
-        assert!(
-            !sprite_visible(&world, slider_ids(1).handle),
-            "stale slider rows blank"
-        );
-    }
-
-    #[test]
-    fn preset_rows_resolve_to_their_index_and_show_their_name() {
-        let mut world = injected_world();
-        let (derived, _, values) = fixture();
-        let rows = character_shape::rows(&derived, 2, true);
-        let presets = names(&["slim", "heavy"]);
-        let mut v = view(&rows, &derived, &values, Some("body_shape"));
-        v.presets = &presets;
-        let o = [0.0, 0.0];
-        let s = size(rows.len());
-        let r1 = row_rect(o, SHAPE_W, 1);
-        assert_eq!(
-            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o, s),
-            Some(ShapeAction::Preset(0))
-        );
-        let r2 = row_rect(o, SHAPE_W, 2);
-        assert_eq!(
-            hit_test(&v, r2[0] + 5.0, r2[1] + 5.0, o, s),
-            Some(ShapeAction::Preset(1))
-        );
-        place(&mut world, &v, o, s);
-        let label = |id: AssetId| world.get_by_id::<TextLabel>(id).unwrap().content.clone();
-        assert_eq!(label(row_label(0)), "Presets");
-        assert_eq!(label(row_label(2)), "apply heavy");
-        assert_eq!(label(row_label(3)), "Face");
-    }
-}
+mod tests;

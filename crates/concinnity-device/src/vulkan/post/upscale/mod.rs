@@ -20,6 +20,7 @@
 use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::sync::OnceLock;
 
 use ash::vk;
 use concinnity_engine::components::UpscalerBackend;
@@ -335,16 +336,17 @@ fn image_barrier(
     );
 }
 
-// The SDKs this build bundles. DLSS links NGX statically; XeSS and FFX are
-// runtime libraries tried only when `build.rs` bundled them.
-// The vendor upscalers this build bundles. The pre-backend probe reports the
-// same set, so the settings predict the choice this backend makes.
+// The vendor upscalers this process can load. The pre-backend probe reports
+// the same set, so the settings predict the choice this backend makes.
+// Probed once per process.
 pub(in crate::vulkan) fn availability() -> UpscalerAvailability {
-    UpscalerAvailability {
+    static AVAILABILITY: OnceLock<UpscalerAvailability> = OnceLock::new();
+    *AVAILABILITY.get_or_init(|| UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
-        xess: cfg!(xess_sdk_bundled),
-        fsr: cfg!(ffx_vk_sdk_bundled),
-    }
+        xess: open_library(xess::LIBRARY).is_some(),
+        fsr: open_library(fsr::LIBRARY).is_some()
+            && fsr::UPSCALER_LIBRARY.is_none_or(|name| open_library(name).is_some()),
+    })
 }
 
 // Load a vendor runtime library by file name from the executable's directory
@@ -376,13 +378,9 @@ pub(in crate::vulkan) struct UpscalerGpu<'a> {
     pub(in crate::vulkan) queue: vk::Queue,
 }
 
-// Construct the upscaler for the requested backend at `upscale_scale` of
-// `output`, falling through the shared order whenever one cannot initialize
-// (library miss, unsupported GPU, context-init failure). Returns the backend
-// (`None` renders at native resolution) and the candidate that built. The
-// extensions of the first candidate were enabled at device creation (see
-// `UpscaleSdk`); a fallback past it can only land on FSR, whose one extension
-// the device enables whenever it can, or native.
+// Build the upscaler for the requested backend, falling through the shared
+// order when one cannot initialize. Returns the backend (`None` is native) and
+// which candidate built. A fallback can only land on FSR or native.
 pub(in crate::vulkan) fn build_upscaler(
     gpu: UpscalerGpu<'_>,
     output: (u32, u32),
@@ -418,13 +416,8 @@ fn boxed(backend: impl UpscaleBackend + 'static) -> Box<dyn UpscaleBackend> {
     Box::new(backend)
 }
 
-// Vulkan instance / device extension requirements for DLSS / XeSS, resolved
-// before `create_instance`. `prepare` loads only the chosen SDK and calls its
-// extension-enumeration entry points; the instance extensions feed
-// `create_instance`, and the struct is then threaded into
-// `device::create_logical_device` for the device extensions / features. Inert
-// (`choice == Native`, empty lists) when upscaling is off or the chosen backend
-// needs nothing.
+// DLSS / XeSS instance and device extension requirements, resolved before
+// `create_instance` by loading only the chosen SDK. Inert otherwise.
 pub(in crate::vulkan) struct UpscaleSdk {
     pub(in crate::vulkan) choice: ResolvedBackend,
     // Held so XeSS's SDK-owned device-feature chain stays mapped through
@@ -533,13 +526,8 @@ impl UpscaleSdk {
             .collect()
     }
 
-    // The XeSS-required device-feature chain head (an SDK-owned `pNext` chain to
-    // splice into `VkDeviceCreateInfo`), or `head` unchanged for every other
-    // backend. The chain memory is owned by the XeSS library and stays valid
-    // while `self` lives (it holds the loaded library), which spans
-    // `vkCreateDevice`. `head` is the caller's existing `pNext` chain that the
-    // XeSS chain is appended in front of, so the SDK can also patch fields on
-    // the caller's structs.
+    // The XeSS device-feature chain head, owned by the loaded library and appended
+    // in front of `head`; `head` itself for other backends.
     pub(in crate::vulkan) fn xess_device_features(
         &self,
         instance: &ash::Instance,
@@ -602,13 +590,8 @@ fn supported_device_extensions(
 }
 
 impl VkContext {
-    // Encode the temporal upscale onto `cmd`. Runs after SSR resolve / fog /
-    // particles / transparent (so the scene input is the fully decorated
-    // post-SSR color) and before Bloom + Composite (which sample the
-    // upscaler's output, rewired at init / resize). Recorded onto the
-    // `PassId::Upscale` per-pass command buffer by the executor. The barrier
-    // choreography (output GENERAL, color / motion / depth SHADER_READ_ONLY) is
-    // the same for every backend; only the inner `dispatch` differs.
+    // Encode the temporal upscale after the scene is fully decorated and before
+    // Bloom and Composite, which sample its output.
     pub(in crate::vulkan) fn encode_upscale(
         &self,
         rec: &Recorder<'_>,
@@ -625,12 +608,8 @@ impl VkContext {
             tracing::info!("temporal upscaling: first encode_upscale firing ({extent})");
         }
 
-        // Render-res motion + depth the upscalers consume. The unified G-buffer
-        // pre-pass owns these (the `velocity` MRT target + the pre-pass's private
-        // depth, both STORE'd shader-readable / depth attachment). Init builds the
-        // merged pre-pass whenever upscaling is on (it forces `taa_enabled`), so it
-        // is always present here; velocity rests in SHADER_READ_ONLY and depth in
-        // DEPTH_STENCIL_ATTACHMENT so the barriers below are unchanged.
+        // Render-resolution motion and depth from the G-buffer pre-pass, which is
+        // always built with upscaling.
         let gb = self.gbuffer_targets().ok_or_else(|| {
             RenderError::Other(
                 "upscale: enabled but the unified G-buffer pre-pass is absent".into(),
@@ -676,12 +655,8 @@ impl VkContext {
             vk::ImageAspectFlags::DEPTH,
         );
 
-        // Make the producer writes (color / velocity = COLOR_ATTACHMENT_WRITE,
-        // depth = DEPTH_STENCIL_ATTACHMENT_WRITE) visible to the upscaler's
-        // COMPUTE reads, and transition the depth from its attachment layout to
-        // SHADER_READ_ONLY. The color + velocity already rest in
-        // SHADER_READ_ONLY (their render-pass final layout), so those are
-        // same-layout execution+memory barriers.
+        // Make the producers' writes visible to the upscaler's compute reads and move
+        // depth to SHADER_READ_ONLY; color and velocity already rest there.
         let color_read = BarrierSync {
             src_stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             src_access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,

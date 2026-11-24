@@ -105,11 +105,9 @@ pub(in crate::directx) fn create_hiz_tail_root_signature(
     create_hiz_signature(device, false, "hiz spd tail root sig")
 }
 
-// Root signatures for the two SPD dispatches. Both take the params as root
-// constants and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs; phase 1 adds
-// the main-depth SRV ahead of it. The per-mip UAVs
-// sit contiguously in the heap, which is what lets one range cover a whole
-// dispatch's levels: phase 1 bases its table on mip 0, the tail on mip 6.
+// Root signatures for the two SPD dispatches: params as root constants and a
+// table of `HIZ_SPD_UAVS` contiguous mip UAVs (phase 1 from mip 0 plus the depth
+// SRV, the tail from mip 6).
 fn create_hiz_signature(
     device: &ID3D12Device,
     with_srv: bool,
@@ -356,12 +354,8 @@ impl HiZResources {
 }
 
 impl crate::directx::context::DxContext {
-    // Encode the Hi-Z build pass on `cmd`. Runs as the graph's `HizEarly`
-    // (mid-frame, phase-1 depth) or `HizFinal` (terminal, the frame's last depth
-    // version) node, so the executor has already put main depth in a
-    // shader-resource state and the pyramid in `UNORDERED_ACCESS`; only the
-    // per-mip chain below is this encoder's. A no-op when bindless cull isn't
-    // active (no Hi-Z resource was built).
+    // Encode the Hi-Z build as `HizEarly` or `HizFinal`; the graph owns the
+    // depth and pyramid transitions. A no-op without bindless cull.
     pub(in crate::directx) fn encode_hiz_build(&self, cmd: &ID3D12GraphicsCommandList) {
         let Some(hiz) = self.cull.hiz.as_ref() else {
             return;
@@ -395,9 +389,7 @@ impl crate::directx::context::DxContext {
         let Some(tail) = plan.tail else {
             return;
         };
-        // Phase 2 reads the mip 6 phase 1 just wrote, so the pyramid needs one
-        // write -> read barrier here. It is the only one the build takes; the
-        // graph owns the transitions on either side of the node.
+        // Phase 2 reads the mip 6 phase 1 wrote.
         // SAFETY: the command list is in the recording state, and the resource this barrier names
         // is live for the call.
         unsafe { cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]) };

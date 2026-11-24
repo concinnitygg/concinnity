@@ -198,7 +198,6 @@ fn send_setting(world: &mut World, setting: SettingKey, op: SettingOp) {
     world.events_mut::<SettingCommand>().send(SettingCommand {
         setting,
         op,
-        value_label: None,
         persist: true,
     });
 }
@@ -313,7 +312,7 @@ mod tests {
             assert_eq!(seen.len(), 1);
             assert_eq!(seen[0].setting.as_str(), name);
             assert_eq!(seen[0].op, expected);
-            assert!(seen[0].persist && seen[0].value_label.is_none());
+            assert!(seen[0].persist);
         }
     }
 

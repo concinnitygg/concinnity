@@ -60,7 +60,7 @@ pub(super) struct TransientResourcePool {
     resources: Vec<ID3D12Resource>,
     by_label: HashMap<&'static str, LabelEntry>,
     // The member labels of each slot, in the order they reuse its heap region.
-    // Read back by the executor's per-frame soundness assertion, which runs
+    // Read back by the executor's graph soundness assertion, which runs
     // under `debug_assertions`, and so does its only source of truth.
     #[cfg(debug_assertions)]
     slot_labels: Vec<Vec<&'static str>>,
@@ -82,26 +82,14 @@ impl TransientResourcePool {
     ) -> RenderResult<Self> {
         let mut heaps = Vec::new();
         let mut resources = Vec::new();
-        // `allocated_bytes` is what the pool really reserves (one heap per slot,
-        // sized to its largest member); `unaliased_bytes` is what the same
-        // members would cost one heap each. Their difference is the aliasing
-        // saving, which is otherwise invisible: the ledger sees only the total,
-        // so a plan that quietly stopped sharing would look like a bigger scene.
+        // What the pool reserves against what the members would cost unshared; the
+        // ledger sees only the total, so the difference shows the aliasing saving.
         let mut allocated_bytes: u64 = 0;
         let mut unaliased_bytes: u64 = 0;
-        // (resource, resting state) for the one-shot init below. A placed
-        // render-target resource is NOT auto-zeroed like a committed one, so
-        // D3D12 rejects its first draw/sample until a Clear/Discard/Copy
-        // initializes it. Discard suffices (no need to define the contents):
-        // every managed transient is fully written each frame before it is read
-        // (the SSAO blur writes `ao_output`, the bloom prefilter writes
-        // `bloom_top`), and a consumer that may run while a target is unwritten
-        // guards its read (the composite skips `bloom_top` when bloom is off),
-        // so the undefined initial contents are never observed. Only single-
-        // member slots are initialized here; a shared slot's members are
-        // re-initialized per frame by the executor's aliasing barrier + Discard
-        // before each first write (Discarding them here, on shared memory with no
-        // aliasing barrier between, would itself be an aliasing hazard).
+        // Placed render targets are not auto-zeroed, so D3D12 rejects their first use
+        // until initialized; a Discard suffices since every transient is written
+        // before it is read. Only single-member slots are discarded here; shared
+        // members are discarded per frame after their aliasing barrier.
         let mut to_init: Vec<(ID3D12Resource, D3D12_RESOURCE_STATES)> = Vec::new();
         for slot in slots {
             let shared = slot.members.len() > 1;
@@ -216,11 +204,8 @@ impl TransientResourcePool {
         self.resources.get(self.by_label.get(label)?.resource)
     }
 
-    // The label of the resource whose heap memory `label` reclaims (its cyclic
-    // slot predecessor), or `None` when `label` is not a shared-slot member (so
-    // it is not aliased and needs no aliasing barrier). The executor emits an
-    // aliasing barrier before the pass that first-writes any resource for which
-    // this returns `Some`.
+    // The resource whose memory `label` reclaims, or `None` when it shares no slot;
+    // the executor places an aliasing barrier before its first write.
     pub(super) fn alias_predecessor(&self, label: &str) -> Option<&'static str> {
         self.by_label.get(label)?.alias_predecessor
     }
@@ -230,11 +215,8 @@ impl TransientResourcePool {
         self.allocated_bytes
     }
 
-    // The three pooled G-buffer color targets, or `None` when the pool was
-    // built without the G-buffer gate (no screen-space consumer, so the
-    // pre-pass node is absent and nothing was placed). All three are placed
-    // together or not at all, so a partial result is a planner bug rather than
-    // a state a caller should handle.
+    // The three pooled G-buffer targets, `None` without the G-buffer gate. Placed
+    // together or not at all.
     pub(super) fn gbuffer_pooled(&self) -> Option<super::post::gbuffer::GbufferPooled> {
         Some(super::post::gbuffer::GbufferPooled {
             normal_depth: self.resource_for("gbuffer_normal_depth")?.clone(),
@@ -243,7 +225,7 @@ impl TransientResourcePool {
         })
     }
 
-    // The member labels of each slot, for the executor's per-frame check that
+    // The member labels of each slot, for the executor's check that
     // no slot has two resources live at once in the graph it is about to run.
     #[cfg(debug_assertions)]
     pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
@@ -265,13 +247,9 @@ impl TransientResourcePool {
     }
 }
 
-// Resolve each placed label to its `resources` index and its cyclic slot
-// predecessor: the member whose heap memory it reclaims. Cyclic because D3D12 is
-// single-buffered, so the first member of a shared slot reclaims from the last
-// across the frame boundary (the wrap), giving every shared member a
-// predecessor; a slot with one member shares nothing and needs no aliasing
-// barrier. `build` places every member of every slot in this order, so the
-// running index is the resource's position.
+// Resolve each label's `resources` index and its cyclic slot predecessor:
+// D3D12 is single-buffered, so a shared slot's first member reclaims from the
+// last across the frame boundary.
 fn index_labels(slots: &[TransientSlot]) -> HashMap<&'static str, LabelEntry> {
     let mut by_label = HashMap::new();
     let mut next = 0;
@@ -291,11 +269,8 @@ fn index_labels(slots: &[TransientSlot]) -> HashMap<&'static str, LabelEntry> {
     by_label
 }
 
-// The optimized clear value a pooled target is created with, from the graph's
-// desc. D3D12 matches this against the value a real `Clear*View` passes: a
-// mismatch is a debug-layer warning and costs the fast-clear path, so it is the
-// graph's business rather than a constant here. A depth target carries a depth
-// value; every color target carries four floats.
+// The optimized clear value from the graph's desc, which must match the real
+// clear or the fast-clear path is lost.
 fn clear_value(m: &TransientTexture) -> D3D12_CLEAR_VALUE {
     let format = dxgi_format(m.format);
     match m.clear {
@@ -315,11 +290,8 @@ fn clear_value(m: &TransientTexture) -> D3D12_CLEAR_VALUE {
     }
 }
 
-// Translate one graph-declared transient into its D3D12 resource desc. This is
-// the backend's whole share of describing a pooled resource: the extent,
-// format, mip count and flags all come from the graph, so there is no second
-// table here that could disagree with it. `Alignment` 0 lets the runtime pick
-// the default (64 KiB) placement alignment.
+// The D3D12 desc for a graph-declared transient, all from the graph, with the
+// default 64 KiB placement alignment.
 fn rt_desc(m: &TransientTexture) -> D3D12_RESOURCE_DESC {
     let (dimension, depth_or_array) = if m.depth.max(1) > 1 {
         (D3D12_RESOURCE_DIMENSION_TEXTURE3D, m.depth.max(1))
@@ -373,11 +345,8 @@ fn resource_flags(usage: TextureUsage) -> D3D12_RESOURCE_FLAGS {
     flags
 }
 
-// Where a pooled target sits between frames, which is also the state it is
-// created in so its first derived transition names a state it is really in.
-// Color targets rest sampled, matching the barrier registry; a depth target
-// would rest as its attachment, which is why this follows the declared usage
-// rather than being one constant.
+// Where a pooled target rests and is created: sampled for color, the attachment
+// state for depth.
 fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
     if m.usage.contains(TextureUsage::DEPTH_STENCIL) {
         D3D12_RESOURCE_STATE_DEPTH_WRITE
@@ -405,11 +374,8 @@ mod tests {
 
     #[test]
     fn the_label_index_resolves_placement_order_and_the_cyclic_predecessor() {
-        // What `resource_for` / `alias_predecessor` answer with, without a
-        // device: `build` places every member of every slot in this order, so a
-        // label's index is its position in that walk. The predecessors wrap,
-        // because a shared slot's first member reclaims the last member's memory
-        // across the frame boundary.
+        // The walk `build` places members in fixes each label's index; predecessors
+        // wrap across the frame boundary.
         let slots = planned((1024, 768), (1024, 768));
         let index = index_labels(&slots);
         let mut placed = 0;

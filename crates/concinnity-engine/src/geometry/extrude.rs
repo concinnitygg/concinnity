@@ -1,12 +1,6 @@
-// Extrude a 2D profile in the XZ plane along Y.
-//
-// Authored by the macOS Mesh Editor: users sketch a polygon in the top-down
-// view and pick an extrude height plus an optional uniform corner radius.
-// Output is a closed mesh with a flat top, flat bottom, and one flat-shaded
-// quad per profile edge.
-//
-// Concave (reflex) corners and corners where the radius would exceed the
-// available edge length are passed through as-is rather than rounded.
+// Extrude a 2D profile in the XZ plane along Y into a closed mesh with flat
+// caps and a flat quad per edge, with optional uniform corner rounding.
+// Concave corners and ones too short for the radius stay sharp.
 
 use alloc::format;
 use alloc::string::String;
@@ -207,11 +201,8 @@ fn round_corners(profile: &[[f32; 2]], radius: f32, segments: usize) -> Vec<[f32
     out
 }
 
-// Ear clipping triangulation for a simple CCW-math polygon.
-//
-// Falls back to a fan triangulation if no ear is found within a generous
-// guard; better to deliver a slightly degenerate mesh than to fail the
-// build on unusual user input.
+// Ear-clipping triangulation for a CCW polygon, falling back to a fan rather
+// than failing on unusual input.
 fn ear_clip(profile: &[[f32; 2]]) -> Result<Vec<[usize; 3]>, String> {
     let n = profile.len();
     if n < 3 {

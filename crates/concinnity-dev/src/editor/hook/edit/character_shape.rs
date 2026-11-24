@@ -15,11 +15,14 @@ use concinnity_engine::ecs::World;
 use concinnity_engine::render::live_preview::shape::{self as shape_preview, ShapeTarget};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step, short_status};
+use concinnity_engine::ecs::SkinnedMeshHandle;
+
+use crate::editor::asset_handle::AssetHandle;
+use crate::editor::hook::{EditorHook, declared_id, entry_type, short_status};
 use crate::editor::panels::character_shape::{self, Row, Rows, ShapeValues};
-use crate::editor::panels::character_shape_panel::{self, ShapeAction, ShapeView};
+use crate::editor::panels::character_shape_panel::{self, ShapeAction, ShapeLayout, ShapeView};
 use crate::editor::panels::form;
-use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::BuiltPanel;
 
 // What the panel edits: the selected skinned mesh and the shape entry
 // targeting it, if the world has one.
@@ -39,6 +42,28 @@ pub(in crate::editor::hook) struct ShapeData {
     pub(in crate::editor::hook) rows: Vec<Row>,
     pub(in crate::editor::hook) values: Vec<f32>,
     pub(in crate::editor::hook) status: Option<String>,
+}
+
+// What the panel shows, read from the entries, the selection, and the live
+// mesh they name, kept until one of those changes.
+pub(in crate::editor::hook) struct ShapeCache {
+    revision: u64,
+    active: Option<AssetHandle>,
+    mesh: Option<String>,
+    // The live mesh the rows were read from, and whether it had a pose.
+    live: Option<(SkinnedMeshHandle, bool)>,
+    shape: Option<String>,
+    status: Option<String>,
+    // One value per slider row; a drag writes its working values here.
+    pub(in crate::editor::hook) values: Vec<f32>,
+    layout: ShapeLayout,
+}
+
+// The skinned mesh the running world loaded as `mesh`, and whether it has a
+// pose yet.
+fn live_mesh(world: &World, mesh: &str) -> Option<(SkinnedMeshHandle, bool)> {
+    let handle = shape_preview::mesh_handle(world, asset_id::lookup(mesh)?)?;
+    Some((handle, shape_preview::posed(world, handle)))
 }
 
 impl EditorHook {
@@ -193,72 +218,115 @@ impl EditorHook {
         }
     }
 
-    pub(in crate::editor::hook) fn make_shape_view<'a>(
-        &'a self,
-        d: &'a ShapeData,
-        mouse: [f32; 2],
-    ) -> ShapeView<'a> {
-        let shape = d
-            .binding
-            .as_ref()
-            .and_then(|b| b.shape_idx)
-            .and_then(|i| self.entries.get(i))
-            .and_then(declared_id);
-        ShapeView {
-            rows: &d.rows,
-            sections: &d.derived.sections,
-            sliders: &d.derived.sliders,
-            presets: &d.preset_names,
-            values: &d.values,
-            scroll: self.shape.scroll.min(d.rows.len().saturating_sub(1)),
-            dragging: self.shape.drag.as_ref().map(|d| d.slider),
-            shape,
-            status: d.status.as_deref(),
-            mouse,
+    // Bring what the panel shows up to date, and build its rows again when
+    // what they lay out changed.
+    pub(in crate::editor::hook) fn prepare_shape(
+        &mut self,
+        world: &mut World,
+        built: &mut BuiltPanel,
+    ) {
+        if self.shape_cache_stale(world) {
+            let data = self.shape_data(world);
+            let live = data
+                .binding
+                .as_ref()
+                .and_then(|b| live_mesh(world, &b.mesh));
+            // Unbound, the status says what to select; bound, it is the
+            // hook's own, read each frame.
+            let prompt = if data.binding.is_none() {
+                data.status
+            } else {
+                None
+            };
+            let shape = data
+                .binding
+                .as_ref()
+                .and_then(|b| b.shape_idx)
+                .and_then(|i| self.entries.get(i))
+                .and_then(declared_id)
+                .map(String::from);
+            self.shape.cache = Some(ShapeCache {
+                revision: self.entries.revision(),
+                active: self.selection.active().cloned(),
+                mesh: data.binding.map(|b| b.mesh),
+                live,
+                shape,
+                status: prompt,
+                values: data.values,
+                layout: ShapeLayout {
+                    rows: data.rows,
+                    sections: data.derived.sections,
+                    sliders: data.derived.sliders,
+                    presets: data.preset_names,
+                },
+            });
         }
-    }
-
-    // Keep the row count the panel sizes itself by current with the live
-    // world, once a frame ahead of the draw.
-    pub(in crate::editor::hook) fn sample_shape_rows(&mut self, world: &World) {
-        if !self.open[PanelKey::CharacterShape] {
+        let Some(cache) = &self.shape.cache else {
             return;
-        }
-        self.shape.rows = self.shape_data(world).rows.len();
-        let max = self
+        };
+        if self
             .shape
-            .rows
-            .saturating_sub(character_shape_panel::window(
-                self.effective_size(PanelKey::CharacterShape)[1],
+            .shown
+            .as_ref()
+            .is_none_or(|ids| ids.layout != cache.layout)
+        {
+            self.shape.shown = Some(character_shape_panel::build_rows(
+                world,
+                built,
+                &cache.layout,
             ));
-        self.shape.scroll = self.shape.scroll.min(max);
+        }
     }
 
-    pub(in crate::editor::hook) fn scroll_shape(&mut self, delta: f32) {
-        let window =
-            character_shape_panel::window(self.effective_size(PanelKey::CharacterShape)[1]);
-        let max = self.shape.rows.saturating_sub(window);
-        self.shape.scroll = scroll_step(self.shape.scroll, delta, max);
+    // Whether the panel's cached rows no longer follow the entries, the
+    // selection, or the live mesh they were read from.
+    fn shape_cache_stale(&self, world: &World) -> bool {
+        let Some(cache) = &self.shape.cache else {
+            return true;
+        };
+        cache.revision != self.entries.revision()
+            || cache.active.as_ref() != self.selection.active()
+            || cache.mesh.as_deref().and_then(|m| live_mesh(world, m)) != cache.live
     }
 
-    // Route a resolved panel click.
+    pub(in crate::editor::hook) fn make_shape_view(&self) -> Option<ShapeView<'_>> {
+        let cache = self.shape.cache.as_ref()?;
+        Some(ShapeView {
+            shape: cache.shape.as_deref(),
+            status: self.shape.status.as_deref().or(cache.status.as_deref()),
+            values: &cache.values,
+        })
+    }
+
+    // Act on what the user asked of the panel.
     pub(in crate::editor::hook) fn apply_shape_action(
         &mut self,
         action: ShapeAction,
-        data: &ShapeData,
-        mouse: [f32; 2],
         world: &mut World,
     ) {
         match action {
+            ShapeAction::Change { slider, value } => {
+                self.drag_shape_slider(slider, value, world);
+                return;
+            }
+            ShapeAction::Commit { slider, value } => {
+                self.release_shape_slider(slider, value);
+                return;
+            }
+            _ => {}
+        }
+        let data = self.shape_data(world);
+        let shape_idx = data.binding.as_ref().and_then(|b| b.shape_idx);
+        match action {
             ShapeAction::Reset => {
-                if let Some(idx) = data.binding.as_ref().and_then(|b| b.shape_idx) {
+                if let Some(idx) = shape_idx {
                     let mut values = self.shape_values(idx);
                     values.reset(&data.derived.sliders, &data.target.joint_names);
                     self.commit_shape(idx, &values);
                 }
             }
             ShapeAction::Randomize => {
-                if let Some(idx) = data.binding.as_ref().and_then(|b| b.shape_idx) {
+                if let Some(idx) = shape_idx {
                     self.shape.seed = self.shape.seed.wrapping_add(1);
                     let mut values = self.shape_values(idx);
                     values.randomize(
@@ -270,10 +338,7 @@ impl EditorHook {
                 }
             }
             ShapeAction::Preset(p) => {
-                if let (Some(idx), Some(preset)) = (
-                    data.binding.as_ref().and_then(|b| b.shape_idx),
-                    data.presets.get(p),
-                ) {
+                if let (Some(idx), Some(preset)) = (shape_idx, data.presets.get(p)) {
                     let mut values = self.shape_values(idx);
                     values.apply_preset(preset);
                     self.commit_shape(idx, &values);
@@ -286,10 +351,7 @@ impl EditorHook {
                     self.add_shape(&b.mesh);
                 }
             }
-            ShapeAction::Drag { slider, rect } => {
-                self.begin_shape_drag(data, slider, rect, mouse, world);
-            }
-            ShapeAction::Consume => {}
+            ShapeAction::Change { .. } | ShapeAction::Commit { .. } => {}
         }
     }
 

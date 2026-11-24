@@ -1,8 +1,6 @@
-// The environment drawn as the background (see `concinnity_engine::render::environment::sky`):
-// a fullscreen draw at the tail of each opaque scene pass (the main camera, a
-// reflection-probe face, a planar mirror), on the targets that pass already has
-// bound, and one at the tail of the G-buffer pre-pass for the sky's motion
-// (`post/gbuffer_sky.rs`).
+// The environment drawn as the background at the tail of each opaque scene
+// pass, on the targets it has bound, plus once in the G-buffer pre-pass for
+// the sky's motion.
 //
 // Root signature:
 //   [0] root CBV   ViewUniforms of the pass it completes

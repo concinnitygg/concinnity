@@ -57,13 +57,10 @@ pub(crate) struct CameraTrackSystem {
     duration: f32,
     start_position: [f32; 3],
     start_angles_deg: [f32; 2],
-    // Travel is laid out leg by leg from where the carried point is (the
-    // subject, else the camera): `leg` is the leg under way, `anchor` where
-    // the point stood when its progress was `anchor_progress` (the leg's
-    // start, or where a frame move carried it mid-leg), and `frame_turn` the
-    // turn every frame move so far gave the legs, which are authored in the
-    // frame the world started in. Every offset the point rides is one leg's
-    // at most, so a long track stays as precise as a short one.
+    // Travel is laid out leg by leg from the carried point: `leg` is under way,
+    // `anchor` is where the point stood at `anchor_progress`, and `frame_turn`
+    // is the turn frame moves gave the legs. Offsets span one leg at most, so
+    // long tracks stay precise.
     leg: usize,
     anchor: [f32; 3],
     anchor_progress: [f32; 3],

@@ -1,94 +1,62 @@
-//! The Story panel's layout half: an editor over the Markdown source of the
-//! world's `StoryImport` (see `story.rs` for the starter text and
-//! `hook/edit/story.rs` for the actions). The header carries the source path
-//! and the Apply button, a reserved status line shows parse / IO errors, and
-//! the body is a code text area. A world with no `StoryImport` shows a single
-//! "+ Create story" row instead.
+//! The Story panel: an editor over the Markdown source of the world's
+//! `StoryImport` (see `story.rs` for the starter text and `hook/edit/story.rs`
+//! for the actions). The header carries the source path and the Apply button,
+//! a status line shows parse / IO errors, and the body is a code text area,
+//! whose editor the hook lends the panel each frame. A world with no
+//! `StoryImport` shows a "+ Create story" button instead.
 
-use concinnity_engine::components::TextAlign;
+use concinnity_engine::components::{
+    Button, LineMark, TextAlign, TextArea, TextLabel, TextLanguage, UiEvent,
+};
 use concinnity_engine::ecs::World;
+use concinnity_engine::presentation::text_edit::TextEditor;
 
 use super::registry::PanelKey;
-use crate::editor::hud_ids::{hud_ids, panel_base};
-use crate::editor::text_area::TextArea;
-use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
-use crate::editor::text_area::markers::GutterMarker;
+use crate::editor::text_area::markers::{GutterMarker, Severity};
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::ui::{BuiltPanel, PanelSpec, ROW_H, UiBuilder, panel_height, state};
 
-// Chrome, then the create row, then the text area over the panel.
-hud_ids! {
-    base: panel_base(PanelKey::Story);
-    sprites: [
-        pub(crate) PANEL_BG,
-        pub(crate) CLOSE_BG,
-        pub(crate) APPLY_BG,
-        pub(crate) CREATE_BG,
-        ..AREA.sprite_ids(),
-    ];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        pub(crate) APPLY_LABEL,
-        pub(crate) PATH_LABEL,
-        pub(crate) STATUS_LABEL,
-        pub(crate) CREATE_LABEL,
-    ];
-    code_labels: [..AREA.code_label_ids()];
-    blocks: [AREA_BASE: TextAreaIds::SPAN];
-}
-
-pub(crate) const AREA: TextAreaIds = TextAreaIds::new(AREA_BASE);
-
-// Geometry, in window pixels. Every rect derives from the panel origin `o`
-// (the title bar's top-left), so dragging the title bar moves the whole panel.
 // The default (and minimum) width; the user can widen the panel past this.
 pub(crate) const STORY_W: f32 = 620.0;
-const PAD: f32 = 10.0;
 const HEADER_H: f32 = 32.0;
-// Two lines: a parse or IO message carries a path and rarely fits one.
-const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
 const BTN_W: f32 = 70.0;
-const CREATE_H: f32 = 24.0;
-// Rows the text area shows at the default height.
-const DEFAULT_ROWS: usize = 20;
+// The text area's height at the default panel size.
+const AREA_H: f32 = 440.0;
 
-// The chrome height above the text area.
-const CHROME_H: f32 = widget::TITLE_H + HEADER_H + STATUS_H;
-
-const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
 const PATH_COLOR: [f32; 3] = [0.62, 0.66, 0.76];
 const ADD_LABEL: [f32; 3] = [0.55, 0.80, 0.60];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
 
-// The per-frame view the hook assembles.
-pub(crate) struct StoryView<'a> {
-    pub area: &'a TextArea,
-    // Whether the text area holds the keyboard this frame.
-    pub focus: bool,
-    // The story source path shown in the header; empty in create mode.
-    pub path: &'a str,
-    // Parse / IO error from the last Apply (or load).
-    pub status: Option<&'a str>,
-    // Lines the last Apply's parse error names.
-    pub markers: &'a [GutterMarker],
-    // No StoryImport in the world: show the create row instead of the text.
-    pub create: bool,
-    pub mouse: [f32; 2],
-}
+// The state the panel shows, and the events its controls send.
+const TITLE: &str = "editor.story.title";
+const PATH: &str = "editor.story.path";
+const STATUS: &str = "editor.story.status";
+const APPLY: &str = "editor.story.apply";
+const SAVE: &str = "editor.story.save";
+const CREATE: &str = "editor.story.create";
 
-// A resolved Story-panel click.
+// The panel's slots.
+const AREA_SLOT: usize = 0;
+const APPLY_SLOT: usize = 1;
+const CREATE_SLOT: usize = 2;
+const STATUS_SLOT: usize = 3;
+
+// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StoryAction {
-    // The press landed on the text area; the hook hands it to the area.
-    Text,
     // Write the starter story and add its StoryImport entry.
     Create,
     // Validate, write the source file, and refresh the live preview.
     Apply,
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
+}
+
+// The action a Story event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<StoryAction> {
+    match event.name.as_str() {
+        CREATE => Some(StoryAction::Create),
+        APPLY | SAVE => Some(StoryAction::Apply),
+        _ => None,
+    }
 }
 
 // Where the panel sits until the user drags it: centered below the top bar
@@ -99,325 +67,198 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
 
 // The panel's default (and minimum) footprint.
 pub(crate) fn size() -> [f32; 2] {
-    [
-        STORY_W,
-        CHROME_H + layout::height_for_rows(DEFAULT_ROWS, Metrics::code().line_h) + PAD,
-    ]
+    [STORY_W, panel_height(HEADER_H + ROW_H + AREA_H)]
 }
 
-// The tallest the panel resizes to: the text area's whole row pool shown.
-pub(crate) fn max_size() -> [f32; 2] {
-    let rows = layout::height_for_rows(layout::ROW_POOL, Metrics::code().line_h);
-    [f32::INFINITY, CHROME_H + rows + PAD]
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let path = ui.bound_label(PATH, PATH_COLOR, TextAlign::Left)?;
+    let apply = ui.button("Apply", APPLY, None, [BTN_W, HEADER_H - 8.0])?;
+    let apply_id = apply.item?.id();
+    let header = ui.row(vec![path, apply], HEADER_H)?;
+    let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
+    let status_id = status.item?.id();
+    let create = ui.button("+ Create story", CREATE, None, [STORY_W - 16.0, ROW_H])?;
+    let create_id = create.item?.id();
+    let area = ui.text_area(TextArea {
+        language: TextLanguage::Markdown,
+        on_save: SAVE.to_string(),
+        ..Default::default()
+    })?;
+    let area_id = area.item?.id();
+    let spec = PanelSpec {
+        key: PanelKey::Story,
+        title: "Story",
+        title_state: Some(TITLE),
+        size: size(),
+        min_size: Some(size()),
+    };
+    let mut panel = ui.panel(&spec, vec![header, status, create, area])?;
+    panel.slots = vec![area_id, apply_id, create_id, status_id];
+    Some(panel)
 }
 
-// The Apply button, pinned to the header row's right end.
-pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - BTN_W,
-        o[1] + widget::TITLE_H + 4.0,
-        BTN_W,
-        HEADER_H - 8.0,
-    ]
+// What the panel shows this frame.
+pub(crate) struct StoryView<'a> {
+    // Whether the text area holds the keyboard.
+    pub focus: bool,
+    // Whether the source has edits not yet applied.
+    pub dirty: bool,
+    // The story source path shown in the header; empty in create mode.
+    pub path: &'a str,
+    // Parse / IO error from the last Apply (or load).
+    pub status: Option<&'a str>,
+    // Lines the last Apply's parse error names.
+    pub markers: &'a [GutterMarker],
+    // No StoryImport in the world: show the create button instead of the text.
+    pub create: bool,
 }
 
-fn body_top(o: [f32; 2]) -> f32 {
-    o[1] + CHROME_H
+fn mark_color(severity: Severity) -> [f32; 3] {
+    match severity {
+        Severity::Error => theme::LOG_ERROR,
+        Severity::Warning => theme::LOG_WARN,
+    }
 }
 
-// The text area's rect for the panel at origin `o`, size `s`.
-pub(crate) fn area_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
-    let top = body_top(o);
-    [
-        o[0] + PAD,
-        top,
-        (s[0] - 2.0 * PAD).max(0.0),
-        (o[1] + s[1] - PAD - top).max(0.0),
-    ]
-}
-
-// The text area laid out for the panel at origin `o`, size `s`.
-pub(crate) fn area_geometry(o: [f32; 2], s: [f32; 2], area: &TextArea, m: Metrics) -> Geometry {
-    layout::geometry(area_rect(o, s), m, area.line_count())
-}
-
-// The "+ Create story" row shown in create mode.
-fn create_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [o[0] + PAD, body_top(o), w - 2.0 * PAD, CREATE_H]
-}
-
-// Whether the cursor is over the text area (for wheel routing).
-pub(crate) fn cursor_over_area(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    point_in(mx, my, area_rect(o, s))
-}
-
-// Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`. `None`
-// means the click missed the panel. Title-bar presses never reach this: the
-// shared routing intercepts them first.
-pub(crate) fn hit_test(
-    view: &StoryView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<StoryAction> {
-    if view.create {
-        if point_in(mx, my, create_rect(o, s[0])) {
-            return Some(StoryAction::Create);
+// Show the path, status, and mode, and the area's focus and marks.
+pub(crate) fn sync(view: &StoryView<'_>, world: &mut World, built: &BuiltPanel) {
+    let title = if view.dirty { "Story *" } else { "Story" };
+    state::set_text(world, TITLE, format_args!("{title}"));
+    state::set_text(world, PATH, format_args!("{}", view.path));
+    state::set_text(world, STATUS, format_args!("{}", view.status.unwrap_or("")));
+    let slot = |i: usize| built.slots.get(i).copied();
+    if let Some(area) = slot(AREA_SLOT).and_then(|id| world.get_mut_by_id::<TextArea>(id)) {
+        area.visible = !view.create;
+        area.focused = view.focus && !view.create;
+        let marks = view.markers.iter().map(|m| LineMark {
+            line: m.line,
+            color: mark_color(m.severity),
+        });
+        if !area.marks.iter().copied().eq(marks.clone()) {
+            area.marks.clear();
+            area.marks.extend(marks);
         }
-    } else if point_in(mx, my, apply_rect(o, s[0])) {
-        return Some(StoryAction::Apply);
-    } else if point_in(mx, my, area_rect(o, s)) {
-        return Some(StoryAction::Text);
     }
-    point_in(mx, my, widget::outer_rect(o, s)).then_some(StoryAction::Consume)
-}
-
-// Position + show the panel (`Some(view)`) at effective size `s`, or blank every
-// element (`None`).
-pub(crate) fn place(
-    world: &mut World,
-    view: Option<&StoryView<'_>>,
-    o: [f32; 2],
-    s: [f32; 2],
-    m: Metrics,
-) {
-    let Some(view) = view else {
-        ids().hide(world);
-        return;
-    };
-    let w = s[0];
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
-    let title = widget::title_rect(o, w);
-    let dirty = !view.create && view.area.is_dirty();
-    let heading = if dirty { "Story *" } else { "Story" };
-    widget::place_heading(world, TITLE_LABEL, title, heading);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-    place_header(world, view, o, w);
-
-    let g = area_geometry(o, s, view.area, m);
-    let area_view = TextAreaView {
-        area: view.area,
-        focused: view.focus,
-        markers: view.markers,
-        mouse: view.mouse,
-    };
-    let status = layout::hovered_marker(&area_view, &g)
-        .map(|mk| mk.message.as_str())
-        .or(view.status);
-    widget::place_message(
-        world,
-        STATUS_LABEL,
-        [
-            o[0] + PAD,
-            o[1] + widget::TITLE_H + HEADER_H + 1.0,
-            (w - 2.0 * PAD).max(0.0),
-            STATUS_H - 4.0,
-        ],
-        status.unwrap_or(""),
-        ERROR_LABEL,
-        status.is_some(),
-    );
-
-    if view.create {
-        layout::hide(world, AREA);
-        let r = create_rect(o, w);
-        let hovered = point_in(view.mouse[0], view.mouse[1], r);
-        let tint = if hovered { theme::HOVER_TINT } else { [0.0; 4] };
-        place_rounded(world, CREATE_BG, r, tint, theme::CONTROL_RADIUS, true);
-        widget::place_left_label(
-            world,
-            CREATE_LABEL,
-            [r[0] + PAD, r[1] + CREATE_H * 0.5 - theme::TEXT_HALF],
-            "+ Create story",
-            ADD_LABEL,
-            true,
-        );
-    } else {
-        widget::set_sprite_visible(world, CREATE_BG, false);
-        widget::set_label_visible(world, CREATE_LABEL, false);
-        layout::place(world, AREA, Some(&area_view), &g);
+    if let Some(b) = slot(APPLY_SLOT).and_then(|id| world.get_mut_by_id::<Button>(id)) {
+        b.visible = !view.create;
+    }
+    if let Some(b) = slot(CREATE_SLOT).and_then(|id| world.get_mut_by_id::<Button>(id)) {
+        b.visible = view.create;
+        b.style.text = ADD_LABEL;
+    }
+    if let Some(l) = slot(STATUS_SLOT).and_then(|id| world.get_mut_by_id::<TextLabel>(id)) {
+        l.wrap_width = STORY_W - 16.0;
+        l.max_lines = 2;
     }
 }
 
-// The source path on the left and Apply on the right, both hidden in create
-// mode, where there is nothing to write yet.
-fn place_header(world: &mut World, view: &StoryView<'_>, o: [f32; 2], w: f32) {
-    if let Some(l) = widget::label_mut(world, PATH_LABEL) {
-        l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Left;
-        l.color = PATH_COLOR;
-        l.visible = !view.create;
-        l.content = widget::clip_text(view.path, 52);
-    }
-    let apply_btn = apply_rect(o, w);
-    let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
-    let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
-    place_rounded(
-        world,
-        APPLY_BG,
-        apply_btn,
-        tint,
-        theme::CONTROL_RADIUS,
-        !view.create,
-    );
-    if let Some(l) = widget::label_mut(world, APPLY_LABEL) {
-        l.x = apply_btn[0] + apply_btn[2] * 0.5;
-        l.y = apply_btn[1] + apply_btn[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = [1.0, 1.0, 1.0];
-        l.visible = !view.create;
-        l.content = "Apply".to_string();
-    }
+// Whether the text area holds the keyboard, as the widget last showed it.
+pub(crate) fn area_focused(world: &World, built: &BuiltPanel) -> bool {
+    built
+        .slots
+        .get(AREA_SLOT)
+        .and_then(|&id| world.get_by_id::<TextArea>(id))
+        .is_some_and(|a| a.focused)
+}
+
+// Swap `editor` with the text area's: lending it to the area, or taking it
+// back.
+pub(crate) fn swap_editor(editor: &mut TextEditor, world: &mut World, built: &BuiltPanel) -> bool {
+    let Some(area) = built
+        .slots
+        .get(AREA_SLOT)
+        .and_then(|&id| world.get_mut_by_id::<TextArea>(id))
+    else {
+        return false;
+    };
+    std::mem::swap(editor, &mut *area.editor);
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::label;
-    use concinnity_engine::components::Sprite;
+    use concinnity_engine::ecs::asset_id::AssetId;
 
-    const M: Metrics = Metrics {
-        line_h: 20.0,
-        advance: 8.0,
-        text_px: 14.0,
-        label_scale: 0.7,
-    };
-
-    fn injected_world() -> World {
-        ids().test_world()
+    fn built(world: &mut World) -> BuiltPanel {
+        let mut ui = UiBuilder::new(world, AssetId(9), None);
+        build(&mut ui).unwrap()
     }
 
-    fn view(area: &TextArea) -> StoryView<'_> {
+    fn view(create: bool) -> StoryView<'static> {
         StoryView {
-            area,
             focus: true,
+            dirty: true,
             path: "story.md",
             status: None,
             markers: &[],
-            create: false,
-            mouse: [0.0, 0.0],
+            create,
         }
     }
 
-    fn text(n: usize) -> TextArea {
-        let lines: Vec<String> = (0..n).map(|i| format!("line {i}")).collect();
-        TextArea::from_text(&lines.join("\n"))
-    }
-
     #[test]
-    fn hit_test_resolves_apply_text_and_create() {
-        let area = text(4);
-        let v = view(&area);
-        let o = [40.0, 40.0];
-        let s = [STORY_W, 600.0];
-        let a = apply_rect(o, STORY_W);
-        assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, s),
-            Some(StoryAction::Apply)
-        );
-        let r = area_rect(o, s);
-        assert_eq!(
-            hit_test(&v, r[0] + 50.0, r[1] + 50.0, o, s),
-            Some(StoryAction::Text)
-        );
-        assert_eq!(
-            hit_test(&v, o[0] + 2.0, o[1] + 40.0, o, s),
-            Some(StoryAction::Consume),
-            "the header outside Apply is swallowed"
-        );
-        assert_eq!(hit_test(&v, 5000.0, 5000.0, o, s), None);
-        let create = StoryView {
-            create: true,
-            ..view(&area)
-        };
-        let c = create_rect(o, STORY_W);
-        assert_eq!(
-            hit_test(&create, c[0] + 5.0, c[1] + 5.0, o, s),
-            Some(StoryAction::Create)
-        );
-        assert_eq!(
-            hit_test(&create, a[0] + 5.0, a[1] + 5.0, o, s),
-            Some(StoryAction::Consume),
-            "no Apply in create mode"
-        );
-        assert_eq!(
-            hit_test(&create, r[0] + 50.0, r[1] + 200.0, o, s),
-            Some(StoryAction::Consume),
-            "no text area in create mode"
-        );
-    }
-
-    #[test]
-    fn place_draws_the_text_area_and_marks_unapplied_edits() {
-        let mut world = injected_world();
-        let mut area = text(4);
-        place(&mut world, Some(&view(&area)), [20.0, 20.0], size(), M);
-        assert_eq!(label(&world, TITLE_LABEL).content, "Story");
-        let lines: Vec<String> = AREA
-            .code_label_ids()
-            .into_iter()
-            .map(|id| label(&world, id))
-            .filter(|l| l.visible)
-            .map(|l| l.content)
-            .collect();
-        assert!(lines.contains(&"line 2".to_string()), "{lines:?}");
+    fn create_mode_shows_the_create_button_alone() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        sync(&view(true), &mut world, &panel);
+        let area = world.get_by_id::<TextArea>(panel.slots[AREA_SLOT]).unwrap();
+        assert!(!area.visible && !area.focused);
         assert!(
-            lines.contains(&"4".to_string()),
-            "the gutter numbers from 1"
+            world
+                .get_by_id::<Button>(panel.slots[CREATE_SLOT])
+                .unwrap()
+                .visible
         );
-        assert!(!world.get_by_id::<Sprite>(CREATE_BG).unwrap().visible);
-
-        area.type_char('x');
-        place(&mut world, Some(&view(&area)), [20.0, 20.0], size(), M);
-        assert_eq!(label(&world, TITLE_LABEL).content, "Story *");
-    }
-
-    #[test]
-    fn create_mode_shows_the_create_row_only() {
-        let mut world = injected_world();
-        let area = text(1);
-        let v = StoryView {
-            create: true,
-            ..view(&area)
-        };
-        place(&mut world, Some(&v), [20.0, 20.0], size(), M);
-        let row = label(&world, CREATE_LABEL);
-        assert!(row.visible && row.content == "+ Create story");
-        assert!(!world.get_by_id::<Sprite>(APPLY_BG).unwrap().visible);
+        sync(&view(false), &mut world, &panel);
+        let area = world.get_by_id::<TextArea>(panel.slots[AREA_SLOT]).unwrap();
+        assert!(area.visible && area.focused);
         assert!(
-            AREA.code_label_ids()
-                .into_iter()
-                .all(|id| !label(&world, id).visible),
-            "no text area in create mode"
+            !world
+                .get_by_id::<Button>(panel.slots[CREATE_SLOT])
+                .unwrap()
+                .visible
         );
     }
 
     #[test]
-    fn the_status_line_shows_the_last_error() {
-        let mut world = injected_world();
-        let area = text(1);
+    fn an_error_marker_marks_its_line() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let markers = [GutterMarker {
+            line: 4,
+            column: 0,
+            severity: Severity::Error,
+            message: "bad".into(),
+        }];
         let v = StoryView {
-            status: Some("bad heading"),
-            ..view(&area)
+            markers: &markers,
+            ..view(false)
         };
-        place(&mut world, Some(&v), [20.0, 20.0], size(), M);
-        let status = label(&world, STATUS_LABEL);
-        assert!(status.visible && status.content.contains("bad heading"));
+        sync(&v, &mut world, &panel);
+        let area = world.get_by_id::<TextArea>(panel.slots[AREA_SLOT]).unwrap();
+        assert_eq!(area.marks.len(), 1);
+        assert_eq!(area.marks[0].line, 4);
     }
 
     #[test]
-    fn taller_panels_grow_the_text_area_up_to_its_pool() {
-        let area = text(200);
-        let default_rows = area_geometry([0.0, 0.0], size(), &area, Metrics::code())
-            .view()
-            .rows;
-        assert_eq!(default_rows, DEFAULT_ROWS);
-        let max = area_geometry([0.0, 0.0], max_size(), &area, Metrics::code())
-            .view()
-            .rows;
-        assert_eq!(max, layout::ROW_POOL);
+    fn the_editor_lends_and_comes_back_whole() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let mut editor = TextEditor::from_text("# hi");
+        assert!(swap_editor(&mut editor, &mut world, &panel));
+        let area = world.get_by_id::<TextArea>(panel.slots[AREA_SLOT]).unwrap();
+        assert_eq!(area.editor.text(), "# hi");
+        assert!(swap_editor(&mut editor, &mut world, &panel));
+        assert_eq!(editor.text(), "# hi");
+    }
+
+    #[test]
+    fn save_applies() {
+        let event = UiEvent {
+            name: SAVE.into(),
+            element: None,
+            value: None,
+        };
+        assert_eq!(action(&event), Some(StoryAction::Apply));
     }
 }

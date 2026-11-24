@@ -1,15 +1,6 @@
-// Which bodies moved far enough in one step to need a sweep.
-//
-// The measure is the body's thinnest width rather than its width along the
-// motion. The thinnest is never the larger of the two, so a gate built on it
-// fires at least as early as one built on the exact width, and it is settled
-// once when the body is built rather than by a support call per body per
-// step.
-//
-// That is what makes the gate safe to set well below one width: a body only
-// passes through something if it moves further in a step than its own width
-// plus the surface's, so any motion able to tunnel has already armed the
-// sweep.
+// Which bodies moved far enough in one step to need a sweep, measured against
+// each body's thinnest width, which never fires later than the exact width
+// would.
 
 use crate::simulation::physics::ColliderShape;
 

@@ -15,11 +15,8 @@
 
 use crate::gfx::render_types::{PostProcessParams, PostProcessTunables};
 
-// Threshold above which the OS-reported max-EDR multiplier is considered an
-// HDR display. macOS reports `1.0` on every panel including SDR ones; values
-// above that mean the panel can drive luminance past the SDR reference white,
-// so 1.0 + epsilon is the minimum useful HDR signal. Most HDR400 displays
-// report 2.0+; HDR1000 displays report 8.0+.
+// Above this max-EDR multiplier a display counts as HDR; macOS reports 1.0 on
+// SDR panels.
 pub(crate) const HDR_MAX_EDR_FLOOR: f32 = 1.001;
 
 /// HDR encoding the composite shader emits on the EDR path. Drives both

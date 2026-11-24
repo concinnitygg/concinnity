@@ -6,7 +6,6 @@ use concinnity_engine::components::GRAPHICS_SECTIONS;
 use concinnity_engine::ecs::AssetOrigin;
 use serde_json::Value;
 
-use super::WORLD_JSONL;
 use super::identity::{ID_KEY, check_declared_id, entry_id};
 use crate::authoring::registry::RegisteredType;
 
@@ -44,7 +43,7 @@ pub fn entry_errors(value: &Value, index: usize) -> Vec<String> {
         }),
         Some(AssetOrigin::RuntimeOnly) => errors.push(format!(
             "{label}: '{type_str}' is RuntimeOnly: it is pushed by a system at runtime \
-             and cannot be declared in {WORLD_JSONL}"
+             and cannot be declared in a file"
         )),
         Some(_) => {}
     }

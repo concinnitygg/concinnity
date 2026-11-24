@@ -73,6 +73,18 @@ pub mod dx {
     pub const SHADOW_SAMPLER: Register<Sampler> = Register::new("shadow_sampler", 3);
     /// The oceans' sampler.
     pub const OCEAN_SAMPLER: Register<Sampler> = Register::new("ocean_sampler", 4);
+    /// The atmosphere's block, for the air in front of what the producers draw.
+    pub const ATMOSPHERE: Register<Cbv> = Register::new("atmo_cb", 2);
+    /// The atmosphere's transmittance table, first of a table of four: then
+    /// the multiple-scattering table, the sky view (unread) and the aerial
+    /// volume.
+    pub const TRANSMITTANCE: Register<Srv> = Register::new("transmittance_lut", 23);
+    /// The atmosphere's multiple-scattering table.
+    pub const MULTISCATTER: Register<Srv> = Register::new("multiscatter_lut", 24);
+    /// The atmosphere's aerial volume.
+    pub const AERIAL_VOLUME: Register<Srv> = Register::new("aerial_volume", 26);
+    /// The atmosphere's tables' sampler.
+    pub const AIR_SAMPLER: Register<Sampler> = Register::new("lut_sampler", 5);
 }
 
 /// The Metal slots.
@@ -151,4 +163,14 @@ pub mod metal {
     pub const SHADOW_SAMPLER: Slot<Sampler> = Slot::new("shadow_sampler", 5);
     /// The oceans' sampler.
     pub const OCEAN_SAMPLER: Slot<Sampler> = Slot::new("ocean_sampler", 6);
+    /// The atmosphere's block, for the air in front of what the producers draw.
+    pub const ATMOSPHERE: Slot<Buffer> = Slot::new("atmo_cb", 15);
+    /// The atmosphere's transmittance table.
+    pub const TRANSMITTANCE: Slot<Texture> = Slot::new("transmittance_lut", 14);
+    /// The atmosphere's multiple-scattering table.
+    pub const MULTISCATTER: Slot<Texture> = Slot::new("multiscatter_lut", 15);
+    /// The atmosphere's aerial volume.
+    pub const AERIAL_VOLUME: Slot<Texture> = Slot::new("aerial_volume", 16);
+    /// The atmosphere's tables' sampler.
+    pub const AIR_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 7);
 }

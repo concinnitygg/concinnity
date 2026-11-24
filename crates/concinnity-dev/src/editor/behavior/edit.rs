@@ -17,6 +17,7 @@ use super::path;
 pub(crate) const UNSET: &str = "";
 
 // One offerable palette option: the verb inserted, and the hint drawn beside it.
+#[derive(Debug)]
 pub(crate) struct Pick {
     pub verb: &'static str,
     pub hint: String,

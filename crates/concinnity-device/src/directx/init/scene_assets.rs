@@ -76,11 +76,8 @@ pub(super) fn build_scene_assets(
         }
     };
 
-    // Albedo texture pool
-    // One ID3D12Resource per input texture; SRVs are written below at
-    // per-object pair slots so a single texture can be referenced by many
-    // objects. When no textures were declared, a single 1x1 white fallback
-    // stands in so every object's albedo slot resolves to opaque white.
+    // Albedo texture pool, one resource per texture; a 1x1 white fallback stands
+    // in when none are declared.
     let gpu_textures: Vec<PooledTexture> = if media.textures.is_empty() {
         vec![create_fallback_white_resource(&hw.alloc)?]
     } else {
@@ -95,22 +92,15 @@ pub(super) fn build_scene_assets(
             .collect::<Result<Vec<_>, _>>()?
     };
 
-    // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
-    // the flat-normal resource a draw with no normal map samples, then the
-    // white resource a draw with no albedo samples. Real normal maps and
-    // albedos are textures in `gpu_textures` (the shared pool), addressed by
-    // their own handle; only these two live in `fallback_textures`.
+    // Reserved fallbacks, in `FALLBACK_TEXTURE_COUNT` order: flat normal, then
+    // white.
     let gpu_fallbacks: Vec<PooledTexture> = vec![
         create_fallback_flat_normal_resource(&hw.alloc)?,
         create_fallback_white_resource(&hw.alloc)?,
     ];
 
-    // Flat deduplicated bindless pool: one SRV per distinct texture, then the
-    // fallback pair at `flat_albedo_count`. The bindless main pass and
-    // the RT hit shader bind this region's base and index it by a flat slot
-    // (`albedo = texture_slot` or the white slot when the draw has none,
-    // `normal = normal's own handle` or the flat-normal slot), mirroring
-    // Vulkan/Metal. A shared texture resolves to ONE descriptor here.
+    // The flat bindless pool: one SRV per distinct texture, then the fallback pair
+    // at `flat_albedo_count`.
     let flat_albedo_count = gpu_textures.len();
     debug_assert_eq!(gpu_fallbacks.len(), FALLBACK_TEXTURE_COUNT);
     debug_assert_eq!(
@@ -238,11 +228,7 @@ fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<Geom
     let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&index_buffer),
         SizeInBytes: u32::saturating_from(idx_bytes_raw.len().max(4)),
-        // Static IB is u32: the `indices: &[u32]` signature is honored
-        // end-to-end. A previous half-completed migration left this as
-        // R16_UINT while the byte count was already widened: the GPU then
-        // read each u32 index as a pair of u16s, indexing into garbage
-        // vertices and shearing every static prop's geometry.
+        // The static index buffer is u32.
         Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
     };
     Ok(Geometry {

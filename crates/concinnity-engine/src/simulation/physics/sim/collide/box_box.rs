@@ -1,12 +1,6 @@
-// Two boxes, by separating axis followed by face clipping. Fifteen axes decide
-// whether the boxes touch and along what normal; the winning axis then decides
-// whether the contact is a patch (a face against a face, clipped to up to four
-// points) or a single point (two edges crossing).
-//
-// Face axes are preferred to edge axes by a small margin. Near a face-on-face
-// rest the two kinds of axis measure almost the same separation, and letting
-// them trade places from step to step would swap a four-point patch for a
-// one-point contact and back, which reads as a stack that will not settle.
+// Two boxes, by 15-axis separation then face clipping into a patch or an edge
+// point. Face axes win by a small margin so a resting stack does not flip
+// between patch and point.
 
 use crate::simulation::physics::sim::contact::{MAX_MANIFOLD_POINTS, Manifold, ManifoldPoint};
 use crate::simulation::physics::sim::math::{Quat, Vec3};

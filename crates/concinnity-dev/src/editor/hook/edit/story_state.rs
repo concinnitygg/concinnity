@@ -1,12 +1,12 @@
 //! `EditorHook`: the Story panel's session state, beside its actions in `story.rs`.
 
-use crate::editor::text_area::TextArea;
-use crate::editor::text_area::highlight::MARKDOWN;
 use crate::editor::text_area::markers::GutterMarker;
+use concinnity_engine::presentation::text_edit::TextEditor;
+use concinnity_engine::presentation::text_edit::highlight::MARKDOWN;
 
 // A story source's text area, highlighted as Markdown.
-pub(in crate::editor::hook) fn story_area(text: &str) -> TextArea {
-    TextArea::from_text(text).highlighted(&MARKDOWN)
+pub(in crate::editor::hook) fn story_area(text: &str) -> TextEditor {
+    TextEditor::from_text(text).highlighted(&MARKDOWN)
 }
 
 // The loaded source in its text area, whether that area holds the
@@ -15,7 +15,7 @@ pub(in crate::editor::hook) fn story_area(text: &str) -> TextArea {
 // to its line.
 #[derive(Debug, Default)]
 pub(in crate::editor::hook) struct StoryState {
-    pub(in crate::editor::hook) area: TextArea,
+    pub(in crate::editor::hook) area: TextEditor,
     pub(in crate::editor::hook) focus: bool,
     pub(in crate::editor::hook) path: String,
     pub(in crate::editor::hook) status: Option<String>,
@@ -40,7 +40,7 @@ mod tests {
     #[test]
     fn reset_for_world_keeps_shown_state() {
         let mut s = StoryState {
-            area: TextArea::from_text("a\nb"),
+            area: TextEditor::from_text("a\nb"),
             focus: true,
             path: "story.md".into(),
             status: Some("bad".into()),

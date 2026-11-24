@@ -15,12 +15,9 @@ use crate::vulkan::light_cull::LightCullState;
 use crate::vulkan::resources::upload_geometry_buffer;
 use crate::vulkan::texture::upload_float_lut;
 
-// Rectangular area lights: the edge vectors that do not fit in
-// `GpuLight`, indexed by its `data_index`, plus the two LTC tables the
-// shading path samples. A world with no area light still gets a
-// one-element buffer, since the shader never reads it (`data_index`
-// stays -1) but the descriptor must be valid. The tables are
-// scene-independent, so they are uploaded either way.
+// Rectangular area lights: the edge vectors indexed by `data_index` and the two
+// LTC tables. A world with none still gets a one-element buffer for a valid
+// descriptor.
 pub(super) fn build_area_lights(
     gpu: &InitGpu<'_>,
     area_lights: &[AreaLightData],
@@ -103,11 +100,8 @@ pub(super) fn build_scene_resources(
 
     let view_ubo_size = size_of::<crate::vulkan::draw::ViewUniforms>() as u64;
     let light_ubo_size = size_of::<LightUniforms>() as u64;
-    // Per-scene local-light SSBO (global set 0 binding 9): created once from
-    // `local_lights` and never updated per-frame. A zero-length buffer is
-    // invalid, so an empty scene gets a 1-element placeholder;
-    // `num_local_lights == 0` keeps the shader from reading it. Mirrors the
-    // Metal `local_light_buffer`.
+    // The local-light SSBO, written once; an empty scene gets a 1-element
+    // placeholder.
     let local_light_size = (local_lights.len().max(1) * size_of::<GpuLight>()) as u64;
 
     let mut view_ubo_buffers = Vec::with_capacity(frames);
@@ -132,11 +126,8 @@ pub(super) fn build_scene_resources(
         )?);
     }
 
-    // Per-frame-in-flight `LightUniforms` UBO ring, persistently mapped. One
-    // slot per frame so a live directional-light or ambient change can be
-    // written on the CPU without draining the queue: a turning sky rewrites
-    // the set every frame, and a single shared buffer would stall on every
-    // one of them.
+    // `LightUniforms` per frame in flight, so a light or ambient change writes
+    // without draining the queue.
     let mut light_ubo_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         light_ubo_buffers.push(alloc.create_buffer(

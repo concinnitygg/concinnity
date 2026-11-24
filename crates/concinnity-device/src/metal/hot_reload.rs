@@ -29,11 +29,8 @@ use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::RtReflectionPipelines;
 use super::post::post_device::MtlPostDevice;
 
-// Rebuild a built-in pipeline only when it is currently live. Expands to
-// `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
-// `reload_shaders` repeats for every optional pipeline: a `None` field stays
-// `None`, and any compile error (the `?`) aborts the whole reload before the
-// swap, leaving the live pipelines untouched.
+// Rebuild a pipeline into a temporary when `$cond` says it is live; an error
+// aborts the reload before the swap.
 macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
@@ -87,17 +84,9 @@ fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
 }
 
 impl MtlContext {
-    // Rebuild every built-in Metal renderer pipeline from disk-resident source.
-    // Each pipeline is constructed into a temporary first; only when every
-    // rebuild succeeds does the context atomically swap them in. Any compile
-    // or link error logs the underlying message and leaves the live pipelines
-    // untouched: a typo in a shader edit won't crash the running session.
-    //
-    // Covers the main pass and its GPU cull (one builder, since the cull's
-    // argument encoder comes from the pipeline it feeds), every shader bucket's
-    // main and pre-pass pair, and the shadow views' pipelines. A world Shader's
-    // own pair still wins in the main build, so a save to an engine template
-    // never swaps a world's program for the engine's.
+    // Rebuild every built-in pipeline from source into temporaries, swapping
+    // them in only when all succeed; a failure logs and keeps the live
+    // pipelines.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
@@ -132,12 +121,9 @@ impl MtlContext {
             self.bloom.is_some(),
             concinnity_engine::render::post::bloom::build_pipelines(&post_device)
         );
-        // The main pass rebuilds together with the GPU cull and the bindless
-        // argument encoders, whose layouts come from the same sources. A world
-        // Shader's pair wins here exactly as it does at init, so a save to an
-        // engine template does not swap a world's program for the engine's.
-        // Every bucket's main and pre-pass pipelines rebuild as a pair, so
-        // shading and the G-buffer never compile from different templates.
+        // The main pass rebuilds with the GPU cull and argument encoders, which
+        // share its sources. A world Shader's pair still wins, and each bucket's
+        // main and pre-pass rebuild together.
         let build = BucketBuild {
             hot_reload: hr,
             ..self.bucket_build()
@@ -344,18 +330,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Rebuild bucket 0's pipelines from the world default Shader's freshly
-    // compiled payload, for [`Self::update_world_shader`] on bucket 0, or swap
-    // in `prepared` when a worker already built them. The replacements are
-    // built before the swap, so a typo in a shader edit leaves the live
-    // pipelines untouched and the session keeps rendering.
-    //
-    // Every draw a world Shader reaches goes through the GPU-driven pass, so
-    // these are the pipelines it owns: the main pass and the G-buffer
-    // pre-pass, which runs its vertex hook too. The cull ICBs inherit the
-    // render encoder's pipeline state, so they need no re-encode. The shadow
-    // and cull pipelines compile from engine-internal source and are covered
-    // by [`Self::reload_shaders`].
+    // Rebuild bucket 0's main and pre-pass pipelines from the world default
+    // Shader, or install `prepared`. Built before the swap; the ICBs inherit the
+    // pipeline, so they need no re-encode.
     pub(super) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_engine::components::ShaderPrograms,

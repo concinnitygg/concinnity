@@ -41,7 +41,7 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
     let _build = asset_id::BuildScope::fresh();
     let registered = RegisteredType::parse(asset_type);
 
-    // Build-only types are valid in world.jsonl; they are consumed by expansion
+    // Build-only types are valid in a .jsonl file; they are consumed by expansion
     // functions before the runtime asset registry sees them.
     if registered.is_some_and(|t| t.registration().origin == AssetOrigin::BuildOnly) {
         return Ok(());
@@ -68,12 +68,12 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
     Ok(())
 }
 
-/// Validate world JSONL without running compilation. Runs the full front half
+/// Validate a .jsonl file without running compilation. Runs the full front half
 /// of the pipeline (load, expand, semantic checks) plus a per-asset type/args
 /// resolution, but stops short of compiling payloads: intended for fast
 /// server-side pre-deploy checks where shader compilation is not needed.
-/// `assets_dir` is the asset search root the expansion passes resolve their
-/// sources and presets against.
+/// `root` is the root every relative path resolves under; presets are looked
+/// up by name under its `assets/`.
 ///
 /// # Errors
 ///
@@ -81,9 +81,11 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
 /// args do not resolve.
 pub fn validate_world_jsonl(
     content: &str,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<(), WorldValidationError> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir)?;
+    let loaded = crate::build_only::prepare_world(crate::authoring::world::WorldSource::text(
+        content, root,
+    ))?;
 
     let mut errors: Vec<Diagnostic> = Vec::new();
     for asset in &loaded.assets {

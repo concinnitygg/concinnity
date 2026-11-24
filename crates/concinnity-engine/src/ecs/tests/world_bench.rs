@@ -1,8 +1,5 @@
-// Measures the public World surface against the real registered component
-// set rather than the synthetic one the storage benchmarks drive: populating a
-// world the way a blob load does, iterating a column, targeted lookups,
-// draining a column, and despawning. Per-entity costs carry the real
-// `ComponentAsset` dispatch and the real column count.
+// The public World surface over the real component set: blob-style population,
+// iteration, lookups, draining and despawning.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_world

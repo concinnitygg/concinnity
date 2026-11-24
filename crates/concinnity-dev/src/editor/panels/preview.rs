@@ -2,54 +2,37 @@
 //! affect how the running world is previewed: the play checkbox (the simulation
 //! transport's Play / Pause, mirroring the top-bar chip), the fly-camera
 //! checkbox (navigate the frozen world; also the F key), the world-axes
-//! checkbox (the origin axis lines drawn in the viewport), and the two snap
-//! rows (grid / angle snapping for gizmo drags; the row toggles, its value
-//! strip cycles the step). Escape leaves either camera mode. Like the rest of
-//! the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
-//! (injected by `inject.rs`), driven each frame by the editor hook. The title
-//! bar, close button, and row draw come from the shared `row_list`; this
-//! module only declares the ids, width, and its row actions.
+//! checkbox (the origin axis lines drawn in the viewport), the two snap rows
+//! (grid / angle snapping for gizmo drags; the checkbox toggles, the step
+//! button beside it cycles the step), the align-to-surface checkbox, and the
+//! drop-to-floor button. Escape leaves either camera mode. Each control shows
+//! UI state the hook keeps in step with its model and sends the event the hook
+//! acts on.
 
+use concinnity_engine::components::{Binding, Button, Checkbox, LayoutChild, UiEvent};
 use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
-use super::row_list::{self, ListIds, Row};
-use crate::editor::hud_ids::{hud_ids, panel_base};
+use crate::editor::ui::build::{BODY_PAD, emit};
+use crate::editor::ui::{BuiltPanel, PanelSpec, ROW_H, UiBuilder, panel_height, state};
 use crate::editor::viewport::snap::SnapSettings;
-use crate::editor::widget::point_in;
 
 const PREVIEW_W: f32 = 232.0;
-// The capture row, the fly row, the world-axes row, the two snap rows, the
-// align-to-surface row, and the drop-to-floor action row.
 const ROWS: usize = 7;
-// The snap rows' indices: their clicks split into toggle vs step-cycle.
-const SNAP_MOVE_ROW: usize = 3;
-const SNAP_ROTATE_ROW: usize = 4;
-const ALIGN_ROW: usize = 5;
-const DROP_FLOOR_ROW: usize = 6;
+// The snap rows' step buttons.
+const STEP_W: f32 = 64.0;
 
-hud_ids! {
-    base: panel_base(PanelKey::Preview);
-    sprites: [pub(crate) PANEL_BG, CLOSE_BG, row_bg[ROWS], check_box[ROWS]];
-    labels: [TITLE_LABEL, CLOSE_LABEL, row_label[ROWS], value_label[ROWS]];
-}
-
-const LIST: ListIds = ListIds {
-    panel_bg: PANEL_BG,
-    title: TITLE_LABEL,
-    close_bg: CLOSE_BG,
-    close_label: CLOSE_LABEL,
-    row_bg,
-    row_label,
-    check_box: Some(check_box),
-    value_label: Some(value_label),
-};
-
-// Named ids the cross-module tests reference (injection ordering / visibility).
-#[cfg(test)]
-pub(crate) const ROW_BG: concinnity_engine::ecs::asset_id::AssetId = row_bg(0);
-#[cfg(test)]
-pub(crate) const CHECK_BOX: concinnity_engine::ecs::asset_id::AssetId = check_box(0);
+// The state each checkbox shows, which is also the event it sends.
+const PLAY: &str = "editor.preview.play";
+const FLY: &str = "editor.preview.fly";
+const AXES: &str = "editor.preview.axes";
+const SNAP_MOVE: &str = "editor.preview.snap_move";
+const SNAP_ROTATE: &str = "editor.preview.snap_rotate";
+const ALIGN: &str = "editor.preview.align";
+// The text each step button shows, which is also the event it sends.
+const SNAP_MOVE_STEP: &str = "editor.preview.snap_move_step";
+const SNAP_ROTATE_STEP: &str = "editor.preview.snap_rotate_step";
+const DROP_FLOOR: &str = "editor.preview.drop_floor";
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -59,15 +42,10 @@ pub(crate) fn default_origin() -> [f32; 2] {
 
 // The panel's fixed footprint, for the hook's drag clamp.
 pub(crate) fn size() -> [f32; 2] {
-    row_list::size(PREVIEW_W, ROWS)
+    [PREVIEW_W, panel_height(ROW_H * ROWS as f32)]
 }
 
-// The panel outer rect (title bar + the capture row).
-pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    row_list::panel_rect(o, PREVIEW_W, ROWS)
-}
-
-// A resolved Preview-panel click.
+// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreviewAction {
     // The play checkbox: run / pause the world (and the cursor follows).
@@ -76,8 +54,8 @@ pub(crate) enum PreviewAction {
     ToggleFly,
     // The world-axes checkbox: show / hide the origin axis lines.
     ToggleAxes,
-    // The snap rows: the row toggles the family, its value strip cycles the
-    // step through the presets.
+    // The snap rows: the checkbox toggles the family, the step button cycles
+    // the step through the presets.
     ToggleSnapMove,
     CycleSnapMoveStep,
     ToggleSnapRotate,
@@ -86,38 +64,22 @@ pub(crate) enum PreviewAction {
     ToggleAlign,
     // The action row: drop the selection onto the surface below it.
     DropToFloor,
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
 }
 
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means the
-// click missed the panel. Title-bar presses never reach this: the hook intercepts
-// them first to start a drag (the shared routing owns the title-bar geometry).
-pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
-    let on_value = |i| point_in(mx, my, row_list::value_rect(o, PREVIEW_W, i));
-    match row_list::hit_row(mx, my, o, PREVIEW_W, ROWS) {
-        Some(0) => return Some(PreviewAction::TogglePlay),
-        Some(1) => return Some(PreviewAction::ToggleFly),
-        Some(2) => return Some(PreviewAction::ToggleAxes),
-        Some(SNAP_MOVE_ROW) => {
-            return Some(if on_value(SNAP_MOVE_ROW) {
-                PreviewAction::CycleSnapMoveStep
-            } else {
-                PreviewAction::ToggleSnapMove
-            });
-        }
-        Some(SNAP_ROTATE_ROW) => {
-            return Some(if on_value(SNAP_ROTATE_ROW) {
-                PreviewAction::CycleSnapRotateStep
-            } else {
-                PreviewAction::ToggleSnapRotate
-            });
-        }
-        Some(ALIGN_ROW) => return Some(PreviewAction::ToggleAlign),
-        Some(DROP_FLOOR_ROW) => return Some(PreviewAction::DropToFloor),
-        Some(_) | None => {}
-    }
-    point_in(mx, my, panel_rect(o)).then_some(PreviewAction::Consume)
+// The action a Preview event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<PreviewAction> {
+    Some(match event.name.as_str() {
+        PLAY => PreviewAction::TogglePlay,
+        FLY => PreviewAction::ToggleFly,
+        AXES => PreviewAction::ToggleAxes,
+        SNAP_MOVE => PreviewAction::ToggleSnapMove,
+        SNAP_MOVE_STEP => PreviewAction::CycleSnapMoveStep,
+        SNAP_ROTATE => PreviewAction::ToggleSnapRotate,
+        SNAP_ROTATE_STEP => PreviewAction::CycleSnapRotateStep,
+        ALIGN => PreviewAction::ToggleAlign,
+        DROP_FLOOR => PreviewAction::DropToFloor,
+        _ => return None,
+    })
 }
 
 // The panel's row states, in row order.
@@ -131,140 +93,122 @@ pub(crate) struct PreviewState {
     pub align: bool,
 }
 
-// Position + show the panel at origin `o`, coloring each checkbox by state.
-pub(crate) fn place(world: &mut World, o: [f32; 2], state: PreviewState, mouse: [f32; 2]) {
-    let rows = [
-        Row::checkbox("Play (Ctrl+P)", state.playing),
-        Row::checkbox("Fly camera (F)", state.fly),
-        Row::checkbox("World axes", state.axes),
-        Row::checkbox("Snap move", state.snap.translate.enabled)
-            .with_value(format!("{} m", state.snap.translate.step)),
-        Row::checkbox("Snap rotate", state.snap.rotate.enabled)
-            .with_value(format!("{} deg", state.snap.rotate.step)),
-        Row::checkbox("Align drop to surface", state.align),
-        Row::label("Drop to floor (Ctrl+Down)"),
+fn check(caption: &str, name: &str) -> Checkbox {
+    Checkbox {
+        label: caption.to_string(),
+        checked: Some(Binding::State(name.to_string())),
+        on_change: name.to_string(),
+        ..Default::default()
+    }
+}
+
+// A snap row: its checkbox, and the button that cycles its step.
+fn snap_row(
+    ui: &mut UiBuilder<'_>,
+    caption: &str,
+    toggle: &str,
+    step: &str,
+) -> Option<LayoutChild> {
+    let check = ui.checkbox(check(caption, toggle), ROW_H)?;
+    let button = Button {
+        text_binding: Some(Binding::State(step.to_string())),
+        action: Some(emit(step, None)),
+        ..Default::default()
+    };
+    let step = ui.button_with(button, [STEP_W, ROW_H - 6.0])?;
+    ui.row(vec![check, step], ROW_H)
+}
+
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let mut rows = vec![
+        ui.checkbox(check("Play (Ctrl+P)", PLAY), ROW_H)?,
+        ui.checkbox(check("Fly camera (F)", FLY), ROW_H)?,
+        ui.checkbox(check("World axes", AXES), ROW_H)?,
     ];
-    row_list::place(world, &LIST, o, size(), "Preview", &rows, mouse);
+    rows.push(snap_row(ui, "Snap move", SNAP_MOVE, SNAP_MOVE_STEP)?);
+    rows.push(snap_row(ui, "Snap rotate", SNAP_ROTATE, SNAP_ROTATE_STEP)?);
+    rows.push(ui.checkbox(check("Align drop to surface", ALIGN), ROW_H)?);
+    let drop = ui.button(
+        "Drop to floor (Ctrl+Down)",
+        DROP_FLOOR,
+        None,
+        [PREVIEW_W - 2.0 * BODY_PAD, ROW_H - 4.0],
+    )?;
+    rows.push(drop);
+    let spec = PanelSpec {
+        key: PanelKey::Preview,
+        title: "Preview",
+        title_state: None,
+        size: size(),
+        min_size: None,
+    };
+    ui.panel(&spec, rows)
+}
+
+// Show the panel's state.
+pub(crate) fn sync(s: PreviewState, world: &mut World) {
+    state::set_bool(world, PLAY, s.playing);
+    state::set_bool(world, FLY, s.fly);
+    state::set_bool(world, AXES, s.axes);
+    state::set_bool(world, SNAP_MOVE, s.snap.translate.enabled);
+    state::set_bool(world, SNAP_ROTATE, s.snap.rotate.enabled);
+    state::set_bool(world, ALIGN, s.align);
+    let (mv, rot) = (s.snap.translate.step, s.snap.rotate.step);
+    state::set_text(world, SNAP_MOVE_STEP, format_args!("{mv} m"));
+    state::set_text(world, SNAP_ROTATE_STEP, format_args!("{rot} deg"));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::widget;
-    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{UiState, UiValue};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
-    fn injected_world() -> World {
-        ids().test_world()
+    fn event(name: &str) -> UiEvent {
+        UiEvent {
+            name: name.into(),
+            element: None,
+            value: None,
+        }
     }
 
     #[test]
-    fn hit_test_resolves_the_play_row_and_swallows_the_rest() {
-        let o = default_origin();
-        let row = row_list::row_rect(o, PREVIEW_W, 0);
+    fn every_control_names_its_action() {
+        assert_eq!(action(&event(PLAY)), Some(PreviewAction::TogglePlay));
         assert_eq!(
-            hit_test(row[0] + 10.0, row[1] + 10.0, o),
-            Some(PreviewAction::TogglePlay)
+            action(&event(SNAP_MOVE_STEP)),
+            Some(PreviewAction::CycleSnapMoveStep)
         );
-        let fly_row = row_list::row_rect(o, PREVIEW_W, 1);
-        assert_eq!(
-            hit_test(fly_row[0] + 10.0, fly_row[1] + 10.0, o),
-            Some(PreviewAction::ToggleFly)
-        );
-        let axes_row = row_list::row_rect(o, PREVIEW_W, 2);
-        assert_eq!(
-            hit_test(axes_row[0] + 10.0, axes_row[1] + 10.0, o),
-            Some(PreviewAction::ToggleAxes)
-        );
-        let t = widget::title_rect(o, PREVIEW_W);
-        assert_eq!(
-            hit_test(t[0] + 5.0, t[1] + 5.0, o),
-            Some(PreviewAction::Consume),
-            "a title click that was not a drag is swallowed"
-        );
-        assert_eq!(hit_test(900.0, 500.0, o), None, "a miss falls through");
+        assert_eq!(action(&event(DROP_FLOOR)), Some(PreviewAction::DropToFloor));
+        assert_eq!(action(&event("editor.view.0")), None);
     }
 
     #[test]
-    fn snap_rows_split_into_toggle_and_step_cycle() {
-        let o = default_origin();
-        let row = row_list::row_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
-        assert_eq!(
-            hit_test(row[0] + 10.0, row[1] + 10.0, o),
-            Some(PreviewAction::ToggleSnapMove),
-            "the row body toggles"
-        );
-        let v = row_list::value_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
-        assert_eq!(
-            hit_test(v[0] + 5.0, v[1] + 10.0, o),
-            Some(PreviewAction::CycleSnapMoveStep),
-            "the value strip cycles the step"
-        );
-        let rot = row_list::row_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
-        assert_eq!(
-            hit_test(rot[0] + 10.0, rot[1] + 10.0, o),
-            Some(PreviewAction::ToggleSnapRotate)
-        );
-        let rv = row_list::value_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
-        assert_eq!(
-            hit_test(rv[0] + 5.0, rv[1] + 10.0, o),
-            Some(PreviewAction::CycleSnapRotateStep)
-        );
+    fn the_panel_holds_six_checkboxes_and_three_buttons_besides_close() {
+        let mut world = World::new();
+        let mut ui = UiBuilder::new(&mut world, AssetId(9), None);
+        build(&mut ui).unwrap();
+        assert_eq!(world.query::<Checkbox>().count(), 6);
+        assert_eq!(world.query::<Button>().count(), 4);
     }
 
     #[test]
-    fn place_shows_the_snap_steps_in_the_value_strips() {
-        let mut world = injected_world();
-        place(
-            &mut world,
-            default_origin(),
-            PreviewState {
-                playing: false,
-                fly: false,
-                axes: false,
-                snap: SnapSettings::default(),
-                align: false,
-            },
-            [0.0, 0.0],
-        );
-        let value = |i| {
-            world
-                .get_by_id::<TextLabel>(value_label(i))
-                .cloned()
-                .unwrap()
-        };
-        let mv = value(SNAP_MOVE_ROW);
-        assert!(mv.visible && mv.content == "0.5 m", "{}", mv.content);
-        let rot = value(SNAP_ROTATE_ROW);
-        assert!(rot.visible && rot.content == "15 deg", "{}", rot.content);
-        let plain = value(0);
-        assert!(!plain.visible, "a value-less row hides its value label");
-    }
-
-    #[test]
-    fn place_shows_heading_and_play_state() {
-        let mut world = injected_world();
-        let o = default_origin();
-        let off_state = PreviewState {
-            playing: false,
+    fn sync_shows_the_steps_with_their_units() {
+        let mut world = World::new();
+        let s = PreviewState {
+            playing: true,
             fly: false,
-            axes: false,
+            axes: true,
             snap: SnapSettings::default(),
             align: false,
         };
-        place(&mut world, o, off_state, [0.0, 0.0]);
-        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
-        assert!(title.visible && title.content == "Preview");
-        let off = world.get_by_id::<Sprite>(CHECK_BOX).cloned().unwrap();
-        place(
-            &mut world,
-            o,
-            PreviewState {
-                playing: true,
-                ..off_state
-            },
-            [0.0, 0.0],
+        sync(s, &mut world);
+        let state = world.resource::<UiState>().unwrap();
+        assert_eq!(state.get(PLAY), Some(&UiValue::Bool(true)));
+        let step = s.snap.translate.step;
+        assert_eq!(
+            state.get(SNAP_MOVE_STEP),
+            Some(&UiValue::Text(format!("{step} m")))
         );
-        let on = world.get_by_id::<Sprite>(CHECK_BOX).unwrap();
-        assert_ne!(off.tint, on.tint, "the checkbox greens while playing");
     }
 }

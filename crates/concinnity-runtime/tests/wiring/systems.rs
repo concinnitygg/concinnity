@@ -41,7 +41,8 @@ fn empty_world_fills_from_components_then_systems() {
     world.add(ComponentAsset::from(TextLabel::default()), None);
     assert_eq!(world.component_count(), 1);
     world.add_component(FpsCounter::default());
-    assert_eq!(started(&mut world), ["FpsCounterSystem"]);
+    // The label joins a HUD screen at start, which brings the UI system in.
+    assert_eq!(started(&mut world), ["FpsCounterSystem", "UiInputSystem"]);
 }
 
 // Each kind of sound content gates the audio system in, visible in the

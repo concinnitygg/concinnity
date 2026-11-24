@@ -20,7 +20,7 @@ impl crate::asset::BuildAsset for Terrain {
             ctx.name,
             args,
             |name| texture(ctx.all_assets, name),
-            ctx.assets_dir,
+            ctx.root,
         )
         .map_err(std::io::Error::from)
     }
@@ -50,7 +50,7 @@ mod tests {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
-            assets_dir: None,
+            root: None,
             all_assets: assets,
         }
     }

@@ -1,9 +1,8 @@
 //! AMD FidelityFX FSR temporal upscaling for the D3D12 backend, through the
 //! FidelityFX SDK's `ffx_api` (see `crate::upscale_sdk::fsr`). The runtime is
-//! the SDK's loader, `amd_fidelityfx_loader_dx12.dll`, bundled beside the
-//! executable with the upscaler DLL it loads by `build.rs` when the SDK is
-//! found or else taken from PATH; a missing DLL falls through to the next
-//! backend. FFX needs a newer D3D12 runtime than the OS ships, so this
+//! the SDK's loader, `amd_fidelityfx_loader_dx12.dll`, loaded at runtime with
+//! the upscaler DLL beside it; a missing DLL falls through to the next backend.
+//! FFX needs a newer D3D12 runtime than the OS ships, so this
 //! backend is only tried in builds that bundle the Agility SDK.
 //!
 //! The scaler accumulates temporally itself, so the TAA resolve is bypassed
@@ -22,7 +21,9 @@ use super::{Dll, UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerTarget};
 use crate::upscale_sdk::fsr::{FfxContext, FfxDispatchHandles, ffxApiHeader};
 use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
 
-const LIBRARY: &CStr = c"amd_fidelityfx_loader_dx12.dll";
+pub(super) const LIBRARY: &CStr = c"amd_fidelityfx_loader_dx12.dll";
+// The upscaler the loader finds beside it, which it cannot upscale without.
+pub(super) const UPSCALER_LIBRARY: &CStr = c"amd_fidelityfx_upscaler_dx12.dll";
 const LABEL: &str = "FidelityFX FSR (DirectX)";
 
 const FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12: u64 = 0x000_0002;
@@ -45,17 +46,6 @@ impl FsrUpscaler {
     // is missing, or the context could not be created.
     pub(super) fn try_new(target: UpscalerTarget<'_>) -> RenderResult<Option<Self>> {
         let Some(library) = Dll::open(LIBRARY) else {
-            if cfg!(ffx_dx_sdk_bundled) {
-                tracing::warn!(
-                    "{LABEL}: amd_fidelityfx_loader_dx12.dll was bundled at build time but \
-                     failed to load at runtime; trying the next backend"
-                );
-            } else {
-                tracing::warn!(
-                    "{LABEL}: amd_fidelityfx_loader_dx12.dll not found (build.rs did not bundle \
-                     it; set CN_FIDELITYFX_SDK or put the DLL on PATH). Trying the next backend."
-                );
-            }
             return Ok(None);
         };
         let mut backend = ffxCreateBackendDX12Desc {

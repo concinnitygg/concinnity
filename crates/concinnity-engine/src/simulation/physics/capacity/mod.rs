@@ -1,14 +1,6 @@
-// What the driver reserves for a world's physics, and how it learns the size.
-//
-// Cook ships a budget in the blob; a world built in memory (a unit test, an
-// uncooked world) has none, so the same counts are scanned off the loaded
-// components instead. Both go through `PhysicsBudget::derive`, which is what
-// lets the runtime debug-assert that the shipped record and the live world
-// agree.
-//
-// The capacities and their byte cost are pure functions of the budget, kept
-// apart from the code that applies them so both can be tested without a
-// simulation.
+// What the driver reserves for a world's physics: the blob's shipped budget,
+// or the same counts scanned off the components, both through
+// `PhysicsBudget::derive` so the two can be checked against each other.
 
 mod derive;
 

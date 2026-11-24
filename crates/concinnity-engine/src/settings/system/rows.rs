@@ -1,29 +1,24 @@
 // Settings-row plumbing shared by the per-frame SettingCommand drain and the
-// init-time row captures: label / sprite writers, the gray-out helpers for
-// disabled rows, and the captures graphics init runs on the SettingsState it
-// resolves.
+// init-time row captures: publishing shown values and slider positions, the
+// gray-out helpers for disabled rows, and the captures graphics init runs on
+// the SettingsState it resolves.
 
 use alloc::vec::Vec;
 
-use crate::components::{
-    HitRegion, Identity, ScrollPanel, SettingVerb, Sprite, TextLabel, UiAction, WindowMode,
-};
+use crate::components::{Binding, HitRegion, Identity, ScrollPanel, TextLabel, WindowMode};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::settings::{SettingKey, StoredSettings, registry};
+use crate::settings::{SettingKey, SettingValues, StoredSettings, registry};
 use crate::window::display_mode;
 
-use super::{PadRebindViz, RebindViz, SettingsState, SliderViz};
+use super::SettingsState;
 
 /// Muted gray applied to the labels of a capability-disabled settings row, so
 /// it reads as unavailable next to the live rows.
 pub const DISABLED_ROW_COLOR: [f32; 3] = [0.42, 0.42, 0.47];
 
-// The full set of label ids to gray for a set of capability-gated rows: the
-// gated value labels themselves (the fallback when a row is not in a scroll
-// panel), plus every element of any scroll row that contains one of them, so a
-// row dims as a whole (its name + value + stepper glyphs) rather than only its
-// value. `rows` is each scroll row's element id list.
+// The label ids to gray for capability-gated rows: each gated value label plus
+// every element of the scroll row holding it, so the whole row dims.
 pub(crate) fn expand_dim_set(
     gated: &hashbrown::HashSet<AssetId>,
     rows: &[Vec<AssetId>],
@@ -37,13 +32,9 @@ pub(crate) fn expand_dim_set(
     dim
 }
 
-// Gray a captured set of settings-row labels (or restore their authored
-// colors), for a row disabled at runtime: the show_fps / show_vram rows under
-// the "Display performance stats" master, and the Resolution row outside
-// fullscreen. A free function taking the captured (id, color) list so it can
-// run inside the settings drain, where the backend is a live borrow. The
-// matching input inertness comes from the `DisabledSettingRows` resource,
-// published after the drain.
+// Gray a captured set of settings-row labels, or restore their authored
+// colors, for rows disabled at runtime. A free function so it can run inside
+// the settings drain; `DisabledSettingRows` makes the rows inert.
 pub(crate) fn set_rows_grayed(
     ctx: &mut PipelineContext<'_>,
     rows: &[(AssetId, [f32; 3])],
@@ -67,7 +58,7 @@ pub(crate) fn capture_row_labels(
     // prev/next or a dropdown's open, references its value label).
     let mut anchors: hashbrown::HashSet<AssetId> = hashbrown::HashSet::new();
     for r in ctx.query::<HitRegion>() {
-        if let Some(UiAction::Setting { key, .. }) = r.action
+        if let Some(key) = r.setting()
             && keys.contains(&key)
             && let Some(label) = r.label
         {
@@ -92,143 +83,66 @@ pub(crate) fn capture_row_labels(
         .collect()
 }
 
-// Overwrite the text of the TextLabel with the given id, if present.
-pub(crate) fn set_label_content(ctx: &mut PipelineContext<'_>, id: AssetId, text: &str) {
-    crate::ecs::by_asset_id::set_text(ctx, id, text);
+// Every setting the overlay shows or operates, each once.
+pub(crate) fn menu_keys(ctx: &PipelineContext<'_>) -> Vec<SettingKey> {
+    let shown = ctx
+        .query::<TextLabel>()
+        .filter_map(|l| match &l.text_binding {
+            Some(Binding::Setting(key)) => Some(*key),
+            _ => None,
+        });
+    let operated = ctx.query::<HitRegion>().filter_map(HitRegion::setting);
+    let mut keys: Vec<SettingKey> = Vec::new();
+    for key in shown.chain(operated) {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
-// Set a cycle row's value label from its init-captured id. Used to update a
-// row other than the one that was clicked (the master preset relabels the
-// quality toggles + render scale; a quality-toggle change relabels the master
-// row). The menu's HitRegions are drained after init, so the row -> label map
-// is captured once rather than re-queried here.
-pub(crate) fn set_cached_row_label(
-    labels: &hashbrown::HashMap<SettingKey, AssetId>,
-    ctx: &mut PipelineContext<'_>,
-    key: SettingKey,
-    text: &str,
-) {
-    if let Some(&id) = labels.get(&key) {
-        set_label_content(ctx, id, text);
+// Show `text` as `key`'s value, for every label bound to it.
+pub(crate) fn show(ctx: &mut PipelineContext<'_>, key: SettingKey, text: &str) {
+    if let Some(values) = ctx.resource_mut::<SettingValues>() {
+        values.set_text(key, text);
     }
 }
 
-// Move the Sprite with the given id to `x` (its left edge), if present. Used to
-// slide a slider's handle along its track.
-pub(crate) fn set_sprite_x(ctx: &mut PipelineContext<'_>, id: AssetId, x: f32) {
-    crate::ecs::by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.x = x);
+// Place slider `key` at `fraction` of its range, for every handle bound to it.
+pub(crate) fn place_slider(ctx: &mut PipelineContext<'_>, key: SettingKey, fraction: f32) {
+    if let Some(values) = ctx.resource_mut::<SettingValues>() {
+        values.set_fraction(key, fraction);
+    }
 }
 
 impl SettingsState {
-    // Capture each slider row's runtime bookkeeping from its drag HitRegion +
-    // handle Sprite, then sync the handle position and value label to the live
-    // value. Runs once at init, before UiInputSystem drains the HitRegions and
-    // hides the screen elements. `persisted` serves every controls slider, which
-    // reads the store rather than the render params.
-    pub(crate) fn init_sliders(
-        &mut self,
+    // Publish every shown slider's position and value text, and every shown
+    // rebind row's bound key or button. Runs once at init. `persisted`
+    // serves every controls slider, which reads the store rather than the
+    // render params.
+    pub(crate) fn publish_rows(
+        &self,
         ctx: &mut PipelineContext<'_>,
         persisted: &StoredSettings,
+        keys: &[SettingKey],
     ) {
-        let mut sliders: Vec<SliderViz> = Vec::new();
-        for r in ctx.query::<HitRegion>() {
-            let Some(UiAction::Setting {
-                key,
-                verb: SettingVerb::Drag,
-            }) = r.action
-            else {
-                continue;
-            };
-            let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
-                continue;
-            };
-            let handle_w = ctx
-                .get_by_id::<Sprite>(handle_id.id())
-                .map_or(0.0, |s| s.width);
-            sliders.push(SliderViz {
-                key,
-                track_x: r.x,
-                track_w: r.width,
-                handle_w,
-                handle_id: handle_id.id(),
-                value_id: value_id.id(),
-            });
-        }
-        for s in &sliders {
-            let Some(slider) = registry::slider(s.key) else {
-                continue;
-            };
-            let value = slider.current_value(&self.resolved.graphics, persisted);
-            let hx = s.track_x + slider.fraction(value) * (s.track_w - s.handle_w).max(0.0);
-            set_sprite_x(ctx, s.handle_id, hx);
-            set_label_content(ctx, s.value_id, &(slider.format)(value));
-        }
-        self.sliders = sliders;
-    }
-
-    // Capture each key-rebind row's bookkeeping from its `Rebind` HitRegion, then sync each value label to the live bound key. Runs once at
-    // init (after the keymap is seeded), before UiInputSystem drains the
-    // HitRegions.
-    pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext<'_>) {
-        let mut rows: Vec<RebindViz> = Vec::new();
-        let mut pad_rows: Vec<PadRebindViz> = Vec::new();
-        for r in ctx.query::<HitRegion>() {
-            let (
-                Some(UiAction::Setting {
-                    key,
-                    verb: SettingVerb::Rebind,
-                }),
-                Some(value_id),
-            ) = (&r.action, r.label)
-            else {
-                continue;
-            };
-            match *key {
-                SettingKey::KeyRebind(action) => rows.push(RebindViz {
-                    action,
-                    value_id: value_id.id(),
-                }),
-                SettingKey::PadRebind(action) => pad_rows.push(PadRebindViz {
-                    action,
-                    value_id: value_id.id(),
-                }),
-                _ => {}
+        for &key in keys {
+            match key {
+                SettingKey::KeyRebind(action) => {
+                    show(ctx, key, self.keymap.get(action).display_name());
+                }
+                SettingKey::PadRebind(action) => {
+                    show(ctx, key, self.gamepad_map.get(action).display_name());
+                }
+                _ => {
+                    if let Some(slider) = registry::slider(key) {
+                        let value = slider.current_value(&self.resolved.graphics, persisted);
+                        place_slider(ctx, key, slider.fraction(value));
+                        show(ctx, key, &(slider.format)(value));
+                    }
+                }
             }
         }
-        for row in &rows {
-            let name = self.keymap.get(row.action).display_name();
-            set_label_content(ctx, row.value_id, name);
-        }
-        for row in &pad_rows {
-            let name = self.gamepad_map.get(row.action).display_name();
-            set_label_content(ctx, row.value_id, name);
-        }
-        self.rebind_rows = rows;
-        self.pad_rebind_rows = pad_rows;
-    }
-
-    // Capture each cycle row's setting key -> value-label id, so a runtime change
-    // can relabel a row other than the one clicked (the master preset relabels
-    // its dependents; a quality-toggle change relabels the master row). Runs at
-    // init, before UiInputSystem drains the HitRegions.
-    pub(crate) fn init_cycle_value_labels(&mut self, ctx: &PipelineContext<'_>) {
-        let mut labels = hashbrown::HashMap::new();
-        for r in ctx.query::<HitRegion>() {
-            // A stepper row's `Next` region and a dropdown's `Open` region
-            // both carry the value label; the stepper's `Prev` twin shares it,
-            // so skipping `Prev` maps each cycle key exactly once.
-            if let (
-                Some(UiAction::Setting {
-                    key,
-                    verb: SettingVerb::Next | SettingVerb::Open,
-                }),
-                Some(value_id),
-            ) = (&r.action, r.label)
-            {
-                labels.insert(*key, value_id.id());
-            }
-        }
-        self.cycle_value_labels = labels;
     }
 
     // Capture the show_fps / show_vram row labels (with their authored colors)
@@ -337,62 +251,89 @@ mod tests {
         }
     }
 
-    // Writing a label's content hits the one matching id and leaves the rest
-    // alone; an id with no label is a no-op rather than a panic.
+    // Showing a value and placing a slider publish into SettingValues; with
+    // no SettingValues resource they are no-ops rather than panics.
     #[test]
-    fn set_label_content_writes_only_the_matching_label() {
+    fn show_and_place_slider_publish_into_setting_values() {
         let mut world = World::new();
-        world.push_identified(AssetId(1), label([1.0; 3]));
-        world.push_identified(AssetId(2), label([1.0; 3]));
         let mut ctx = world.context();
+        show(&mut ctx, SettingKey::Vsync, "On");
+        place_slider(&mut ctx, SettingKey::Exposure, 0.5);
+        assert!(ctx.resource::<SettingValues>().is_none());
 
-        set_label_content(&mut ctx, AssetId(2), "High");
-        let contents: Vec<&str> = ctx
-            .query::<TextLabel>()
-            .map(|l| l.content.as_str())
-            .collect();
-        assert_eq!(contents, ["", "High"]);
-
-        set_label_content(&mut ctx, AssetId(9), "Ultra");
-        let contents: Vec<&str> = ctx
-            .query::<TextLabel>()
-            .map(|l| l.content.as_str())
-            .collect();
-        assert_eq!(contents, ["", "High"], "an absent id changes nothing");
+        ctx.insert_resource(SettingValues::default());
+        show(&mut ctx, SettingKey::Vsync, "On");
+        place_slider(&mut ctx, SettingKey::Exposure, 0.5);
+        let values = ctx.resource::<SettingValues>().unwrap();
+        assert_eq!(values.text(SettingKey::Vsync), Some("On"));
+        assert_eq!(values.fraction(SettingKey::Exposure), Some(0.5));
     }
 
-    // Moving a slider handle hits the one matching sprite; an absent id is a
-    // no-op.
+    // The menu's keys are every setting a label shows or a region operates,
+    // each once, in the order first met.
     #[test]
-    fn set_sprite_x_moves_only_the_matching_sprite() {
+    fn menu_keys_lists_shown_and_operated_settings_once() {
         let mut world = World::new();
-        world.push_identified(
-            AssetId(1),
-            Sprite {
-                x: 0.0,
-                ..Default::default()
-            },
+        world.push(TextLabel {
+            text_binding: Some(Binding::Setting(SettingKey::Vsync)),
+            ..Default::default()
+        });
+        world.push(TextLabel {
+            text_binding: Some(Binding::State("title".into())),
+            ..Default::default()
+        });
+        world.push(region(
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": 1}}),
+            None,
+        ));
+        world.push(HitRegion {
+            slider: Some(Binding::Setting(SettingKey::Exposure)),
+            ..Default::default()
+        });
+        world.push(region(
+            serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}}),
+            None,
+        ));
+        world.push(region(serde_json::json!("quit"), None));
+        let ctx = world.context();
+
+        assert_eq!(
+            menu_keys(&ctx),
+            [
+                SettingKey::Vsync,
+                SettingKey::Exposure,
+                SettingKey::WindowMode
+            ]
         );
-        world.push_identified(
-            AssetId(2),
-            Sprite {
-                x: 0.0,
-                ..Default::default()
-            },
-        );
+    }
+
+    // A shown slider publishes its fraction and value text, and a shown rebind
+    // row its bound key.
+    #[test]
+    fn publish_rows_publishes_sliders_and_rebinds() {
+        use crate::input::keymap::Bindable;
+        let mut world = World::new();
+        world.insert_resource(SettingValues::default());
+        let state = SettingsState::for_tests();
+        let stored = StoredSettings::default();
+        let forward = SettingKey::KeyRebind(Bindable::Forward);
         let mut ctx = world.context();
 
-        set_sprite_x(&mut ctx, AssetId(2), 42.0);
+        state.publish_rows(&mut ctx, &stored, &[SettingKey::Exposure, forward]);
+        let values = ctx.resource::<SettingValues>().unwrap();
+        let exposure = registry::slider(SettingKey::Exposure).unwrap();
+        let value = exposure.current_value(&state.resolved.graphics, &stored);
         assert_eq!(
-            ctx.query::<Sprite>().map(|s| s.x).collect::<Vec<_>>(),
-            [0.0, 42.0]
+            values.fraction(SettingKey::Exposure),
+            Some(exposure.fraction(value))
         );
-
-        set_sprite_x(&mut ctx, AssetId(9), 99.0);
         assert_eq!(
-            ctx.query::<Sprite>().map(|s| s.x).collect::<Vec<_>>(),
-            [0.0, 42.0],
-            "an absent id changes nothing"
+            values.text(SettingKey::Exposure),
+            Some((exposure.format)(value).as_str())
+        );
+        assert_eq!(
+            values.text(forward),
+            Some(state.keymap.get(Bindable::Forward).display_name())
         );
     }
 
@@ -432,16 +373,16 @@ mod tests {
             world.push_identified(AssetId(id), label([id as f32 / 100.0; 3]));
         }
         world.push(region(
-            serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:shadow_map_size", "by": 1}}),
             Some(3),
         ));
         world.push(region(
-            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": 1}}),
             Some(20),
         ));
         world.push(region(serde_json::json!("quit"), Some(1)));
         world.push(region(
-            serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "prev"}}),
+            serde_json::json!({"step": {"binding": "setting:shadow_map_size", "by": -1}}),
             None,
         ));
         world.push(ScrollPanel {
@@ -480,7 +421,7 @@ mod tests {
         let mut world = World::new();
         world.push_identified(AssetId(1), label([1.0; 3]));
         world.push(region(
-            serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:shadow_map_size", "by": 1}}),
             Some(1),
         ));
         let ctx = world.context();
@@ -497,7 +438,7 @@ mod tests {
             let mut world = World::new();
             world.push_identified(AssetId(1), label(authored));
             world.push(region(
-                serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}}),
+                serde_json::json!({"step": {"binding": "setting:show_fps", "by": 1}}),
                 Some(1),
             ));
             let mut state = SettingsState::for_tests();
@@ -522,7 +463,7 @@ mod tests {
             let mut world = World::new();
             world.push_identified(AssetId(1), label(authored));
             world.push(region(
-                serde_json::json!({"setting": {"key": "resolution", "verb": "next"}}),
+                serde_json::json!({"step": {"binding": "setting:resolution", "by": 1}}),
                 Some(1),
             ));
             let mut state = SettingsState::for_tests();
@@ -552,7 +493,7 @@ mod tests {
             let mut world = World::new();
             world.push_identified(AssetId(1), label(authored));
             world.push(region(
-                serde_json::json!({"setting": {"key": "ssr", "verb": "next"}}),
+                serde_json::json!({"step": {"binding": "setting:ssr", "by": 1}}),
                 Some(1),
             ));
             let mut state = SettingsState::for_tests();
@@ -568,34 +509,6 @@ mod tests {
                 "rt {rt}, capable {capable}"
             );
         }
-    }
-
-    // Each cycle row's value label is captured under its key; drag and rebind
-    // rows are not cycle rows.
-    #[test]
-    fn init_cycle_value_labels_maps_each_cycle_key_to_its_label() {
-        let mut world = World::new();
-        world.push(region(
-            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
-            Some(1),
-        ));
-        world.push(region(
-            serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}}),
-            Some(1),
-        ));
-        world.push(region(
-            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
-            Some(2),
-        ));
-        let mut state = SettingsState::for_tests();
-        let ctx = world.context();
-
-        state.init_cycle_value_labels(&ctx);
-        assert_eq!(state.cycle_value_labels.len(), 1);
-        assert_eq!(
-            state.cycle_value_labels.get(&SettingKey::Vsync),
-            Some(&AssetId(1))
-        );
     }
 
     // The Resolution row reads the user's choice first, then the display's own

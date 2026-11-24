@@ -61,13 +61,8 @@ pub(super) struct PressureDecision {
     pub(super) budget_factor: f64,
 }
 
-// Re-evaluate the back-off valve from a fresh RSS sample.
-//
-// `rss` / `budget` are live process RSS and the `MemoryBudget` ceiling; `rising`
-// is whether RSS grew since the previous sample; `prev_stage` / `prev_factor`
-// are the last decision. Returns the new stage plus the byte-budget scale the
-// caller applies to the pools. A zero budget (no meaningful ceiling) always
-// releases.
+// Re-evaluate the back-off valve from a fresh RSS sample against the budget,
+// returning the stage and the byte-budget scale. A zero budget releases.
 pub(super) fn step_pressure(
     rss: u64,
     budget: u64,

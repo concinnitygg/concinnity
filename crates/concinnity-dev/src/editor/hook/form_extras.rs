@@ -12,10 +12,8 @@ use concinnity_engine::ecs::World;
 use super::edit::sdf_form::SdfExtras;
 use super::edit::shader_form::ShaderExtras;
 use super::{EditorHook, FormTarget, declared_id};
-use crate::editor::entry_list::{EntryId, EntryList};
+use crate::editor::entry_list::{EntryId, EntryList, Origin};
 use crate::editor::panels::form_extras::ExtraRow;
-use crate::editor::panels::form_panel;
-use crate::editor::widget;
 
 // What the extras read about the open form.
 pub(in crate::editor::hook) struct ExtrasCx<'a> {
@@ -99,16 +97,18 @@ pub(in crate::editor::hook) trait FormExtras:
     fn after(&self, _hook: &mut EditorHook, _c: &Committed) {}
 }
 
-// The extras type `ty`'s form carries, for a form opened on `target`.
+// The extras type `ty`'s form carries, for a form opened on `target` in the
+// world `origin` names.
 pub(in crate::editor::hook) fn for_type(
     ty: &str,
     entries: &EntryList,
     target: &FormTarget,
+    origin: Origin<'_>,
 ) -> Option<Box<dyn FormExtras>> {
     match (ty, target) {
         (_, FormTarget::Promote(_)) => None,
-        ("Shader", _) => Some(Box::new(ShaderExtras::open(entries, target))),
-        ("SdfVolume", _) => Some(Box::new(SdfExtras::open(entries, target))),
+        ("Shader", _) => Some(Box::new(ShaderExtras::open(entries, target, origin))),
+        ("SdfVolume", _) => Some(Box::new(SdfExtras::open(entries, target, origin))),
         _ => None,
     }
 }
@@ -124,33 +124,30 @@ impl EditorHook {
     }
 
     // The open form's extra rows and why it cannot confirm, for this frame.
-    pub(in crate::editor::hook) fn form_extras_data(
-        &self,
-        world: &World,
-    ) -> (Vec<ExtraRow>, Option<String>) {
+    pub(in crate::editor::hook) fn form_extras_data(&self) -> (Vec<ExtraRow>, Option<String>) {
         let Some(extras) = &self.form.extras else {
             return (Vec::new(), None);
         };
-        let typed = widget::field_text(world, form_panel::NAME_INPUT);
-        let cx = self.extras_cx(&typed);
+        let cx = self.extras_cx(&self.form.name);
         (extras.rows(&cx), extras.blocked(&cx))
     }
 
     // Turn the open new-asset form into one for `ty`, keeping the typed name
     // and the panel it shows beside.
-    pub(in crate::editor::hook) fn switch_form_type(&mut self, world: &mut World, ty: &str) {
-        let typed = widget::field_text(world, form_panel::NAME_INPUT);
+    pub(in crate::editor::hook) fn switch_form_type(&mut self, world: &World, ty: &str) {
+        let typed = std::mem::take(&mut self.form.name);
         let host = self.form.host;
-        self.open_form(world, ty.to_string(), FormTarget::New);
+        self.open_form(ty.to_string(), FormTarget::New);
         self.form.host = host;
         self.form.touched = true;
         self.place_form_at_view(world);
-        widget::focus_field_with(world, form_panel::NAME_INPUT, &typed);
+        self.form.name = typed;
+        self.form.focus = crate::editor::panels::form_panel::FormFocus::Name;
     }
 
     // Put the open new-asset form's position where the create menu would land
     // a click at the middle of the view, for a type that carries one.
-    pub(in crate::editor::hook) fn place_form_at_view(&mut self, world: &mut World) {
+    pub(in crate::editor::hook) fn place_form_at_view(&mut self, world: &World) {
         let Some(ty) = self.form.selected_type.clone() else {
             return;
         };
@@ -167,7 +164,7 @@ impl EditorHook {
         self.form
             .args
             .insert(key.to_string(), serde_json::json!(pos));
-        self.refresh_form(world);
+        self.refresh_form();
     }
 
     // Every row the form lists: its fields and its extra rows. The count does

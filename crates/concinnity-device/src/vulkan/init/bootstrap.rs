@@ -91,25 +91,15 @@ pub(super) fn acquire_hardware(
 
     let entry = crate::vulkan::loader::load_entry()?;
 
-    // Resolve which (if any) upscaler SDK needs Vulkan instance / device
-    // extensions enabled at creation time (DLSS / XeSS). Queried before
-    // instance creation (it needs at most the loaded SDK), then threaded
-    // into `create_logical_device` for the device extensions / features.
-    // Inert (`choice == Native`) when upscaling is off or the backend needs
-    // nothing; held in scope until after device creation so its
-    // instance-ext pointers + XeSS feature chain stay valid. Resolved before
-    // `app_info` so its `min_api_version` can raise the instance apiVersion.
+    // Which upscaler SDK needs instance and device extensions (DLSS / XeSS),
+    // resolved before instance creation and kept alive past device creation for
+    // the pointers it hands out.
     let upscale_sdk = crate::vulkan::post::UpscaleSdk::prepare(temporal_upscaling, upscale_backend);
 
     let app_name = CString::new(title).unwrap_or_default();
     let engine_name = c"Concinnity";
-    // Vulkan 1.2 baseline: FidelityFX FSR's precompiled shaders are SPIR-V
-    // 1.5, valid only under a 1.2+ instance. XeSS 3.x raises the floor to
-    // 1.3 (its shaders use SPV_KHR_integer_dot_product, a 1.3 capability),
-    // reported via `min_api_version`. Take the max, clamped to what the
-    // loader actually supports so an unsupported request can't fail instance
-    // creation (the backend then falls back). The engine's own shaders are
-    // unaffected by the bump.
+    // Vulkan 1.2 at least for FSR's SPIR-V 1.5, or XeSS's higher floor, clamped to
+    // what the loader supports.
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash
     // sizes the output vector from the count the driver reports.
     let loader_version = unsafe { entry.try_enumerate_instance_version() }
@@ -143,11 +133,8 @@ pub(super) fn acquire_hardware(
         ext_names_raw.push(debug_ext);
     }
 
-    // The optional instance extensions the loader actually exposes:
-    // `VK_EXT_swapchain_colorspace` for the extended-range surface
-    // formats HDR output needs, and `VK_KHR_portability_enumeration`
-    // so a portability driver (MoltenVK) is enumerable at all. A
-    // missing one degrades rather than failing instance creation.
+    // Optional instance extensions: swapchain colorspace for HDR, portability
+    // enumeration for MoltenVK. A missing one degrades.
     let available_ext_props =
         // SAFETY: an enumeration query on a live instance handle; it only reads, and
         // ash sizes the output vector from the count the driver reports.
@@ -196,12 +183,9 @@ pub(super) fn acquire_hardware(
         tracing::info!("vulkan validation layer: enabled");
     }
 
-    // Budget the messenger callback consumes to drop benign DLSS first-frame
-    // layout errors; set after `build_upscaler` resolves to DLSS. Heap-boxed
-    // so its address stays stable, and handed to the owning device
-    // handle alongside the messenger: the callback reads it for as long
-    // as the messenger can fire, which is past the device teardown.
-    // `None` when validation (the messenger) is off.
+    // The budget the messenger drops benign DLSS first-frame layout errors from.
+    // Boxed for a stable address and kept alive with the messenger. `None` without
+    // validation.
     let debug_filter: Option<Box<std::sync::atomic::AtomicU32>> =
         validation.then(|| Box::new(std::sync::atomic::AtomicU32::new(0)));
     let (debug_utils, debug_messenger) = if validation {
@@ -236,13 +220,8 @@ pub(super) fn acquire_hardware(
     let (physical_device, graphics_family, present_family) =
         pick_physical_device(&instance, &surface_loader, surface)?;
 
-    // Logical device. `rt_capable` comes back true when the device exposes
-    // the ray-query extension set (and XeSS is not the active backend); the
-    // RT extensions are enabled whenever capable so a live RT toggle works,
-    // independent of whether the world wants RT at launch. The
-    // acceleration-structure build + RT pass below are gated on
-    // `rt_settings.is_some() && rt_capable` (everything falls back to SSR
-    // when RT is off or the device is incapable).
+    // Logical device. RT extensions are enabled whenever capable so a live toggle
+    // works; building RT still needs `rt_settings` too.
     let LogicalDevice {
         device,
         memory_budget: memory_budget_supported,
@@ -280,12 +259,8 @@ pub(super) fn acquire_hardware(
     // SAFETY: a property query on a live handle; it only reads.
     let present_queue = unsafe { device.get_device_queue(present_family, 0) };
 
-    // Timestamp support: the per-frame GPU-time chip uses a query pool
-    // with `2 * frames` slots, a pair per in-flight frame. `timestamp_period`
-    // is nanoseconds-per-tick; `timestamp_valid_bits` on the graphics queue
-    // family must be non-zero for `cmd_write_timestamp` to be valid. Without
-    // either the renderer leaves `gpu_frame_us` at zero. Mirrors
-    // `directx::build_timestamp_resources`.
+    // Timestamps need a nonzero period and valid bits on the graphics family;
+    // without them `gpu_frame_us` stays zero.
     let device_props =
         // SAFETY: a property query on a live handle; it only reads.
         unsafe { instance.get_physical_device_properties(physical_device) };
@@ -303,18 +278,10 @@ pub(super) fn acquire_hardware(
         .map_or(0, |f| f.timestamp_valid_bits);
     let timestamps_supported = timestamp_period > 0.0 && timestamp_valid_bits > 0;
     let timestamp_query_pool = if timestamps_supported {
-        // One per-frame block of `SLOTS_PER_FRAME` slots (whole-frame pair +
-        // one pair per render pass) per frame in flight.
-        //
-        // Timing: the start buffer resets the whole block and writes the
-        // whole-frame start; each per-pass command buffer writes its own pair
-        // around its encode; the end buffer writes the whole-frame end. Unlike
-        // D3D12, which can pre-write every slot so a pass that did not run still
-        // reads a value, Vulkan forbids writing a timestamp to a query already
-        // written without an intervening reset. A pass absent from this frame's
-        // graph therefore leaves its reset-but-unwritten slots unavailable; the
-        // readback uses WITH_AVAILABILITY and reports 0 for any pair that is not
-        // both available.
+        // `SLOTS_PER_FRAME` per frame in flight: the start buffer resets the block and
+        // writes the frame start, each pass its own pair, the end buffer the frame
+        // end. Vulkan forbids rewriting a query without a reset, so a pass absent this
+        // frame stays unavailable and reads as 0.
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames));
@@ -331,11 +298,8 @@ pub(super) fn acquire_hardware(
         None
     };
 
-    // Device-local heap indices for the VRAM-residency chip. Sums
-    // `heap_usage` on every DEVICE_LOCAL heap when `VK_EXT_memory_budget`
-    // is supported; otherwise the field stays empty and the chip reports
-    // zero (matching DirectX's adapter-without-QueryVideoMemoryInfo
-    // fallback).
+    // Device-local heap indices for the VRAM readout, when `VK_EXT_memory_budget`
+    // is supported.
     let memory_props =
         // SAFETY: a property query on a live handle; it only reads.
         unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -384,11 +348,8 @@ pub(super) fn acquire_hardware(
     let swapchain_image_views =
         create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
 
-    // The device allocator every pooled buffer / image is placed
-    // through, built before any resource creation so init-time
-    // resources can pool. A reload inherits the outgoing
-    // context's instead (the other match arm), so the rebuilt
-    // world places into the blocks the old world releases.
+    // The device allocator, built before any resource; a reload inherits the
+    // outgoing context's.
     let alloc =
         crate::vulkan::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
 
@@ -444,20 +405,9 @@ fn resolve_hdr_mode(
     graphics: &ResolvedGraphics,
 ) -> hdr::HdrOutputMode {
     let (hdr_display, hdr_pq) = (graphics.display.hdr, graphics.display.pq);
-    // HDR-output resolve. The world's `hdr_display` toggle is the
-    // gate; even on a capable display, no HDR unless the asset opts
-    // in. The reverse (`hdr_display = true` on an SDR-only surface,
-    // or with the color-space loader extension missing) falls back
-    // to SDR with a logged warning. Vulkan has no portable max-EDR
-    // query: when the surface advertises the scRGB-linear color
-    // space we synthesize a placeholder `max_edr = 2.0` (the
-    // HDR400-class minimum) so the shared `HdrOutputMode::resolve`
-    // logic stays uniform across backends.
-    // Probe which HDR color-space pairs the surface advertises. An
-    // advertised HDR color space is Vulkan's "HDR available" signal (there
-    // is no portable max-EDR query), so we synthesize the placeholder
-    // `max_edr` from it. scRGB-linear drives the extended-linear path; an
-    // `HDR10_ST2084_EXT` pair (float or 10-bit packed) drives the PQ path.
+    // HDR output only when the world asks and the surface advertises a matching
+    // color space; otherwise SDR with a warning. Vulkan has no max-EDR query, so an
+    // advertised HDR space stands in with a placeholder `max_edr`.
     // SAFETY: a property query on a live handle; it only reads.
     let surface_formats =
         unsafe { surface_loader.get_physical_device_surface_formats(physical_device, surface) }
@@ -514,21 +464,13 @@ fn resolve_hdr_mode(
     hdr_mode
 }
 
-// Validation layer debug callback: logs validation errors and warnings.
-// DLSS's first EvaluateFeature samples two NGX-internal resources it leaves in
-// UNDEFINED, tripping VUID-vkCmdDraw-None-09600 exactly twice per feature
-// creation. They are internal to nvngx_dlss.dll (not bindable through the NGX
-// parameter API, confirmed by supplying our own exposure input, which did not
-// displace them) and benign (the upscale output is correct). The debug messenger
-// drops this many such messages while DLSS is the active upscaler. D3D12 never
-// surfaces them (it has no image-layout validation model).
+// DLSS's first evaluate samples two NGX-internal resources left UNDEFINED,
+// tripping VUID-vkCmdDraw-None-09600 twice per feature creation. Benign and out
+// of our reach, so the messenger drops this many while DLSS is active.
 pub(in crate::vulkan) const DLSS_FIRST_FRAME_LAYOUT_SUPPRESS: u32 = 2;
 
-// Decide whether to drop a validation message rather than log it: true only for
-// the benign DLSS first-frame layout VUID while `budget` is positive (consuming
-// one unit of it). Every other VUID, and an exhausted budget, returns false so
-// the message still surfaces. Split out from `debug_callback` so the suppression
-// logic is unit testable without a live Vulkan instance.
+// Whether to drop a validation message: only the benign DLSS layout VUID while
+// `budget` lasts, consuming one unit.
 fn drop_benign_dlss_layout_error(message_id: &[u8], budget: &std::sync::atomic::AtomicU32) -> bool {
     if message_id != b"VUID-vkCmdDraw-None-09600" {
         return false;

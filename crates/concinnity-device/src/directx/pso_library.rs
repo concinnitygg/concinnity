@@ -1,20 +1,9 @@
-// The device's ID3D12PipelineLibrary, persisted across launches.
-//
-// Mirrors `vulkan::pipeline_cache`: one library per adapter, loaded from the
-// runtime cache segment's `dx<naming>-<vendor>-<device>-<rev>` entry at init,
-// consulted by every PSO creation through `create_graphics` /
-// `create_compute`, serialized at the end of init and at shutdown. D3D12 gives
-// no content addressing, so each PSO is stored under a name derived from its
-// desc: the stage bytecode, every fixed-function discriminator and its root
-// signature's serialized form, hashed. A shader, state or root-signature edit
-// is a different name and simply misses; the driver validates the blob itself
-// and answers a stale one with an adapter/driver-mismatch HRESULT, on which the
-// entry is dropped and the launch proceeds cold. Nothing here can fail init.
-//
-// The library lives in a thread-local rather than on `DxContext` because every
-// PSO build funnels through the two wrappers here, `DxContext` is pinned to
-// the main thread, and a live editor `reload_world` reuses the device: the
-// library stays installed across the successor context.
+// The device's ID3D12PipelineLibrary, persisted across launches: loaded from
+// the runtime cache's per-adapter entry and consulted by every PSO creation.
+// Each PSO is stored under a hash of its bytecode, fixed-function state and
+// root signature, so any edit simply misses; a stale blob the driver rejects
+// is dropped and the launch runs cold. A thread-local, since every PSO build
+// funnels through here and a reload reuses the device.
 
 use concinnity_core::math::SaturatingFrom;
 use sha2::{Digest, Sha256};

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::editor::entry_list::EntryList;
+use crate::editor::entry_list::{EntryList, Origin};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::edits::Renamed;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
@@ -20,23 +20,32 @@ use crate::editor::panels::shader::source::SourceKey;
 #[derive(Debug)]
 pub(in crate::editor::hook) struct SdfExtras {
     form: SdfForm,
+    // The root the volume's field path is declared from.
+    root: PathBuf,
 }
 
 impl SdfExtras {
-    pub(in crate::editor::hook) fn open(entries: &EntryList, target: &FormTarget) -> Self {
+    pub(in crate::editor::hook) fn open(
+        entries: &EntryList,
+        target: &FormTarget,
+        origin: Origin<'_>,
+    ) -> Self {
         let editing = target.entry().and_then(|k| entries.index_of(k));
-        let dir = crate::project::assets_dir();
         Self {
-            form: SdfForm::open(entries, editing, |declared| {
-                shader::source::resolve_field_path(declared, dir.as_deref())
+            form: SdfForm::open(entries, editing, |i, declared| {
+                shader::source::resolve_path(declared, Some(&entries.root_of(i, origin)))
             }),
+            root: editing.map_or_else(
+                || entries.file_root(None, origin),
+                |i| entries.root_of(i, origin),
+            ),
         }
     }
 
     // The field file a new volume named `name` writes, and how it declares it.
     fn new_file(&self, name: &str) -> Option<(NewFile, String)> {
         let text = self.form.starter_text()?;
-        let (path, declared) = new_field_file(&file_stem(name));
+        let (path, declared) = new_field_file(&file_stem(name), &self.root);
         Some((
             NewFile {
                 path,
@@ -111,11 +120,11 @@ impl FormExtras for SdfExtras {
 }
 
 // Where a new field file `stem` goes under the project's assets, numbered past
-// files already there, and how an SdfVolume declares it: relative to the
-// assets directory, which is where the build looks for it first.
-fn new_field_file(stem: &str) -> (PathBuf, String) {
+// files already there, and how an SdfVolume declares it: from `root`, the root
+// of the file the volume is in.
+fn new_field_file(stem: &str, root: &Path) -> (PathBuf, String) {
     let dir = crate::project::assets_dir().unwrap_or_else(|| PathBuf::from("assets"));
     let path = shader::source::starter_path(&dir, stem, Path::exists);
-    let declared = shader::source::declared_form(&path, &dir);
+    let declared = concinnity_host::store::source::relative_from(root, &path);
     (path, declared)
 }

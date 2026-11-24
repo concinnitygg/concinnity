@@ -26,12 +26,8 @@ use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pip
 use super::post::post_device::PostPipeline;
 use crate::directx::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
-// Rebuild a feature's PSO(s) into a temporary only when `$cond` says the
-// feature is live, propagating any compile/create error out of the enclosing
-// `reload_shaders`. Expands to `Some(build?)` when live, `None` otherwise. A
-// feature whose resources sit behind an `Option` maps over that `Option`
-// instead, so its build borrows them directly. Mirrors
-// `metal/hot_reload.rs::rebuild_if_live!`.
+// Rebuild a feature's PSOs into a temporary when `$cond` says it is live,
+// propagating errors: `Some(build?)` when live, `None` otherwise.
 macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
@@ -50,21 +46,9 @@ struct SharedPostPipelines {
 }
 
 impl DxContext {
-    // Rebuild every built-in D3D12 PSO from disk-resident source. Each PSO
-    // is constructed into a temporary first; only when every rebuild
-    // succeeds does the context atomically swap them in. Any HLSL compile
-    // or PSO-create failure logs the underlying message and leaves the
-    // live pipelines untouched; a typo in a shader edit won't crash the
-    // running session.
-    //
-    // Covers every runtime-bundled PSO: composite, text, bloom (prefilter
-    // / downsample / upsample), GPU-cull compute, auto-exposure (build +
-    // average), projected-decal, transparent (glass + water), volumetric-fog, the
-    // sky, the G-buffer pre-pass with the sky's motion behind it, SSAO (depth
-    // copy, kernel, blur), SSR (resolve), the reflection composite (blur,
-    // composite), TAA (resolve), and every shader bucket of the GPU-driven main
-    // pass when it is live, each from its world Shader's pair where the world
-    // declares one. The shadow PSO is out of scope here.
+    // Rebuild every built-in PSO from source into temporaries, swapping them in
+    // only when all succeed; a failure logs and keeps the live pipelines. The
+    // shadow PSO is out of scope.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
@@ -114,11 +98,8 @@ impl DxContext {
             post::bloom::build_pipelines(&self.post_device(0))
         );
 
-        // Every shader bucket's main and G-buffer pre-pass PSOs, from the
-        // engine's freshly compiled programs; a world Shader's own files are
-        // spliced into the same templates, so they are rebuilt against them
-        // too. Each bucket rebuilds as a pair, so shading and the G-buffer
-        // never compile from different templates.
+        // Every shader bucket's main and pre-pass PSOs, rebuilt as pairs so they never
+        // compile from different templates.
         let bindless_main_pso = rebuild_if_live!(
             self.cull.main_bindless_root_sig.is_some() && self.cull.main_bindless_pso.is_some(),
             {
@@ -452,12 +433,8 @@ impl DxContext {
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/particle.rs].
 impl DxContext {
-    // Rebuild bucket 0 of the GPU-driven main pass and its G-buffer pre-pass
-    // from the world default Shader's freshly compiled programs and hot-swap
-    // them, for `update_world_shader`, or swap in `prepared` when a worker
-    // already built them. The replacements are built first; a compile /
-    // PSO-create failure early-returns with the live pipelines untouched,
-    // mirroring `reload_shaders`.
+    // Rebuild bucket 0's main and pre-pass PSOs from the world default Shader, or
+    // install `prepared`. Built first, swapped only on success.
     pub(in crate::directx) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_engine::components::ShaderPrograms,
@@ -481,11 +458,9 @@ impl DxContext {
         Ok(())
     }
 
-    // Bucket 0's PSOs against the live root signatures: the world default
-    // Shader's programs where `world` declares one, `engine_default` otherwise.
-    // Errors when the GPU-driven pass is not live, which means the world has
-    // nothing to draw, when the main PSO fails, or when the rebuild would drop
-    // the live pre-pass, so a live pair is kept whole.
+    // Bucket 0's PSOs: the world default Shader's programs, else `engine_default`.
+    // Errors when the GPU-driven pass is not live, or the rebuild would drop the
+    // live pre-pass.
     pub(super) fn build_world_main_pso(
         &self,
         world: Option<&concinnity_engine::components::ShaderPrograms>,

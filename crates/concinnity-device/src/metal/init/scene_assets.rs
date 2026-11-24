@@ -138,12 +138,8 @@ pub(super) fn build_scene_assets(
             .collect::<Result<Vec<_>, _>>()?
     };
 
-    // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
-    // the 1x1 tangent-space (0,0,1) texture a draw with no normal map
-    // samples, then the 1x1 white texture a draw with no albedo samples.
-    // Real normal maps and albedos are textures in `textures` (the shared
-    // pool) at their own handle; only these two live in `fallback_textures`,
-    // past the last real texture.
+    // Reserved fallbacks past the last real texture, in
+    // `FALLBACK_TEXTURE_COUNT` order: flat normal, then white.
     let flat_normal = upload_texture(allocator, 1, 1, &[128u8, 128, 255, 255])
         .map_err(|e| e.context("flat normal fallback"))?;
     let white = upload_texture(allocator, 1, 1, &[255u8, 255, 255, 255])

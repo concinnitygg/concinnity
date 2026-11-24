@@ -5,7 +5,9 @@
 use super::region_ops::point_in_rect;
 use super::scroll_layout::RowSpec;
 use super::{UiInputSystem, scroll_layout};
-use crate::components::{FrameInput, ScrollPanel, Sprite, TextLabel, UiAction};
+use crate::components::{
+    Binding, FrameInput, ScrollPanel, Sprite, TextLabel, UiAction, UiState, UiValue,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, Ref};
 use crate::gfx::overlay::OverlayTransform;
@@ -34,6 +36,8 @@ pub(super) struct RowState {
 #[derive(Debug)]
 pub(super) struct GroupState {
     pub(super) collapsed: bool,
+    // The `state:` value the collapse follows, if bound.
+    pub(super) state: Option<String>,
     pub(super) header: Option<AssetId>,
     pub(super) title: String,
 }
@@ -98,11 +102,8 @@ pub(super) struct LayoutScratch {
 }
 
 impl UiInputSystem {
-    // Drain the world's ScrollPanels into runtime state: snapshot each row
-    // element's authored y (so the reflow is `base + dy`), translate the
-    // `i32` group index into an `Option`, and bucket each HitRegion into the
-    // panel row whose band its center falls in (so the region reflows + gates
-    // with that row). Runs once at init, after HitRegions are drained.
+    // Drain the ScrollPanels into runtime state: each row's authored y, the
+    // group index, and each HitRegion bucketed into its row. Runs once at init.
     pub(super) fn init_panels(&mut self, ctx: &mut PipelineContext<'_>) {
         let panels = ctx.drain::<ScrollPanel>();
         if panels.is_empty() {
@@ -152,6 +153,10 @@ impl UiInputSystem {
                 .iter()
                 .map(|g| GroupState {
                     collapsed: g.collapsed,
+                    state: match &g.collapsed_binding {
+                        Some(Binding::State(name)) => Some(name.clone()),
+                        _ => None,
+                    },
                     header: g.header.map(Ref::id),
                     title: g.title.clone(),
                 })
@@ -173,17 +178,15 @@ impl UiInputSystem {
             });
         }
 
-        // Bucket each panel-content region into its row by center y. Only
-        // content regions (a settings action or a group toggle) are bucketed;
-        // chrome regions (tabs, and Back, which is a `show`) are left fixed even when an
-        // overflow row's authored y reaches their position. Panels read
-        // immutably while the regions are mutated (disjoint fields).
+        // Bucket content regions into rows by center y; chrome regions stay
+        // fixed.
         let panels = &self.panels;
         for entry in &mut self.regions {
-            let is_content = matches!(
-                entry.region.action,
-                Some(UiAction::Setting { .. } | UiAction::GroupToggle(_))
-            );
+            let is_content = entry.region.slider.is_some()
+                || matches!(
+                    entry.region.action,
+                    Some(UiAction::Setting { .. } | UiAction::Value { .. })
+                );
             if !is_content {
                 continue;
             }
@@ -213,19 +216,21 @@ impl UiInputSystem {
         Some([panel.track_x, thumb_y, panel.track_w, panel.thumb_h])
     }
 
-    // Apply scroll-wheel + scrollbar-thumb input to the active screen's panel.
-    // Returns true while the thumb is being dragged so the caller suppresses
-    // the slider + click passes. The solver clamps the resulting scroll
-    // offset. (The arrow keys move the focus cursor instead, which scrolls its
-    // own row into view.)
+    // Apply the wheel and scrollbar-thumb input to the active panel. Returns
+    // true while the thumb drags, so the caller suppresses the other passes.
     pub(super) fn handle_scroll_input(
         &mut self,
         input: &FrameInput,
-        active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
     ) -> bool {
-        let (qx, qy) = overlay.inverse(input.mouse_x, input.mouse_y);
-        let active_panel = self.panels.iter().position(|p| p.screen == active_screen);
+        let active_panel = self
+            .panels
+            .iter()
+            .position(|p| self.screens.receives_input(p.screen));
+        let screen = active_panel.and_then(|pi| self.panels[pi].screen);
+        let (qx, qy) = self
+            .screens
+            .cursor(screen, overlay, input.mouse_x, input.mouse_y);
 
         // Wheel: scroll the active panel while the cursor is over its band.
         if input.scroll_delta != 0.0
@@ -262,26 +267,32 @@ impl UiInputSystem {
         self.thumb_drag.is_some()
     }
 
-    // Flip one collapsible group on the active screen's panel.
-    pub(super) fn toggle_group(&mut self, active_screen: Option<AssetId>, gid: usize) {
-        if let Some(panel) = self.panels.iter_mut().find(|p| p.screen == active_screen)
-            && let Some(g) = panel.groups.get_mut(gid)
-        {
-            g.collapsed = !g.collapsed;
+    // Follow each bound group's state, when it changed since last read.
+    fn sync_group_state(&mut self, ctx: &PipelineContext<'_>) {
+        let Some(state) = ctx.resource::<UiState>() else {
+            return;
+        };
+        if self.group_state_revision == Some(state.revision()) {
+            return;
+        }
+        self.group_state_revision = Some(state.revision());
+        for group in self.panels.iter_mut().flat_map(|p| &mut p.groups) {
+            if let Some(UiValue::Bool(collapsed)) =
+                group.state.as_deref().and_then(|n| state.get(n))
+            {
+                group.collapsed = *collapsed;
+            }
         }
     }
 
-    // Solve every panel's vertical layout and write the result back: element y +
-    // visibility, region reflow + hidden flag, the scrollbar thumb position +
-    // size, and each group header's `+`/`-` prefix. Only the active screen's panel
-    // writes (an inactive screen's elements stay hidden by the screen system). Runs
-    // at init and at the end of each step so the next frame draws + hit-tests the
-    // reflowed positions consistently.
+    // Solve the active panel's layout and write back element positions,
+    // region reflow, the thumb and group header prefixes. Runs at init and
+    // after each step.
     pub(super) fn apply_scroll_layout(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.panels.is_empty() {
             return;
         }
-        let active = self.screens.top_capture();
+        self.sync_group_state(ctx);
 
         // Accumulate component writes into the reused scratch maps, then apply
         // in one pass per component type.
@@ -292,7 +303,7 @@ impl UiInputSystem {
             .resize_with(self.panels.len(), Default::default);
 
         for (pi, panel) in self.panels.iter_mut().enumerate() {
-            let panel_active = panel.screen == active;
+            let panel_active = self.screens.receives_input(panel.screen);
             self.layout.collapsed.clear();
             self.layout
                 .collapsed

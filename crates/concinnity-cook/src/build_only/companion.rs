@@ -2,7 +2,7 @@
 //
 // Each renderable asset's companions are declared in `companion_specs` and
 // dispatched there by type. This module applies the resulting
-// specs to a world JSONL value list.
+// specs to a .jsonl file value list.
 //
 // Injection runs to a fixed point. Each round snapshots the current world, asks
 // every declared asset for its companion specs, then filters out specs whose

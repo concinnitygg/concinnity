@@ -1,11 +1,6 @@
-// Which tiles of a planet's quadtree to keep and which to draw, from where the
-// camera is, how large the ground looks from there, and which tiles have their
-// meshes.
-//
-// Each level hands over to its parent at a range proportional to its tiles'
-// width. Its vertices morph toward the parent's mesh over the last stretch of
-// that range, so a tile and its children look alike wherever the quadtree
-// swaps them.
+// Which planet tiles to keep and draw from the camera's position. Each level
+// hands over at a range proportional to its tile width, morphing over the last
+// stretch so the swap is seamless.
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;

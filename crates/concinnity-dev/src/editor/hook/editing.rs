@@ -6,21 +6,19 @@ use concinnity_cook::authoring::world::{args_with_id, replace_args};
 use concinnity_engine::ecs::World;
 
 use super::form_extras::{self, with_optional_id};
-use super::{
-    EditorHook, FormTarget, FormTemplate, declared_id, names_of_types, short_status, visible_slot,
-};
+use super::{EditorHook, FormTarget, FormTemplate, declared_id, names_of_types, short_status};
+use crate::editor::overrides;
 use crate::editor::panels::form;
-use crate::editor::panels::form_panel::{self, FormAction, FormFocus};
+use crate::editor::panels::form_panel::{FormAction, FormFocus};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::{overrides, widget};
 
 impl EditorHook {
     // Open the add / edit form for `ty`: derive its editable arg fields from the
     // type's defaults (or the edited asset's current args), seed the name + each
     // text field, and focus the name. `target` decides where confirming lands --
     // a fresh line, an existing one, or the promotion of a generated asset.
-    pub(super) fn open_form(&mut self, world: &mut World, ty: String, target: FormTarget) {
-        self.open_form_with(world, ty, target, None);
+    pub(super) fn open_form(&mut self, ty: String, target: FormTarget) {
+        self.open_form_with(ty, target, None);
     }
 
     // As `open_form`, but seeded from `template`'s effective (merged) args
@@ -29,7 +27,6 @@ impl EditorHook {
     // defaults where the template's values belong.
     pub(super) fn open_form_with(
         &mut self,
-        world: &mut World,
         ty: String,
         target: FormTarget,
         template: Option<FormTemplate>,
@@ -66,7 +63,7 @@ impl EditorHook {
         };
         self.form.extras = match &template {
             Some(_) => None,
-            None => form_extras::for_type(&ty, &self.entries, &target),
+            None => form_extras::for_type(&ty, &self.entries, &target, self.world_origin()),
         };
         self.form.template = template;
         self.form.touched = false;
@@ -84,26 +81,20 @@ impl EditorHook {
         self.assets.picker_open = false;
         self.assets.row_menu = None;
         self.form.field_dropdown = None;
-        self.form.field_dropdown_scroll = 0;
-        self.form.scroll = 0;
+        self.form.last_jump = 0;
+        self.form.opened += 1;
         self.form.vec_expanded.clear();
         // A freshly opened form comes to the front (the click that opened it focused
         // the Assets panel; the form the user is now editing should sit on top).
         self.focus_panel(PanelKey::Edit);
-        self.refresh_form(world);
-        widget::focus_field_with(world, form_panel::NAME_INPUT, &name);
-    }
-
-    // The form panel's visible field-slot count at its current (possibly resized)
-    // height, for the seed / capture window and the scroll clamps.
-    pub(super) fn form_window(&self) -> usize {
-        form_panel::rows_for_height(self.effective_size(PanelKey::Edit)[1])
+        self.refresh_form();
+        self.form.name = name;
     }
 
     // Derive the form's fields from the current working args, fill each reference
-    // field's options, and (re-)seed the text controls. Called on open and after a
+    // field's options, and (re-)seed the field texts. Called on open and after a
     // structural change (array add / remove) re-shapes the field list.
-    pub(super) fn refresh_form(&mut self, world: &mut World) {
+    pub(super) fn refresh_form(&mut self) {
         let Some(ty) = self.form.selected_type.clone() else {
             return;
         };
@@ -113,11 +104,7 @@ impl EditorHook {
             fields.retain(|f| !hidden.iter().any(|h| form::is_at_or_under(&f.key, h)));
         }
         self.form.fields = fields;
-        // Clamp the scroll window to the (possibly changed) row count -- an array
-        // shrink can leave `form_scroll` past the new last page.
-        let window = self.form_window();
-        let max = self.form_row_count().saturating_sub(window);
-        self.form.scroll = self.form.scroll.min(max);
+        self.form.rows_rev += 1;
         // Reference fields pick from the world's existing assets of their target
         // type. Resolve the option lists up front (reads `entries` + the cooked
         // tree) so the fill loop does not borrow `self` twice.
@@ -148,59 +135,38 @@ impl EditorHook {
                 form::set_action_options(field, &screens, &scenes);
             }
         }
-        // Seed only the text controls inside the visible window (their pool is
-        // slot-indexed). Bool (checkbox), Enum + Ref (cycle buttons), and Array (a
-        // header) have no text input to seed.
-        let scroll = self.form.scroll;
-        for (j, field) in self.form.fields.iter().enumerate() {
-            if !field.kind.has_text_input() {
-                continue;
-            }
-            if let Some(r) = visible_slot(j, scroll, window) {
-                widget::seed_field(world, form_panel::form_input(r), &field.initial);
-            }
-        }
+        self.form.texts = self
+            .form
+            .fields
+            .iter()
+            .map(|f| {
+                if f.kind.has_text_field() {
+                    f.initial.clone()
+                } else {
+                    String::new()
+                }
+            })
+            .collect();
     }
 
     // Capture the current control values into the working args, preserving its
     // structure (array lengths). Run before a structural change or commit so edits
     // are not lost when the fields re-derive.
-    pub(super) fn capture_controls(&mut self, world: &World) {
+    pub(super) fn capture_controls(&mut self) {
         let Some(ty) = self.form.selected_type.clone() else {
             return;
         };
-        let scroll = self.form.scroll;
-        let window = self.form_window();
-        let texts: Vec<String> = self
-            .form
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(j, f)| {
-                if !f.kind.has_text_input() {
-                    // State lives in the field (boolval / variant_idx) or its child
-                    // leaves (a disclosed vector), not a control of its own.
-                    String::new()
-                } else if let Some(r) = visible_slot(j, scroll, window) {
-                    // In the window: read the live control.
-                    widget::field_text(world, form_panel::form_input(r))
-                } else {
-                    // Off-window: feed its stored value back so `assemble` round-trips
-                    // it unchanged rather than blanking it (an empty string would
-                    // overwrite a text field).
-                    form::current_text(&self.form.args, &f.key)
-                }
-            })
-            .collect();
-        self.form.args = form::assemble(&ty, Some(&self.form.args), &self.form.fields, &texts);
+        self.form.args = form::assemble(
+            &ty,
+            Some(&self.form.args),
+            &self.form.fields,
+            &self.form.texts,
+        );
     }
 
-    // The names a reference field targeting `targets` can pick from: every asset
-    // of those types in the expanded world, not just the authored lines, and
-    // every asset when the field names no type. A promoted asset's references
-    // point at generated assets, so an authored-only list would offer no way to
-    // retarget one (`form::set_ref_options` keeps the current value regardless,
-    // but could not offer its siblings).
+    // The names a reference field targeting `targets` can pick from: every
+    // asset of those types in the expanded world, or every asset without a
+    // type.
     fn ref_options(&self, targets: &[&str]) -> Vec<String> {
         let mut names = names_of_types(&self.entries, targets);
         let wanted: Vec<RegisteredType> = targets
@@ -216,9 +182,10 @@ impl EditorHook {
         names
     }
 
-    // Route a resolved form-panel click. Field-focus transitions mutate the
-    // injected `TextInput` components, so this needs the world.
-    pub(super) fn apply_form(&mut self, action: FormAction, world: &mut World) {
+    // Route a resolved form-panel click. Field-focus transitions read the
+    // form's `TextField`s, so this needs the world.
+    pub(super) fn apply_form(&mut self, action: FormAction, world: &World) {
+        self.form.data_rev += 1;
         // Control edits (as opposed to focus moves / dropdown toggles) mark
         // the form's unapplied-edit state.
         if matches!(
@@ -232,8 +199,6 @@ impl EditorHook {
             self.form.touched = true;
         }
         match action {
-            FormAction::FocusName => self.form.focus = FormFocus::Name,
-            FormAction::FocusField(i) => self.form.focus = FormFocus::Field(i),
             FormAction::ToggleField(i) => {
                 if let Some(f) = self.form.fields.get_mut(i) {
                     f.boolval = !f.boolval;
@@ -255,7 +220,6 @@ impl EditorHook {
                 } else {
                     Some(i)
                 };
-                self.form.field_dropdown_scroll = 0;
                 self.form.error = None;
             }
             FormAction::PressExtra(id) => {
@@ -281,36 +245,36 @@ impl EditorHook {
                 self.form.error = None;
             }
             FormAction::AddArrayElement(j) => {
-                self.capture_controls(world);
+                self.capture_controls();
                 if let (Some(ty), Some(path)) = (
                     self.form.selected_type.clone(),
                     self.form.fields.get(j).map(|f| f.key.clone()),
                 ) {
                     form::add_array_elem(&ty, &mut self.form.args, &path);
                     self.form.focus = FormFocus::Name;
-                    self.refresh_form(world);
+                    self.refresh_form();
                 }
                 self.form.error = None;
             }
             FormAction::RemoveArrayElement(j) => {
-                self.capture_controls(world);
+                self.capture_controls();
                 if let Some(path) = self.form.fields.get(j).map(|f| f.key.clone()) {
                     form::remove_array_elem(&mut self.form.args, &path);
                     self.form.focus = FormFocus::Name;
-                    self.refresh_form(world);
+                    self.refresh_form();
                 }
                 self.form.error = None;
             }
             FormAction::ToggleVecExpand(j) => {
                 // Fold the live controls in first so an in-progress edit survives the
                 // field list re-deriving with / without this vector's element leaves.
-                self.capture_controls(world);
+                self.capture_controls();
                 if let Some(path) = self.form.fields.get(j).map(|f| f.key.clone()) {
                     if !self.form.vec_expanded.remove(&path) {
                         self.form.vec_expanded.insert(path);
                     }
                     self.form.focus = FormFocus::Name;
-                    self.refresh_form(world);
+                    self.refresh_form();
                 }
                 self.form.error = None;
             }
@@ -323,38 +287,40 @@ impl EditorHook {
                 self.form.entity_menu_open = false;
                 self.form.field_dropdown = None;
             }
-            FormAction::PickOverrideOption(k) => self.pick_override_option(k, world),
+            FormAction::PickOverrideOption(k) => self.pick_override_option(k),
             FormAction::OpenEntityMenu => {
                 self.form.entity_menu_open = !self.form.entity_menu_open;
                 self.form.override_menu = None;
                 self.form.field_dropdown = None;
             }
-            FormAction::PickEntityOption(k) => self.pick_entity_option(k, world),
-            FormAction::JumpOverride => self.jump_to_override(world),
-            FormAction::Confirm => self.confirm_form(world),
+            FormAction::PickEntityOption(k) => self.pick_entity_option(k),
+            FormAction::JumpOverride => self.jump_to_override(),
+            FormAction::Confirm => self.confirm_form(),
             FormAction::Close => self.form.close(),
-            FormAction::CloseOverlays => {
-                self.form.field_dropdown = None;
-                self.form.override_menu = None;
-                self.form.entity_menu_open = false;
-            }
-            FormAction::Consume => {}
         }
+    }
+
+    // Close whichever menu the form has open.
+    pub(super) fn close_form_menus(&mut self) {
+        self.form.field_dropdown = None;
+        self.form.override_menu = None;
+        self.form.entity_menu_open = false;
+        self.form.data_rev += 1;
     }
 
     // Capture the form's controls into the working args, validate, and commit (add
     // a new entry or update the edited one). On a validation error the form stays
     // open with the message shown, so nothing invalid ever reaches world.jsonl.
-    pub(super) fn confirm_form(&mut self, world: &World) {
+    pub(super) fn confirm_form(&mut self) {
         self.form.error = None;
         let Some(ty) = self.form.selected_type.clone() else {
             self.form.close();
             return;
         };
-        let typed = widget::field_text(world, form_panel::NAME_INPUT);
+        let typed = self.form.name.clone();
         // Fold the live control values into the working args (which already holds the
         // structure: nested objects, array lengths), then validate the whole thing.
-        self.capture_controls(world);
+        self.capture_controls();
         let mut args = self.form.args.clone();
         let mut files = Vec::new();
         if let Some(extras) = &self.form.extras {

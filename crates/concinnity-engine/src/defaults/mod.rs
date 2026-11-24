@@ -20,13 +20,18 @@
 //! [`EngineDefaults`] turns individual
 //! defaults off entirely; the world holds at most one, and its column is
 //! drained here.
+//!
+//! Last, every overlay element left on no screen, an injected chip among them,
+//! joins a persistent window-space screen minted for it, so every element the
+//! world draws belongs to a screen.
 
 mod font;
 mod hud;
 mod loading;
 mod physics;
+mod screens;
 
-use crate::components::{EngineDefaults, Window};
+use crate::components::{EngineDefaults, UiItem, UiState, UiStateValues, Window};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::error::AssetIdsExhausted;
@@ -44,8 +49,28 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     crate::environment::planet::load_edits(ctx)?;
     let toggles = take_toggles(ctx)?;
+    // The UI state exists from the start, so the app's systems read and write
+    // it before any element does.
+    if ctx.resource::<UiState>().is_none() {
+        ctx.insert_resource(UiState::default());
+    }
+    let declared = ctx.drain::<UiStateValues>();
+    if let Some(state) = ctx.resource_mut::<UiState>() {
+        for d in declared {
+            for value in d.values {
+                state.seed(&value.name, value.value);
+            }
+            for list in d.lists {
+                if state.list(&list.name).is_empty() {
+                    let items = list.items.iter().map(|t| UiItem::new(t)).collect();
+                    state.set_list(&list.name, items);
+                }
+            }
+        }
+    }
     let mut minter = Minter::resume(ctx);
-    let result = inject_defaults(ctx, &toggles, &mut minter);
+    let result = inject_defaults(ctx, &toggles, &mut minter)
+        .and_then(|()| screens::adopt_screenless(ctx, &mut minter));
     minter.store(ctx);
     result
 }
@@ -96,11 +121,17 @@ pub(crate) struct Minter {
 
 impl Minter {
     // Continue from the world's own counter, so nothing minted before this
-    // pass (a mesh handed over through `World::add_mesh`) is renamed.
+    // pass (a mesh handed over through `World::add_mesh`, or an asset loaded
+    // with a minted id) is renamed.
     fn resume(ctx: &PipelineContext<'_>) -> Self {
-        Self {
-            ids: ctx.resource::<MintedIds>().cloned().unwrap_or_default(),
-        }
+        let ids = ctx.resource::<MintedIds>().cloned().unwrap_or_else(|| {
+            MintedIds::past(
+                ctx.resource::<crate::ecs::EntityById>()
+                    .into_iter()
+                    .flat_map(|ids| ids.iter().map(|(id, _)| id)),
+            )
+        });
+        Self { ids }
     }
 
     // Hand the counter back to the world once the pass is done with it.

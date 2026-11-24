@@ -58,11 +58,9 @@ pub fn nits_per_exposed(sunlight: f32, exposure: f32) -> f32 {
     }
 }
 
-// How far the composite turns one pixel to night vision: the frame's
-// `weight` times the rods' share at the pixel's own luminance, the exposed
-// `luminance` at `nits` cd/m2 a unit. The rods saturate in bright light, so
-// a pixel bright enough for the cones keeps its color however dark the rest
-// of the frame is. Mirrors `night_weight` in `composite.hlsl`.
+// How far the composite turns a pixel to night vision: `weight` times the rods'
+// share at its luminance, so bright pixels keep their color. Mirrors
+// `night_weight` in `composite.hlsl`.
 #[cfg(test)]
 fn pixel_night_weight(weight: f32, luminance: f32, nits: f32) -> f32 {
     weight * rod_share(luminance * nits)

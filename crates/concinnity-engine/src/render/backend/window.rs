@@ -7,6 +7,7 @@
 
 use crate::input::snapshot::{InputPacket, InputSnapshot};
 use crate::window::clipboard::Clipboard;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 /// The presentation surface and its input: the close request, input, vsync,
@@ -163,6 +164,14 @@ pub trait WindowControl {
     /// backend or an embedded view has none, and a caller falls back to a
     /// clipboard of its own.
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        None
+    }
+
+    /// The same system clipboard as a handle any thread may hold and use, for
+    /// systems that run away from the window's thread. Default `None`: a window
+    /// whose clipboard only its own thread may touch offers just
+    /// [`Self::clipboard`].
+    fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
         None
     }
 }

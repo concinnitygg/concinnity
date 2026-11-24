@@ -25,8 +25,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
     MTLCommandBuffer, MTLComputePipelineState, MTLDevice, MTLLoadAction, MTLPixelFormat,
-    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
-    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineState,
+    MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::allocator::{DeviceAllocator, PooledTexture};
@@ -272,11 +272,9 @@ impl AtmosphereState {
 }
 
 impl MtlContext {
-    // Build this frame's tables: the sky view, the aerial volume and the
-    // irradiance cube, after the transmittance and multiple-scattering tables
-    // when the ground they are built over has changed; then this frame's steps
-    // of the sky cube. One encoder; its resources are hazard-tracked, so each
-    // dispatch waits for the writes the one before it made.
+    // Build this frame's tables and sky-cube steps in one hazard-tracked
+    // encoder, redoing transmittance and multiple scattering when the ground
+    // changed.
     pub(in crate::metal) fn encode_atmosphere(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -457,5 +455,50 @@ impl MtlContext {
         self.atmosphere
             .as_ref()
             .is_none_or(|atmo| atmo.readiness.ready(self.frames_in_flight))
+    }
+}
+
+// What the transparent pass hazes its draws through: this frame's atmosphere
+// block, the transmittance and multiple-scattering tables and the aerial
+// volume.
+pub(in crate::metal) struct TransparentAir<'a> {
+    params: &'a AtmosphereParams,
+    transmittance: &'a ProtocolObject<dyn MTLTexture>,
+    multiscatter: &'a ProtocolObject<dyn MTLTexture>,
+    aerial: &'a ProtocolObject<dyn MTLTexture>,
+}
+
+impl MtlContext {
+    // The air the transparent pass hazes through, once a frame has built the
+    // atmosphere's tables.
+    pub(in crate::metal) fn transparent_air(&self) -> Option<TransparentAir<'_>> {
+        let atmo = self.atmosphere.as_ref()?;
+        Some(TransparentAir {
+            params: atmo.params.as_ref()?,
+            transmittance: &atmo.transmittance,
+            multiscatter: &atmo.multiscatter,
+            aerial: &atmo.aerial,
+        })
+    }
+
+    // Bind the air's inputs for the transparent pass. Without an atmosphere
+    // the view's air flag is off and nothing reads them, so a zeroed block,
+    // a 2D table and the color-grading LUT's volume stand in.
+    pub(in crate::metal) fn bind_transparent_air(
+        &self,
+        enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    ) {
+        use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
+        let stand_in = <AtmosphereParams as bytemuck::Zeroable>::zeroed();
+        let table: &ProtocolObject<dyn MTLTexture> = &self.scene.ltc_matrix_texture;
+        let (params, transmittance, multiscatter, aerial) = match self.transparent_air() {
+            Some(air) => (air.params, air.transmittance, air.multiscatter, air.aerial),
+            None => (&stand_in, table, table, &*self.scene.color_lut),
+        };
+        enc.set_fragment_value(params, slots::ATMOSPHERE.index);
+        enc.set_fragment_texture(transmittance, slots::TRANSMITTANCE.index);
+        enc.set_fragment_texture(multiscatter, slots::MULTISCATTER.index);
+        enc.set_fragment_texture(aerial, slots::AERIAL_VOLUME.index);
+        set_fragment_sampler_range(enc, &self.composite.sampler, slots::AIR_SAMPLER.index, 1);
     }
 }

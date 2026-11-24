@@ -1,18 +1,11 @@
-// Disk-cached compilation for MSL sources: a world's Shader and SdfVolume
-// programs, whose authored text is spliced into engine templates and so cannot
-// precompile into the build-time metallib, and the hand-written cull encode
-// kernel when its source no longer matches the embedded copy. A cold build
-// compiles through `concinnity_shader::metallib`, the same path the build
-// script takes for the built-in shaders, and stores the metallib bytes
-// content-addressed in the shader cache; a warm launch loads the bytes straight
-// into `newLibraryWithData`, skipping the multi-hundred-millisecond in-process
-// source compile. Without the toolchain (a machine with no Xcode) every path
-// falls back to `newLibraryWithSource`.
+// Disk-cached compilation for MSL that cannot precompile at build time: world
+// Shader and SdfVolume programs, and the cull encode kernel when its source
+// changed. A cold build compiles through `concinnity_shader::metallib` and
+// stores the metallib content-addressed; a warm launch loads it directly.
+// Without the toolchain every path uses `newLibraryWithSource`.
 //
-// The toolchain's id is part of the key. `shader::cache::verify_toolchain`
-// discards the segment when dxc changes, but the Metal toolchain upgrades
-// independently of it, and a metallib from a superseded one loads perfectly
-// well, which is exactly what makes replaying it invisible.
+// The toolchain's id is part of the key, since a metallib from a superseded
+// toolchain still loads.
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_shader::HlslTarget;

@@ -1,8 +1,6 @@
-// A planet's surface: a sphere of `radius` around `center`, shaped by seeded
-// noise fields sampled on the sphere itself, so the surface is one function of
-// direction with no seams, and by the edits stored over it. Every consumer
-// (render tiles, colliders) reads it from here, so they cannot disagree about
-// where the ground is.
+// A planet's surface: a sphere shaped by seeded noise sampled on the sphere
+// and by stored edits, one seamless function of direction that every consumer
+// reads.
 
 use alloc::sync::Arc;
 use concinnity_core::math::SaturatingFrom;

@@ -49,7 +49,7 @@ pub(in crate::pipeline) struct MeshCacheEntry {
 // regular per-asset cache path inside compile_and_pack_payloads is sufficient.
 pub(in crate::pipeline) fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     targets: concinnity_core::platform::PlatformSet,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     let mut out = std::collections::HashMap::new();
@@ -73,7 +73,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
         let ctx = crate::asset::BuildCtx {
             name: asset.id.as_str(),
             targets,
-            assets_dir,
+            root,
             all_assets: &empty,
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + job_resource_kind(rt) as u8;
@@ -177,7 +177,7 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) partition: &'a crate::compile::scene_partition::ScenePartition,
     pub(in crate::pipeline) mesh_source_handles: &'a concinnity_engine::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
-    pub(in crate::pipeline) assets_dir: Option<&'a Path>,
+    pub(in crate::pipeline) root: Option<&'a Path>,
     pub(in crate::pipeline) targets: concinnity_core::platform::PlatformSet,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     pub(in crate::pipeline) progress: Progress<'a>,
@@ -194,7 +194,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         partition,
         mesh_source_handles,
         max_blob_bytes,
-        assets_dir,
+        root,
         targets,
         mesh_cache,
         progress,
@@ -247,7 +247,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let shared = CompileShared {
         assets,
         named_src,
-        assets_dir,
+        root,
         targets,
         mesh_cache,
         stage: &stage,
@@ -421,7 +421,7 @@ type ComponentJob = (usize, String, RegisteredType, u8);
 struct CompileShared<'a> {
     assets: &'a [WorldJsonlAsset],
     named_src: &'a [usize],
-    assets_dir: Option<&'a Path>,
+    root: Option<&'a Path>,
     targets: concinnity_core::platform::PlatformSet,
     mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     stage: &'a StageProgress<'a>,
@@ -447,7 +447,7 @@ fn compile_component(
     let ctx = crate::asset::BuildCtx {
         name: name.as_str(),
         targets: shared.targets,
-        assets_dir: shared.assets_dir,
+        root: shared.root,
         all_assets: shared.assets,
     };
     let build = ct.build_asset().ok_or_else(|| {
@@ -502,7 +502,7 @@ fn compile_resource(
     let ctx = crate::asset::BuildCtx {
         name: asset.id.as_str(),
         targets: shared.targets,
-        assets_dir: shared.assets_dir,
+        root: shared.root,
         all_assets: shared.assets,
     };
     let build = rt.build_asset().ok_or_else(|| {
@@ -718,7 +718,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1024,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &cache,
                 progress: Progress::none(),
             },
@@ -806,7 +806,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1 << 20,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &cache,
                 progress: Progress::none(),
             },
@@ -849,7 +849,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
@@ -904,7 +904,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1 << 20,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &cache,
                 progress: Progress::none(),
             },
@@ -1004,7 +1004,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
@@ -1098,7 +1098,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1024,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
@@ -1147,7 +1147,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1024,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
@@ -1201,7 +1201,7 @@ mod tests {
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 8,
-                assets_dir: None,
+                root: None,
                 mesh_cache: &cache,
                 progress: Progress::none(),
             },

@@ -54,12 +54,9 @@ impl Solved {
     }
 }
 
-// Solve the vertical layout, writing each row's placement into `out` (cleared
-// first, so a caller reuses its capacity frame over frame). `rows` are in
-// top-to-bottom order with their build-time (all-expanded, unscrolled)
-// positions implied by the running sum of heights. `collapsed[g]` hides every
-// row whose `group == Some(g)`. `band_height` is the visible window; `scroll`
-// is the requested offset (clamped here).
+// Solve the vertical layout into `out` (cleared first). `rows` run top to
+// bottom; `collapsed[g]` hides group `g`'s rows; `scroll` is clamped to
+// `band_height`.
 pub(super) fn solve_into(
     rows: &[RowSpec],
     collapsed: &[bool],

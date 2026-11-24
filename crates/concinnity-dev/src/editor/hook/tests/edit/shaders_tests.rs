@@ -7,7 +7,6 @@
 
 use concinnity_engine::components::ShaderStage;
 use concinnity_engine::ecs::World;
-use std::cell::Cell;
 use std::path::Path;
 
 use crate::debug::hot_reload::{ReloadOutcome, ReloadReport, ReloadSubject};
@@ -19,6 +18,7 @@ use crate::editor::panels::shader;
 use crate::editor::panels::shader::list::RowKind;
 use crate::editor::panels::shader::list_panel::ShadersAction;
 use crate::editor::panels::shader::source::{Leave, SourceKey};
+use crate::frame_hook::FrameHook;
 
 fn shader(name: &str, fragment: &Path) -> serde_json::Value {
     serde_json::json!({"type": "Shader", "args": {
@@ -59,19 +59,19 @@ fn modal_actions(h: &EditorHook) -> Vec<modal::Action> {
 fn a_file_row_opens_the_source_panel() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = World::new();
+    let world = World::new();
     let rows = h.shader_rows().to_vec();
     let i = rows
         .iter()
         .position(|r| r.kind == RowKind::File(key("water")))
         .unwrap();
-    h.apply_shaders_action(ShadersAction::Row(i), &rows, &mut world);
+    h.apply_shaders_action(ShadersAction::Row(i), &world);
     let src = h.shaders.source.as_ref().unwrap();
     assert_eq!(src.area.text(), "water");
-    assert_eq!(src.title(), "water fragment");
+    assert_eq!(src.title_parts(), ["water", "fragment"]);
     assert!(src.focus);
     assert_eq!(h.panel_order.last(), Some(&PanelKey::ShaderSource));
-    assert!(registry::panel(PanelKey::ShaderSource).is_open(&h));
+    assert!(registry::is_open(PanelKey::ShaderSource, &h));
 }
 
 // Leaving unsaved edits asks; Cancel stays, Discard leaves them unwritten, and
@@ -91,7 +91,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Discard: water opens and lit's file is untouched.
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Open(key("water")), &World::new());
+    h.answer_leave_shader_source(false, Leave::Open(key("water")));
     assert_eq!(open_shader(&h).as_deref(), Some("water"));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("lit.hlsl")).unwrap(),
@@ -100,7 +100,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Save: the edits are written, then lit opens.
     h.shaders.source.as_mut().unwrap().area.type_char('y');
-    h.answer_leave_shader_source(true, Leave::Open(key("lit")), &World::new());
+    h.answer_leave_shader_source(true, Leave::Open(key("lit")));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("water.hlsl")).unwrap(),
         "ywater"
@@ -126,11 +126,11 @@ fn closing_asks_only_over_unsaved_edits() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
     let mut world = World::new();
-    let panel = registry::panel(PanelKey::ShaderSource);
+    let source = PanelKey::ShaderSource;
     h.open_shader_file(key("lit"));
     h.shaders.source.as_mut().unwrap().area.type_char('x');
-    panel.close(&mut h, &mut world);
-    assert!(panel.is_open(&h));
+    registry::close(source, &mut h, &mut world);
+    assert!(registry::is_open(source, &h));
     assert_eq!(
         modal_actions(&h)[1],
         modal::Action::LeaveShaderSource {
@@ -139,12 +139,12 @@ fn closing_asks_only_over_unsaved_edits() {
         }
     );
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Close, &world);
-    assert!(!panel.is_open(&h));
+    h.answer_leave_shader_source(false, Leave::Close);
+    assert!(!registry::is_open(source, &h));
 
     h.open_shader_file(key("lit"));
-    panel.close(&mut h, &mut world);
-    assert!(!panel.is_open(&h));
+    registry::close(source, &mut h, &mut world);
+    assert!(!registry::is_open(source, &h));
     assert!(h.modal.is_none());
 }
 
@@ -196,43 +196,102 @@ fn failed_at(path: &str, line: u32, column: u32) -> ReloadOutcome {
     }))
 }
 
-thread_local! {
-    static RESOLVED: Cell<usize> = const { Cell::new(0) };
+// Tick the hook over `world` on a plain frame, with the source panel's disk
+// check due.
+fn tick_checking_disk(h: &mut EditorHook, world: &mut World) {
+    if let Some(src) = h.shaders.source.as_mut() {
+        src.next_check = 0.0;
+        src.mtime = None;
+    }
+    h.tick(world);
 }
 
-fn counting_resolve(declared: &str, dir: Option<&Path>) -> String {
-    RESOLVED.with(|n| n.set(n.get() + 1));
-    shader::source::resolve_path(declared, dir)
+fn shown_source(dir: &Path) -> (EditorHook, World) {
+    let mut world = World::new();
+    crate::editor::install::editor_ui(&mut world);
+    world.add_component(concinnity_engine::components::FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    let mut h = session(dir);
+    h.open_shader_file(key("lit"));
+    h.tick(&mut world);
+    h.tick(&mut world);
+    assert!(h.lent[PanelKey::ShaderSource], "the editor is out on loan");
+    (h, world)
 }
 
-// The list resolves each declared file once, however many frames ask for its
-// rows, while a new report still reaches the row it concerns.
+// A clean file changed on disk while the panel's editor is lent out is
+// reloaded into the editor the hook takes back.
 #[test]
-fn the_list_resolves_each_file_once() {
-    let _guard = crate::test_support::lock();
+fn a_clean_file_changed_on_disk_reloads_while_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, mut world) = shown_source(dir.path());
+    std::fs::write(dir.path().join("lit.hlsl"), "lit v2").unwrap();
+    tick_checking_disk(&mut h, &mut world);
+    h.reclaim_built(&mut world);
+    assert_eq!(h.shaders.source.as_ref().unwrap().area.text(), "lit v2");
+}
+
+// Unsaved edits are kept over a change on disk, with a notice saying so.
+#[test]
+fn a_dirty_buffer_notices_a_change_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, mut world) = shown_source(dir.path());
+    h.reclaim_built(&mut world);
+    h.shaders.source.as_mut().unwrap().area.type_char('x');
+    std::fs::write(dir.path().join("lit.hlsl"), "lit v2").unwrap();
+    tick_checking_disk(&mut h, &mut world);
+    h.reclaim_built(&mut world);
+    let src = h.shaders.source.as_ref().unwrap();
+    assert_eq!(src.area.text(), "xlit");
+    assert_eq!(
+        src.status.as_ref().unwrap().tone,
+        shader::diagnostics::Tone::Warning
+    );
+}
+
+// A context menu closes once the Shaders it numbers change, so a pick cannot
+// land on another Shader.
+#[test]
+fn a_menu_closes_when_the_shaders_change() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    h.shaders.resolve = counting_resolve;
-    RESOLVED.with(|n| n.set(0));
-    h.shaders
-        .reports
-        .arm([ReloadSubject::shader("lit"), ReloadSubject::shader("water")]);
-    for _ in 0..5 {
-        h.shader_rows();
-    }
-    assert_eq!(RESOLVED.with(Cell::get), 2, "one per declared file");
+    let world = World::new();
+    let rows = h.shader_rows().to_vec();
+    let i = rows
+        .iter()
+        .position(|r| matches!(r.kind, RowKind::Header(1)))
+        .unwrap();
+    h.apply_shaders_action(ShadersAction::Context(i), &world);
+    assert!(h.shaders.menu.is_some());
+    h.entries.remove(0);
+    h.apply_shaders_action(ShadersAction::Menu(2), &world);
+    assert!(h.shaders.menu.is_none());
+    assert_eq!(h.entries.len(), 1, "the pick deleted nothing");
+}
 
-    let lit = dir.path().join("lit.hlsl").to_string_lossy().into_owned();
+// Showing an unchanged file again allocates nothing, with the reference
+// column open and a marker in the gutter.
+#[test]
+fn a_steady_source_sync_allocates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, mut world) = shown_source(dir.path());
+    h.reclaim_built(&mut world);
+    h.shaders.reference.open = true;
+    let path = h.shaders.source.as_ref().unwrap().path.clone();
     h.shaders.reports.publish(&[ReloadReport {
         subject: ReloadSubject::shader("lit"),
-        outcome: failed_at(&lit, 1, 1),
+        outcome: failed_at(&path, 1, 1),
     }]);
-    let badge = h
-        .shader_rows()
-        .iter()
-        .find(|r| r.kind == RowKind::File(key("lit")))
-        .and_then(|r| r.badge.clone())
+    h.drive_shader_source();
+    assert_eq!(h.shaders.source.as_ref().unwrap().markers.len(), 1);
+    let panel = world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::ShaderSource))
+        .cloned()
         .unwrap();
-    assert_eq!(badge.0, "failed");
-    assert_eq!(RESOLVED.with(Cell::get), 2);
+    h.sync_shader_source(&mut world, &panel);
+    let min = concinnity_testing::quietest_allocs(0, || h.sync_shader_source(&mut world, &panel));
+    assert_eq!(min, 0, "a steady sync allocated {min} times");
 }

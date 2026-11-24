@@ -16,11 +16,11 @@ use crate::editor::hook::pick::camera_ray;
 use crate::editor::hud;
 use crate::editor::panels::planet::tool_strip::StripAction;
 use crate::editor::panels::planet::{self, List};
-use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::planet_tools::ring::{self, RING_POINTS};
 use crate::editor::planet_tools::stroke::{SPACING, Spacer};
 use crate::editor::planet_tools::{self, Tool};
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::rect::{point_in, rect_of};
 
 const RING_COLOR: [f32; 4] = [0.95, 0.72, 0.22, 1.0];
 const INNER_COLOR: [f32; 4] = [0.95, 0.72, 0.22, 0.45];
@@ -44,16 +44,14 @@ impl EditorHook {
             .filter(|_| self.panel_shown(PanelKey::Planet) && !self.sim.playing())
     }
 
-    // Each frame, before the press routing: follow a dragged brush slider,
-    // find the ground under the cursor, lay the rings around it, and carry a
-    // stroke on to it.
+    // Each frame, before the press routing: find the ground under the cursor,
+    // lay the rings around it, and carry a stroke on to it.
     pub(in crate::editor::hook) fn drive_planet_tool(
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
         world: &World,
     ) {
-        self.drive_brush_slider(input, vp);
         if self.planet_tool().is_none() {
             self.planet_tool.hover = None;
             self.planet_tool.stroke = None;
@@ -151,13 +149,12 @@ impl EditorHook {
         if mouse[1] < hud::BAR_H {
             return true;
         }
-        registry::all().any(|p| {
-            let key = p.key();
+        PanelKey::ALL.into_iter().any(|key| {
             self.panel_shown(key)
                 && point_in(
                     mouse[0],
                     mouse[1],
-                    widget::outer_rect(self.origin(key, vp), self.effective_size(key)),
+                    rect_of(self.origin(key, vp), self.effective_size(key)),
                 )
         })
     }
@@ -183,22 +180,6 @@ impl EditorHook {
         });
     }
 
-    // While a brush slider is held, its setting follows the cursor.
-    fn drive_brush_slider(&mut self, input: &FrameInput, vp: [f32; 2]) {
-        let Some(setting) = self.planet_tool.sliding else {
-            return;
-        };
-        if !input.left_button_down {
-            self.planet_tool.sliding = None;
-            return;
-        }
-        let o = self.origin(PanelKey::Planet, vp);
-        let w = self.effective_size(PanelKey::Planet)[0];
-        let top = planet::panel::strip_top(o);
-        let t = planet::tool_strip::slide_to(o, top, w, setting, input.mouse_x);
-        self.planet_tool.tools.brush.set_position(setting, t);
-    }
-
     pub(in crate::editor::hook) fn apply_strip_action(&mut self, action: StripAction) {
         let tools = &mut self.planet_tool.tools;
         match action {
@@ -206,15 +187,13 @@ impl EditorHook {
                 tools.toggle(tool);
                 self.planet_tool.stroke = None;
             }
-            StripAction::Slide(setting, t) => {
-                tools.brush.set_position(setting, t);
-                self.planet_tool.sliding = Some(setting);
+            StripAction::Slide(setting, t) => tools.brush.set_position(setting, t),
+            StripAction::Cycle => {
+                if let Some(list) = tools.active.and_then(Tool::list) {
+                    let count = self.planet_list(list).map_or(0, |e| e.len());
+                    self.planet_tool.tools.cycle(list, count);
+                }
             }
-            StripAction::Cycle(list) => {
-                let count = self.planet_list(list).map_or(0, |e| e.len());
-                self.planet_tool.tools.cycle(list, count);
-            }
-            StripAction::Consume => {}
         }
         self.planet.focus = None;
     }

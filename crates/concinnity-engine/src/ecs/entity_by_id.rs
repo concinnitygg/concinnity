@@ -111,7 +111,13 @@ pub(crate) fn drain<C: ComponentSlot>(
 // The next id from the world's shared minted counter.
 pub(crate) fn mint_id(resources: &mut Resources) -> Result<AssetId, AssetIdsExhausted> {
     if !resources.contains::<MintedIds>() {
-        resources.insert(MintedIds::default());
+        let counter = MintedIds::past(
+            resources
+                .get::<EntityById>()
+                .into_iter()
+                .flat_map(|ids| ids.iter().map(|(id, _)| id)),
+        );
+        resources.insert(counter);
     }
     resources
         .get_mut::<MintedIds>()
@@ -139,9 +145,13 @@ impl PipelineContext<'_> {
         entity
     }
 
-    /// Push `c` onto a new entity identified by a freshly minted id.
-    #[cfg(test)]
-    fn push_minted<C: ComponentSlot>(
+    /// Push `c` onto a new entity identified by a freshly minted id, so a
+    /// host can add an element other elements name.
+    ///
+    /// # Errors
+    ///
+    /// Once the world has minted every id it can.
+    pub fn push_minted<C: ComponentSlot>(
         &mut self,
         c: C,
     ) -> Result<(AssetId, Entity), AssetIdsExhausted> {

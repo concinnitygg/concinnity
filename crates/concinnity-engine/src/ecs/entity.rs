@@ -1,12 +1,6 @@
-// Generational entity handle and the allocator that hands them out. An Entity
-// is a runtime-only identity for one live instance; it is never serialized. The
-// generation makes a handle to a despawned-and-recycled slot detectable, so a
-// stale handle resolves to a safe `None` rather than aliasing a new entity.
-//
-// The allocator supports two ways to mint ids: `alloc` under `&mut self`
-// (recycles freed slots), and `reserve` under `&self` (lock-free, fresh ids
-// only) for command recording on worker threads. `flush` materializes reserved
-// ids into the metadata table before they are looked up.
+// Generational entity handles, never serialized; a stale handle resolves to
+// `None`. `alloc` recycles slots under `&mut self`; `reserve` mints fresh ids
+// lock-free under `&self`, materialized by `flush`.
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

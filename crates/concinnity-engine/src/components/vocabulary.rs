@@ -95,7 +95,7 @@ mod tests {
                 postcard::from_bytes::<SceneTransition>(&bytes).expect("loads"),
                 *transition
             );
-            // The name, not the index, is what a world file carries.
+            // The name, not the index, is what a .jsonl file carries.
             assert_eq!(
                 serde_json::to_string(transition).expect("serializes"),
                 format!("\"{}\"", transition.as_str())

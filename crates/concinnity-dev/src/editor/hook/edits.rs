@@ -2,18 +2,16 @@
 //! write of every changed world file, and the in-memory live-preview world
 //! rebuild).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use concinnity_cook::authoring::refs::{count_references, rename_references};
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
 use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
-use crate::editor::entry_list::{Refusal, build_text, paths};
+use crate::editor::entry_list::{Refusal, paths};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::{assets_panel, form_panel};
-use crate::editor::{behavior, build_renderable, live, modal, notify, widget};
+use crate::editor::{build_renderable, live, notify};
 
 impl EditorHook {
     // Whether an entry already declares this `$id`.
@@ -82,12 +80,9 @@ impl EditorHook {
         }
     }
 
-    // Rename `key`'s entry to `typed` (made unique against the other entries,
-    // or anonymous when blank) and point every reference to its old `$id` at
-    // the new one. The caller commits, so the rename and the references it
-    // moved are one undo step. An entry other entries reference keeps its
-    // `$id` rather than going anonymous, since nothing can name an anonymous
-    // entry.
+    // Rename `key`'s entry to a unique `typed` and repoint references to its old
+    // `$id`. A referenced entry keeps an `$id` rather than going anonymous. The
+    // caller commits.
     pub(super) fn rename_entry(&mut self, key: EntryId, typed: &str) -> Renamed {
         let mut name = self.finalize_rename(typed, key);
         let Some(idx) = self.entries.index_of(key) else {
@@ -156,14 +151,9 @@ impl EditorHook {
         }
     }
 
-    // Record an authored-entry change: the live preview is out of date this
-    // frame (`apply_world_swap` writes the change into the running world, or
-    // reloads it when the change cannot be expressed there), and the change is
-    // not yet on disk (SAVE clears `dirty`). The pre-edit list still sits in
-    // `baseline` (only committed edits move it), so it becomes the undo
-    // snapshot; a call that changed nothing records no step.
-    //
-    // An edit the entry list refuses (see `EntryList`) is undone whole.
+    // Record an authored change: the preview is out of date and the change
+    // unsaved. The pre-edit `baseline` becomes the undo step; no change records
+    // none. An edit the entry list refuses is undone whole.
     pub(super) fn mark_changed(&mut self) {
         if let Some(refusal) = self.refusal() {
             self.refuse_edit(refusal);
@@ -193,8 +183,7 @@ impl EditorHook {
 
     // Why the edit since `baseline` cannot stand, if it cannot.
     pub(super) fn refusal(&self) -> Option<Refusal> {
-        self.entries
-            .refusal(&self.baseline, Path::new(&self.world_path))
+        self.entries.refusal(&self.baseline, self.world_origin())
     }
 
     // Put the entries back as they were before a refused edit, and say why. The
@@ -237,15 +226,15 @@ impl EditorHook {
 
     // Step the entry list back / forward through the history stacks. No-ops at
     // either end of the history.
-    pub(super) fn undo(&mut self, world: &mut World) {
+    pub(super) fn undo(&mut self) {
         if let Some(snap) = self.history.undo(self.entries.clone()) {
-            self.apply_history_jump(snap, world);
+            self.apply_history_jump(snap);
         }
     }
 
-    pub(super) fn redo(&mut self, world: &mut World) {
+    pub(super) fn redo(&mut self) {
         if let Some(snap) = self.history.redo(self.entries.clone()) {
-            self.apply_history_jump(snap, world);
+            self.apply_history_jump(snap);
         }
     }
 
@@ -257,15 +246,10 @@ impl EditorHook {
         self.history.can_redo()
     }
 
-    // Install a history snapshot as the working entry list. A snapshot carries
-    // the session keys, so the jump restores the very entries the selection
-    // addresses and it survives; a member the restored list does not hold goes
-    // undrawn rather than addressing something else. The open form's controls
-    // hold text derived from the pre-jump args, and the pointer gestures were
-    // sampled against the pre-jump list, so both are dropped. `dirty` is
-    // recomputed against the on-disk state so unwinding back to the saved list
-    // clears the Save chip.
-    fn apply_history_jump(&mut self, snap: EntryList, world: &mut World) {
+    // Install a history snapshot as the working list. Its keys keep the
+    // selection valid; the open form and pointer gestures are dropped, and
+    // `dirty` is recomputed against disk.
+    fn apply_history_jump(&mut self, snap: EntryList) {
         self.entries = snap;
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
@@ -286,19 +270,15 @@ impl EditorHook {
         // The Lighting panel's text controls hold committed values; re-seed so
         // they show the restored list, not the undone edit.
         if self.open[PanelKey::Lighting] {
-            self.seed_lighting(world);
+            self.seed_lighting();
         }
         if self.open[PanelKey::Planet] {
-            self.seed_planet(world);
+            self.seed_planet();
         }
     }
 
-    // SAVE: persist the working entries to disk. The world files are the
-    // source of truth and the only thing a save writes -- the compiled blobs
-    // under the build root belong to an explicit build, so a save never cooks
-    // and never stalls behind one. The live preview is already up to date
-    // (every edit refreshed it), so nothing is rebuilt or swapped here. On a
-    // write failure the world stays dirty and the next SAVE retries.
+    // SAVE: write the working entries to disk. It never cooks or rebuilds; on a
+    // failure the world stays dirty.
     pub(super) fn save(&mut self) {
         // A world nobody has named has nowhere to go yet: ask first, and let
         // the dialog's Save come back through here once it has a path.
@@ -333,13 +313,10 @@ impl EditorHook {
             .error_with(&format!("Save failed: {e}"), notify::Action::OpenConsole);
     }
 
-    // Build a ready-to-run world from the in-memory entries, without touching disk
-    // (SAVE owns persistence). The same compile the session booted through, so a
-    // rebuild can only differ from boot by the edits since. The template
-    // baselines the expansion merged authored patches over come back with it, so a
-    // later edit can re-derive one asset's effective args without cooking again.
+    // Compile the in-memory entries into a world plus template baselines, the
+    // same compile boot uses.
     pub(super) fn build_preview_world(&self) -> std::io::Result<(World, live::ShadowBaselines)> {
-        let jsonl = build_text(&self.entries)?;
+        let jsonl = self.entries.build_text(self.world_origin())?;
         let (world, shadowed) = build_renderable(&jsonl)?;
         let baselines = shadowed
             .into_iter()
@@ -348,34 +325,8 @@ impl EditorHook {
         Ok((world, baselines))
     }
 
-    // Snapshot the editor's text-field contents (the combo filter + the form's name
-    // heading and arg inputs) by reserved id, so a live rebuild's fresh HUD
-    // injection does not blank an open form.
-    pub(super) fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
-        [
-            assets_panel::ids(),
-            form_panel::ids(),
-            behavior::panel::ids(),
-            modal::ids(),
-        ]
-        .into_iter()
-        .flat_map(super::super::hud_ids::HudIds::field_ids)
-        .map(|id| (id, widget::field_text(world, id)))
-        .collect()
-    }
-
-    // Restore a `field_snapshot` into a freshly injected HUD.
-    pub(super) fn restore_fields(world: &mut World, snapshot: &[(AssetId, String)]) {
-        for (id, content) in snapshot {
-            widget::seed_field(world, *id, content);
-        }
-    }
-
-    // Write the world file and every included file whose entries changed since
-    // the last save, each atomically (temp file + rename) so a crash mid-write
-    // cannot truncate it, returning the paths written. Included files go first,
-    // so a world naming a new file is never on disk without it. Directories are
-    // created as needed, for an include or world path that does not exist yet.
+    // Write the world file and every changed include atomically, includes
+    // first, creating directories as needed. Returns the paths written.
     pub(super) fn write_files(&self) -> std::io::Result<Vec<PathBuf>> {
         let mut files = self.entries.unsaved_files(&self.saved);
         if !files.contains(&None) {

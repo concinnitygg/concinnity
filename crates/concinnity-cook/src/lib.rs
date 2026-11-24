@@ -1,17 +1,18 @@
 //! concinnity-cook: the build side, kept out of the runtime foundation so that
 //! foundation carries none of the build-only dependencies (fbxcel, sha2,
-//! kira). This crate turns world.jsonl + source files into the binary
+//! kira). This crate turns `.jsonl` files and their sources into the binary
 //! blobs the runtime reads; it depends on concinnity-engine and core has no edge
 //! back into it.
 //!
 //! The stages read in order: `authoring` is the authored model and the type
 //! vocabulary it is written in, `build_only` expands the types that never reach
-//! a blob, `check` validates the expanded world, and the compile path turns
-//! what is left into payloads. That path is three groups plus the orchestration
-//! that sequences them: `import` reads the artist-supplied source files,
-//! `codec` decodes the container and image formats they carry, `compile` turns
-//! an asset's args and sources into its payload, and `pipeline` / `blob` /
-//! `cache` at the root drive the whole run.
+//! a blob (with `ui` expanding the UI shorthands among them), `check` validates
+//! the expanded world, and the compile path turns what is left into payloads.
+//! That path is three groups plus the orchestration that sequences them:
+//! `import` reads the artist-supplied source files, `codec` decodes the
+//! container and image formats they carry, `compile` turns an asset's args and
+//! sources into its payload, and `pipeline` / `blob` / `cache` at the root
+//! drive the whole run.
 //!
 //! The authoring-only types this crate expands away are named from
 //! `crate::authoring::registry::build_only` where they are used, so a use site
@@ -38,7 +39,7 @@ pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 pub(crate) mod asset;
 pub use asset::api as asset_api;
-/// The authored world model: world.jsonl parsing and I/O, the type vocabulary,
+/// The authored world model: .jsonl parsing and I/O, the type vocabulary,
 /// the asset cross-reference metadata, the typed spec vocabulary, and the
 /// build-only args schemas. Everything the cook reads before it compiles
 /// anything.
@@ -65,6 +66,7 @@ pub(crate) mod pipeline;
 pub(crate) mod resource_handles;
 #[cfg(test)]
 mod test_support;
+pub mod ui;
 pub(crate) mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra

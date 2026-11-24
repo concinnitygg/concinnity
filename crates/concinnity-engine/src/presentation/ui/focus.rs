@@ -5,9 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crate::components::{NavDirection, SettingVerb, UiAction};
-
-use crate::settings::SettingKey;
+use crate::components::{Binding, NavDirection, SettingVerb, UiAction, ValueOp};
 
 // Weight of the perpendicular offset in the directional score, so a target
 // straight ahead beats a nearer one far off to the side (tabs above a row
@@ -21,18 +19,16 @@ pub(crate) struct Candidate {
     pub(crate) index: usize,
     pub(crate) rect: [f32; 4],
     pub(crate) action: Option<UiAction>,
+    pub(crate) slider: Option<Binding>,
 }
 
-// One focusable control derived from the candidates. `index` is the region
-// fired on confirm; `setting` is the key a Left/Right pulse adjusts (a
-// stepper, dropdown, or slider row) instead of moving focus. Confirm on a
-// slider is inert without needing a flag here: its track region is driven by
-// the drag pass, which the dispatch loop already skips.
+// One focus target. `index` fires on confirm; `adjusts` is the value
+// Left/Right adjusts instead of moving focus.
 #[derive(Debug, Clone)]
 pub(crate) struct Target {
     pub(crate) index: usize,
     pub(crate) rect: [f32; 4],
-    pub(crate) setting: Option<SettingKey>,
+    pub(crate) adjusts: Option<Binding>,
 }
 
 // The current focus: the focused region's index plus its last known rect. The
@@ -45,32 +41,36 @@ pub(crate) struct FocusRef {
     pub(crate) rect: [f32; 4],
 }
 
-// Group the candidates into focus targets:
-//   - a stepper's `Next` region is the row's target (confirm cycles forward);
-//     its `Prev` twin is dropped, since Left sends the Prev op directly and the
-//     twin region is never needed;
-//   - a dropdown `Open` region and a slider `Drag` region are value rows
-//     (Left/Right adjust);
-//   - everything else with an action is a plain activate target.
+// Group candidates into targets: a stepper's forward region (its backward twin
+// dropped), dropdown and slider value rows, and plain activate targets.
 pub(crate) fn targets(candidates: &[Candidate]) -> Vec<Target> {
     candidates
         .iter()
         .filter_map(|c| {
-            let setting = match c.action.as_ref()? {
-                UiAction::Setting {
-                    verb: SettingVerb::Prev,
-                    ..
-                } => return None,
-                UiAction::Setting {
-                    key,
-                    verb: SettingVerb::Next | SettingVerb::Open | SettingVerb::Drag,
-                } => Some(*key),
-                _ => None,
+            let adjusts = if c.slider.is_some() {
+                c.slider.clone()
+            } else {
+                match c.action.as_ref()? {
+                    UiAction::Value {
+                        binding: binding @ Binding::Setting(_),
+                        op: ValueOp::Step(by),
+                    } => {
+                        if *by < 0 {
+                            return None;
+                        }
+                        Some(binding.clone())
+                    }
+                    UiAction::Setting {
+                        key,
+                        verb: SettingVerb::Open,
+                    } => Some(Binding::Setting(*key)),
+                    _ => None,
+                }
             };
             Some(Target {
                 index: c.index,
                 rect: c.rect,
-                setting,
+                adjusts,
             })
         })
         .collect()
@@ -126,11 +126,8 @@ pub(crate) fn initial(targets: &[Target]) -> Option<usize> {
         .map(|t| t.index)
 }
 
-// The region to focus after a directional pulse, or `None` when there is
-// nothing to focus. With no current focus, any pulse lands on the
-// topmost-leftmost target. Up/Down wrap past the ends; Left/Right clamp (a
-// value row consumes Left/Right before this is called, and a tab bar's ends
-// should not teleport across the screen).
+// The region to focus after a pulse, or `None`. Without focus, the top-left
+// target. Up/Down wrap; Left/Right clamp.
 pub(crate) fn navigate(
     targets: &[Target],
     current: Option<&FocusRef>,
@@ -182,6 +179,7 @@ pub(crate) fn navigate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::SettingKey;
     use alloc::vec;
 
     // A candidate firing `action` text; empty text is no action.
@@ -190,6 +188,7 @@ mod tests {
             index,
             rect: [x, y, 200.0, 30.0],
             action: serde_json::from_value(action).unwrap(),
+            slider: None,
         }
     }
 
@@ -208,20 +207,18 @@ mod tests {
                 0,
                 0.0,
                 0.0,
-                serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}}),
+                serde_json::json!({"step": {"binding": "setting:vsync", "by": -1}}),
             ),
             cand(
                 1,
                 60.0,
                 0.0,
-                serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+                serde_json::json!({"step": {"binding": "setting:vsync", "by": 1}}),
             ),
-            cand(
-                2,
-                0.0,
-                40.0,
-                serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
-            ),
+            Candidate {
+                slider: Some(Binding::Setting(SettingKey::Exposure)),
+                ..cand(2, 0.0, 40.0, serde_json::json!(null))
+            },
             cand(
                 3,
                 0.0,
@@ -234,16 +231,21 @@ mod tests {
                 120.0,
                 serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}}),
             ),
-            cand(5, 0.0, 160.0, serde_json::json!({"group_toggle": 0})),
+            cand(5, 0.0, 160.0, serde_json::json!({"flip": "state:group"})),
             cand(6, 0.0, 200.0, serde_json::json!("hide")),
             cand(7, 0.0, 240.0, serde_json::json!(null)),
+            Candidate {
+                slider: Some(Binding::State("zoom".into())),
+                ..cand(8, 0.0, 280.0, serde_json::json!(null))
+            },
         ]);
         let by_index: Vec<usize> = t.iter().map(|t| t.index).collect();
-        assert_eq!(by_index, vec![1, 2, 3, 4, 5, 6], "prev + empty drop");
-        assert_eq!(t[0].setting, Some(SettingKey::Vsync));
-        assert_eq!(t[1].setting, Some(SettingKey::Exposure));
-        assert_eq!(t[2].setting, Some(SettingKey::WindowMode));
-        assert!(t[3].setting.is_none(), "a rebind row is not a value row");
+        assert_eq!(by_index, vec![1, 2, 3, 4, 5, 6, 8], "prev + empty drop");
+        assert_eq!(t[0].adjusts, Some(Binding::Setting(SettingKey::Vsync)));
+        assert_eq!(t[1].adjusts, Some(Binding::Setting(SettingKey::Exposure)));
+        assert_eq!(t[2].adjusts, Some(Binding::Setting(SettingKey::WindowMode)));
+        assert!(t[3].adjusts.is_none(), "a rebind row is not a value row");
+        assert_eq!(t[6].adjusts, Some(Binding::State("zoom".into())));
     }
 
     #[test]

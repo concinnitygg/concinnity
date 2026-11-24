@@ -1,15 +1,6 @@
-// The point of a simplex closest to the origin, and which of its vertices
-// carry that point.
-//
-// This is the inner loop of the distance query, split out because it is pure
-// geometry over at most four points and can be checked against answers worked
-// out by hand. It returns barycentric weights rather than just a point, which
-// is what lets the caller carry the answer back to witness points on the two
-// original shapes.
-//
-// The tetrahedron case reports the origin as enclosed only when the simplex
-// has volume to enclose it with. A flat simplex has no inside, so its hull is
-// the union of its faces and every face is examined.
+// The point of a simplex closest to the origin, as barycentric weights so the
+// caller can map it back to witness points. A flat tetrahedron has no inside,
+// so every face is examined.
 
 use crate::simulation::physics::sim::math::Vec3;
 
@@ -447,12 +438,8 @@ mod tests {
         assert!(!closest.encloses_origin);
     }
 
-    // A triangle with area small enough that the barycentric denominators
-    // underflow: the region guards do not fire, and the split has nothing to
-    // divide by. Exactly-collinear points never get this far -- one of the
-    // vertex or edge regions always claims them first -- so this is the shape
-    // the fallback actually exists for. The answer still has to be finite and
-    // rebuild from its weights.
+    // A triangle so small its barycentric denominators underflow must still
+    // give a finite answer that rebuilds from its weights.
     #[test]
     fn a_triangle_too_thin_to_divide_by_still_answers() {
         let closest = closest_to_origin(&[

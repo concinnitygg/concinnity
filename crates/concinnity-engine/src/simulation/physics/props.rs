@@ -1,11 +1,7 @@
-// The prop bodies the simulation owns: one per collider-bearing entity, plus
-// the three indices kept in step with them -- handle -> entity, which the
-// contact publish resolves every hit through, entity -> handle, which a wake
-// request resolves through and the per-tick scan for runtime spawns skips
-// what it already holds by, and the refused set that keeps a
-// spawn the budget had no room for from being retried every tick. Bodies enter
-// through `add` / `adopt` and leave through `reap`, so the indices have exactly
-// two places to stay honest.
+// The prop bodies the simulation owns, one per collider-bearing entity, plus
+// the indices kept in step with them: handle to entity, entity to handle, and
+// the refused spawns. Bodies enter through `add` and `adopt` and leave through
+// `reap`.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -176,12 +172,8 @@ impl PropBodies {
         Some(handle)
     }
 
-    // Add a body for an entity that appeared after init, unless the world's
-    // body budget is already full. Physics reserves every body when the world
-    // loads and never grows, so an over-budget spawn is refused outright: it
-    // gets no body, the refusal is reported once, and the entity is remembered
-    // so the next tick's scan passes over it. It is never retried, even if
-    // other bodies are reaped afterwards.
+    // Add a body for an entity that appeared after init, unless the reserved
+    // budget is full. A refused entity is reported once and never retried.
     pub(crate) fn adopt(
         &mut self,
         layers: &LayerTable,
@@ -196,11 +188,8 @@ impl PropBodies {
         }
     }
 
-    // Drop the bodies whose entity was despawned: the renderer runs before
-    // PhysicsSystem and removes the entity from the ECS, so a body left behind
-    // would keep simulating - and colliding with live bodies - invisibly.
-    // Returns `held` remapped onto the compacted list (None when the carried
-    // prop was one of the reaped).
+    // Drop the bodies of despawned entities, returning `held` remapped (`None`
+    // when the carried prop was reaped).
     pub(crate) fn reap(
         &mut self,
         world: &mut Simulation,
@@ -404,11 +393,8 @@ impl PropBodies {
             .filter_map(|p| Some((p.handle, p.float.as_mut()?)))
     }
 
-    // Adopt externally written prop transforms before the frame's ticks run: a
-    // pose that differs from the one written back last frame was not ours, so
-    // the body is moved there, at rest and with no blend across the jump.
-    // `authored` reads the entity's current Transform, or None when it has
-    // none to read.
+    // Move bodies to externally written prop poses, at rest and without a
+    // blend. `authored` reads the entity's Transform.
     pub(crate) fn sync_external_poses(
         &mut self,
         world: &mut Simulation,

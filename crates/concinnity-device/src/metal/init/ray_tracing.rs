@@ -4,10 +4,12 @@
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
 use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::render_graph::PassQueue;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::InitGpu;
+use crate::metal::blas_residency::BlasResidency;
 use crate::metal::context::{GlassState, SceneAssets};
 use crate::metal::post::RtReflectionPipelines;
 use crate::metal::raytrace::{
@@ -42,13 +44,8 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     let seethrough_enabled =
         !glass.seethrough_mesh_indices.is_empty() && glass.mesh_pipeline_rt.is_some();
 
-    // Build the scene acceleration structure for hardware ray-traced
-    // reflections. Only when the world enabled RT and the GPU supports ray
-    // tracing; `build_rt_accel` returns None when the scene has no resident
-    // geometry, in which case the RT pass stays a no-op (draw/mod gates
-    // `rt_reflections_enabled` on this being Some). It needs the shared
-    // geometry buffers + draw list; resolution-independent, so untouched on
-    // resize. A wholesale rebuild on geometry change is the current update path.
+    // The acceleration structure, when RT is on and supported. `None` with no
+    // resident geometry. Resolution-independent.
     let accel = if rt_reflections.is_some() && raytracing_supported(device) {
         if let Some(a) = build_rt_accel(
             RtGpu {
@@ -101,9 +98,23 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         );
     }
 
+    // Every queue a trace pass records on keeps the traced BLAS resident. Built
+    // whatever the launch asked, since RT can be turned on later.
+    let graphics = &*gpu.hw.command_queue;
+    let async_compute = gpu
+        .hw
+        .graph_queues
+        .as_ref()
+        .map(|q| q.queue(PassQueue::AsyncCompute, graphics));
+    let queues: Vec<_> = core::iter::once(graphics).chain(async_compute).collect();
+    let blas_residency = raytracing_supported(device)
+        .then(|| BlasResidency::new(device, &queues))
+        .flatten();
+
     Ok(RtState {
         settings: rt_reflections,
         accel,
+        blas_residency,
         dynamic_mode: launch.rt_dynamic,
         skinned_geometry: launch.rt_skinned_geometry,
         update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
@@ -113,12 +124,8 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     })
 }
 
-// RT reflections: the classify and inline ray-trace kernels, built only when RT
-// reflections are on. They write into `ssr.reflection`, reusing the SSR
-// pre-pass G-buffer. The flat trace is the non-bindless fallback; the textured
-// trace samples the bindless albedo pool. The compute-skinning pipeline
-// deforms skinned vertices into a buffer the BVH can trace; built under the
-// same gate on a ray-tracing device, unused when the world has no SkinnedMesh.
+// RT reflection kernels (classify plus flat and textured traces) and the
+// skinning pipeline the BVH traces, built only with RT reflections on.
 pub(in crate::metal) fn build_rt_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     settings: Option<&RtReflectionSettings>,

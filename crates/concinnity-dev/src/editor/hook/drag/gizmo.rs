@@ -15,6 +15,7 @@ use crate::editor::entry_list::{EntryId, EntryList};
 use crate::editor::hook::{EditorHook, declared_id, entry_type_name, pick};
 use crate::editor::panels::form;
 use crate::editor::round::{round1, round3};
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::gizmo::{self, GizmoMode};
 use crate::editor::viewport::{group_transform, snap};
 use concinnity_engine::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
@@ -27,11 +28,8 @@ const MIN_ROTATE_ARM_PX: f32 = 15.0;
 // Scale factors are clamped away from zero (no mirroring) and runaway growth.
 const SCALE_FACTOR_RANGE: (f32, f32) = (0.01, 100.0);
 
-// One selection member the gizmo can edit this frame, resolved fresh every
-// use (rebuilds re-mint entities): the authored entry's key and its live
-// entity. Members without the mode's editable arg, generated assets (no entry
-// to write back), parented entities (the drag works in world axes; a rotated
-// parent would skew it), and entities without a Transform are skipped.
+// One editable selection member, resolved fresh each use. Generated, parented
+// or Transform-less members and those lacking the mode's arg are skipped.
 pub(in crate::editor::hook) struct GizmoTarget {
     pub(in crate::editor::hook) key: EntryId,
     pub(in crate::editor::hook) entity: Entity,
@@ -372,7 +370,7 @@ impl EditorHook {
     // restores all members together). A drag that ends where it started
     // leaves the entries (and the undo stack) untouched.
     #[expect(clippy::float_cmp, reason = "change detection on rounded values")]
-    fn commit_gizmo(&mut self, world: &mut World) {
+    fn commit_gizmo(&mut self, world: &World) {
         let Some(drag) = self.gizmo_drag.take() else {
             return;
         };
@@ -423,7 +421,7 @@ impl EditorHook {
                 .and_then(declared_id)
                 .map(String::from)
         {
-            self.open_asset_form(&name, world);
+            self.open_asset_form(&name);
         }
     }
 
@@ -443,21 +441,15 @@ impl EditorHook {
         }
     }
 
-    // Show or hide the gizmo sprites for this frame.
-    pub(in crate::editor::hook) fn drive_gizmo_draw(
+    // The gizmo over the active selection, while it projects.
+    pub(in crate::editor::hook) fn push_gizmo(
         &self,
-        world: &mut World,
+        world: &World,
         vp: [f32; 2],
-        shown: bool,
+        shapes: &mut Shapes<'_>,
     ) {
-        let layout = if shown && !self.sim.playing() {
-            self.gizmo_layout(world, vp)
-        } else {
-            None
-        };
-        match layout {
-            Some(l) => gizmo::place(world, &l, self.gizmo_mode),
-            None => gizmo::hide(world),
+        if let Some(l) = self.gizmo_layout(world, vp) {
+            gizmo::push(shapes, &l, self.gizmo_mode);
         }
     }
 }

@@ -16,6 +16,7 @@
 mod choice;
 pub(crate) mod device;
 
+use concinnity_engine::presentation::text_edit::KeyConvention;
 use std::sync::OnceLock;
 
 use concinnity_core::platform::select::{native_platform, resolve};
@@ -80,6 +81,15 @@ pub fn select(requested: Option<Platform>) -> Platform {
         crate::crash::note("backend", selection.platform.key());
         selection.platform
     })
+}
+
+/// The key conventions text editing follows on this platform.
+pub(crate) const fn key_convention() -> KeyConvention {
+    if cfg!(target_os = "macos") {
+        KeyConvention::Mac
+    } else {
+        KeyConvention::Other
+    }
 }
 
 /// Where this launch stands on the graphics API chosen in the settings menu.

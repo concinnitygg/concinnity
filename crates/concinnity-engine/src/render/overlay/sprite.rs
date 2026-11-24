@@ -15,28 +15,18 @@ use crate::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
 use crate::render::overlay::maps::{Placement, TextureSlots};
 
-/// A view-owned sprite that spans the whole reference canvas is a full-screen
+/// A canvas sprite that spans the whole reference canvas is a full-screen
 /// backdrop (e.g. a menu dim): it is stretched to fill the live window rather
 /// than uniform-scaled, and an opaque one hides the scene behind it.
 pub(crate) fn covers_canvas(s: &Sprite) -> bool {
     let [ref_w, ref_h] = UI_REFERENCE_SIZE;
-    s.screen.is_some()
-        && s.x <= 0.0
-        && s.y <= 0.0
-        && s.x + s.width >= ref_w
-        && s.y + s.height >= ref_h
+    s.x <= 0.0 && s.y <= 0.0 && s.x + s.width >= ref_w && s.y + s.height >= ref_h
 }
 
-// Build a TextDrawCall per visible Sprite. `default_atlas_slot` is the atlas
-// a solid-fill call binds (the shader does not sample for sentinel-UV verts,
-// but the backend still expects a valid slot). Pass the slot of any loaded
-// font; returns an empty list when there are no fonts (the text pipeline
-// isn't initialized in that case). `texture_slots` maps a Sprite's Texture
-// asset to its slot in the atlas pool; a textured sprite whose texture never
-// made it there falls back to a solid fill. `viewport` is the live logical
-// window size: view-owned sprites are overlay UI authored in the reference
-// canvas and are mapped onto the window so menus scale with it; HUD / scene
-// sprites (view == None) keep literal window pixels.
+// A TextDrawCall per visible Sprite. Solid fills still bind
+// `default_atlas_slot`; empty without fonts. A sprite whose texture is not in
+// `texture_slots` falls back to a solid fill. View-owned sprites map from the
+// reference canvas onto `viewport`.
 #[cfg(test)]
 pub(crate) fn build_sprite_calls(
     sprites: &[Sprite],
@@ -47,7 +37,13 @@ pub(crate) fn build_sprite_calls(
     let mut out = crate::render::overlay::call_buffer::TextCallBuffer::default();
     build_sprite_calls_into(
         &mut out,
-        sprites.iter().map(|s| (s, Placement::default())),
+        sprites.iter().map(|s| {
+            let canvas = Placement {
+                canvas: s.screen.is_some(),
+                ..Placement::default()
+            };
+            (s, canvas)
+        }),
         default_atlas_slot,
         texture_slots,
         viewport,
@@ -85,7 +81,7 @@ pub(crate) fn build_sprite_calls_into<'a>(
         if a <= 0.0 && !border_only {
             continue;
         }
-        let (x0, y0, x1, y1) = if s.screen.is_some() {
+        let (x0, y0, x1, y1) = if placement.canvas {
             if s.fit == SpriteFit::Cover {
                 // Full-bleed stage imagery: uniform fill, centered crop. The
                 // canvas edges map at or beyond the window edges, so edge-
@@ -208,10 +204,15 @@ pub(crate) fn build_sprite_calls_into<'a>(
             vertices,
             indices,
             atlas_slot: texture_slot.unwrap_or(fill_slot),
-            clip_rect: placement
-                .clip
-                .map(|b| crate::render::overlay::text::band_to_window(&overlay, b)),
+            clip_rect: placement.clip.map(|b| {
+                if placement.canvas {
+                    crate::render::overlay::text::band_to_window(&overlay, b)
+                } else {
+                    b
+                }
+            }),
             layer: placement.layer,
+            rank: placement.rank,
         });
     }
 }
@@ -293,12 +294,8 @@ const CORNER_SEGMENTS: usize = 6;
 // silhouette never grows past the authored rect.
 const EDGE_FEATHER: f32 = 1.25;
 
-// The corner-arc samples a rounded rectangle's silhouette is drawn from: each
-// entry is a corner center and a unit offset, so one boundary describes every
-// outline concentric with the authored rect (the feathered edge, the inset the
-// stroke leaves). Insetting the rect and dropping the radius by the same
-// amount leaves the centers where they are, which is what lets a stroke sample
-// this at two radii.
+// The corner-arc samples of a rounded rectangle: corner centers and unit
+// offsets, so one boundary serves every concentric outline.
 fn rounded_boundary(
     rect: [f32; 4],
     radius: f32,
@@ -335,11 +332,8 @@ fn rounded_boundary(
     boundary
 }
 
-// Append a rounded rectangle's border stroke: the fill's own silhouette,
-// hollowed out `width` inside it. The outer edge feathers exactly as the
-// fill's does, so the two silhouettes blend as one; the inner edge is the
-// inset rect's own boundary, so a stroke wider than the corner radius keeps
-// its full width along the straight runs.
+// A rounded rectangle's border stroke, `width` inside the fill's feathered
+// silhouette.
 fn rounded_ring_geometry(
     vertices: &mut Vec<TextVertex>,
     indices: &mut Vec<u16>,
@@ -910,6 +904,8 @@ mod tests {
         let band = Placement {
             clip: Some([200.0, 200.0, 200.0, 60.0]),
             layer: 0,
+            rank: 0,
+            canvas: true,
         };
         let calls = placed(&s, band, [2560.0, 1440.0]);
         let clip = calls[0].clip_rect.expect("clipped sprite has a clip rect");
@@ -922,14 +918,32 @@ mod tests {
         assert!(calls[0].clip_rect.is_none());
     }
 
+    // A window-space element keeps its authored rect and clip band in window
+    // pixels at any viewport.
+    #[test]
+    fn a_window_space_element_keeps_window_pixels() {
+        let mut s = sprite(100.0, 100.0, 50.0, 50.0, [1.0, 1.0, 1.0, 1.0]);
+        s.screen = Some(Ref::new(AssetId(1)));
+        let band = [200.0, 200.0, 200.0, 60.0];
+        let window = Placement {
+            clip: Some(band),
+            ..Placement::default()
+        };
+        let calls = placed(&s, window, [2560.0, 1440.0]);
+        assert_eq!(calls[0].clip_rect, Some(band));
+        let xs = calls[0].vertices.iter().map(|v| v.pos[0]);
+        assert_eq!(xs.fold(f32::INFINITY, f32::min), 100.0);
+    }
+
     // A sprite's call carries the draw layer it is placed at (used by the
     // editor's panel occlusion sort).
     #[test]
     fn sprite_call_takes_its_placed_layer() {
         let s = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
         let layered = Placement {
-            clip: None,
             layer: 7,
+            rank: 0,
+            ..Placement::default()
         };
         assert_eq!(placed(&s, layered, [100.0, 100.0])[0].layer, 7);
         assert_eq!(placed(&s, Placement::default(), [100.0, 100.0])[0].layer, 0);

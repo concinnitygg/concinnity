@@ -173,11 +173,8 @@ pub(in crate::metal) struct PooledBuffer {
 }
 
 impl PooledBuffer {
-    // An owned handle to the placed buffer, for a call that needs to hold one
-    // past the borrow (a draw record, a geometry descriptor). It keeps the
-    // buffer and its heap alive but does not extend the lease, so a holder that
-    // outlives this `PooledBuffer` would be reading bytes the pool has since
-    // handed to another resource: keep such handles within the frame.
+    // An owned handle to the placed buffer. It does not extend the lease, so
+    // keep it within the frame.
     pub(in crate::metal) fn retained(&self) -> Retained<ProtocolObject<dyn MTLBuffer>> {
         self.buffer.clone()
     }

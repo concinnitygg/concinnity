@@ -1,9 +1,5 @@
-// Measures the storage primitives a world is built out of: spawn and despawn
-// churn, column scans, multi-component joins, targeted lookups, and the event
-// queue. Fixtures are
-// deterministic, and partner columns are laid out in shuffled entity order so
-// join probes pay a real scattered read rather than a coincidentally
-// sequential one.
+// The storage primitives: spawn and despawn churn, scans, joins, lookups and
+// the event queue, with partner columns shuffled so joins read scattered.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_storage

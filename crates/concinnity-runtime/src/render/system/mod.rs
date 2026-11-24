@@ -5,7 +5,6 @@
 use crate::render::streaming::loaders::StreamWorkers;
 use concinnity_engine::components::Background;
 use concinnity_engine::ecs::Parked;
-use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{PipelineContext, StepResult, System, World};
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::RenderError;
@@ -75,11 +74,9 @@ pub(crate) struct GraphicsSystem {
     // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
     // texture into the text-atlas pool (appended after the font atlases); the
-    // chip id lists and scroll clip bands drive the per-frame HUD layout.
+    // scroll clip bands scissor scrolled rows.
     loaded_fonts: text::FontSet,
     sprite_texture_slots: maps::TextureSlots,
-    debug_hud_chips: Vec<AssetId>,
-    stat_hud_chips: [Vec<AssetId>; 3],
     // Streaming pools built during init (shared albedo+normal texture pool,
     // mesh geometry, voxel-world chunks, planet tiles) and their load threads,
     // with the shader buckets whose pipeline init deferred, each present only
@@ -145,8 +142,6 @@ impl GraphicsSystem {
             scene_flow: None,
             loaded_fonts: text::FontSet::default(),
             sprite_texture_slots: maps::TextureSlots::new(),
-            debug_hud_chips: Vec::new(),
-            stat_hud_chips: Default::default(),
             stream_pools: StreamingPools::default(),
             stream_workers: StreamWorkers::default(),
             shader_deferral: ShaderDeferral::default(),
@@ -159,11 +154,13 @@ impl GraphicsSystem {
         }
     }
 
-    // The `assets/` a bare source filename is searched under: the running
-    // world's own, or nothing for a world with no state tree (which leaves a
-    // bare filename unresolved rather than searched from the cwd).
-    pub(crate) fn assets_dir(&self) -> Option<std::path::PathBuf> {
-        self.state.as_ref().map(StateTree::assets_dir)
+    // The root a source path resolves under: the running world's content
+    // root, or nothing for a world with no state tree (which leaves a path as
+    // written).
+    pub(crate) fn content_root(&self) -> Option<std::path::PathBuf> {
+        self.state
+            .as_ref()
+            .map(|tree| tree.content_root().to_path_buf())
     }
 
     // Detect the GPU performance profile for quality auto-config and what the

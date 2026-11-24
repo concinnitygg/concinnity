@@ -447,11 +447,8 @@ pub(in crate::directx) struct GrassRequest<'a> {
 }
 
 impl DxContext {
-    // Size the grass's visible-blade buffers for this frame's render targets,
-    // making them again when the blades they hold changed. The field takes
-    // its new sizing only once both are made; the old buffers are retired
-    // through the allocator, which holds them until no list in flight can
-    // name them.
+    // Size the visible-blade buffers for this frame's targets, remaking them
+    // when the blades changed. Old buffers retire through the allocator.
     pub(in crate::directx) fn size_grass(&mut self) -> RenderResult<()> {
         let size = [
             self.targets.extent.render_width.max(1),
@@ -778,11 +775,8 @@ impl DxContext {
         });
     }
 
-    // The draws both passes issue, one per region: a strip per visible blade,
-    // the band's under the pipeline that discards the pixels the canopy shows.
-    // Each region's first vertex rides the b0 root constant, which the pass's
-    // surfaces set per command, so it is free here. The pass's list topology is
-    // put back for whatever draws after it.
+    // One strip draw per visible blade per region; the first vertex rides the
+    // b0 root constant. Restores the list topology after.
     fn draw_grass(
         &self,
         cmd: &ID3D12GraphicsCommandList,

@@ -9,16 +9,16 @@
 use concinnity_cook::authoring::world::{entry_handle, entry_handles, set_entry_id};
 use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use std::path::Path;
 
-use crate::editor::hook::{
-    EditorHook, FormTarget, declared_id, entry_type_name, scroll_step, short_status,
-};
+use crate::editor::hook::{EditorHook, FormTarget, declared_id, entry_type_name, short_status};
 use crate::editor::panels::import_panel::{
     self, ImportAction, ImportRow, ImportStatus, ImportView,
 };
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::{file_dialog, notify, widget};
+use crate::editor::ui::{BuiltPanel, BuiltUi, field};
+use crate::editor::{file_dialog, notify};
 
 impl EditorHook {
     // The world's file-backed entries, in entry order.
@@ -45,53 +45,57 @@ impl EditorHook {
             .collect()
     }
 
-    pub(in crate::editor::hook) fn make_import_view<'a>(
-        &'a self,
-        rows: &'a [ImportRow],
-        mouse: [f32; 2],
-    ) -> ImportView<'a> {
+    pub(in crate::editor::hook) fn make_import_view(&self) -> ImportView<'_> {
         ImportView {
-            rows,
-            scroll: self.import.scroll,
+            revision: self.entries.revision(),
             // Focus is asserted only while frontmost, matching the other
             // panels' guard against fighting for typed keys.
             focus: self.import.focus && self.panel_order.last() == Some(&PanelKey::Import),
             status: self.import.status.as_ref(),
-            mouse,
         }
     }
 
-    pub(in crate::editor::hook) fn scroll_imports(&mut self, delta: f32) {
-        let rows_shown = import_panel::visible_rows(self.effective_size(PanelKey::Import)[1]);
-        let max = self.import_rows().len().saturating_sub(rows_shown);
-        self.import.scroll = scroll_step(self.import.scroll, delta, max);
+    // Take in a press that focused the path field, or left it.
+    pub(in crate::editor::hook) fn observe_import(&mut self, world: &World, built: &BuiltPanel) {
+        let focused = import_panel::path_focused(world, built);
+        if focused != self.make_import_view().focus {
+            self.import.focus = focused;
+        }
     }
 
-    // Route a resolved Import-panel click.
+    // The path field's id in `world`.
+    fn import_field(world: &World) -> Option<AssetId> {
+        world
+            .resource::<BuiltUi>()
+            .and_then(|b| b.panel(PanelKey::Import))
+            .and_then(import_panel::path_field)
+    }
+
+    // Empty the path field.
+    pub(in crate::editor::hook) fn clear_import_field(world: &mut World) {
+        let field = Self::import_field(world);
+        field::set_text(world, field, "");
+    }
+
+    // Act on what the user asked of the panel.
     pub(in crate::editor::hook) fn apply_import_action(
         &mut self,
         action: ImportAction,
         world: &mut World,
     ) {
         match action {
-            ImportAction::FocusPath => self.import.focus = true,
             ImportAction::Browse => self.browse_import(world),
             ImportAction::Add => self.add_import(world),
             ImportAction::Open(i) => {
                 if let Some(row) = self.import_rows().get(i) {
-                    self.open_import(row.entry, world);
+                    self.open_import(row.entry);
                 }
             }
-            // A click on panel chrome blurs the path field.
-            ImportAction::Consume => self.import.focus = false,
         }
     }
 
-    // Open the native file picker at the project directory and take what the
-    // user picks. The dialog blocks the frame loop while it is up (it is a
-    // modal OS window over the editor); canceling leaves the field alone.
-    // This wrapper is the only untestable step -- what the pick feeds is all in
-    // `accept_browsed_path`.
+    // Open the native picker at the project directory; it blocks the frame
+    // loop. Canceling leaves the field alone.
     pub(super) fn browse_import(&mut self, world: &mut World) {
         let root = project_root();
         if let Some(picked) = file_dialog::pick_import_file(&root) {
@@ -107,7 +111,8 @@ impl EditorHook {
         picked: &Path,
     ) {
         let text = file_dialog::project_path(picked, &project_root());
-        widget::seed_field(world, import_panel::PATH_INPUT, &text);
+        let field = Self::import_field(world);
+        field::set_text(world, field, &text);
         self.import.focus = true;
         self.import.status = None;
     }
@@ -117,9 +122,8 @@ impl EditorHook {
     // shows on the status line and commits nothing.
     pub(in crate::editor::hook) fn add_import(&mut self, world: &mut World) {
         self.import.status = None;
-        let path = widget::field_text(world, import_panel::PATH_INPUT)
-            .trim()
-            .to_string();
+        let field = Self::import_field(world);
+        let path = field::text(world, field).trim().to_string();
         if path.is_empty() {
             return;
         }
@@ -156,7 +160,7 @@ impl EditorHook {
             self.import.status = Some(ImportStatus::Notice(short_status(&notice)));
             self.notifier.info(&notice);
             self.mark_changed();
-            widget::seed_field(world, import_panel::PATH_INPUT, "");
+            field::set_text(world, field, "");
             return;
         }
         let mut first_name = String::new();
@@ -176,12 +180,12 @@ impl EditorHook {
             n => self.notifier.success(&format!("Imported {n} assets")),
         }
         self.mark_changed();
-        widget::seed_field(world, import_panel::PATH_INPUT, "");
+        field::set_text(world, field, "");
     }
 
     // Open import entry `idx` in the standard add / edit form (part of the
     // Assets UI, so the browse panel comes up alongside it).
-    pub(super) fn open_import(&mut self, idx: usize, world: &mut World) {
+    pub(super) fn open_import(&mut self, idx: usize) {
         let Some(key) = self.entries.key_at(idx) else {
             return;
         };
@@ -194,7 +198,7 @@ impl EditorHook {
             return;
         };
         self.open[PanelKey::Assets] = true;
-        self.open_form(world, ty, FormTarget::Entry(key));
+        self.open_form(ty, FormTarget::Entry(key));
     }
 
     // Enter in the focused path field adds, like clicking the Add button.
@@ -205,11 +209,8 @@ impl EditorHook {
     }
 }
 
-// The directory imported paths are stored relative to, and where the picker
-// opens: the process's working directory. A stored path carries a directory
-// component, so the cook uses it verbatim and resolves it against that same
-// working directory -- which is where the CLI roots the project, `assets/`
-// included.
+// The working directory, which imported paths are relative to and the picker
+// opens at.
 fn project_root() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_default()
 }

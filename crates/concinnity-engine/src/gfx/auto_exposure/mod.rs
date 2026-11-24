@@ -51,10 +51,25 @@ pub const HIGHLIGHT_FRACTION: f32 = 0.001;
 pub const LIT_FRACTION: f32 = 0.05;
 
 /// How many stops under the highlight the measured mean still counts a
-/// pixel: about what a scene lit by one source spans, so the black of space
-/// around a lit planet is left out of the mean rather than metered as the
-/// scene, while a frame's own shadows stay in.
+/// pixel in an ordinary view: about what a scene lit by one source spans, so
+/// the black of space around a lit planet is left out of the mean rather than
+/// metered as the scene, while a frame's own shadows stay in.
 pub const METERED_RANGE_EV: f32 = 10.0;
+
+/// How many stops under the highlight the measured mean counts a pixel when
+/// the lit part of a frame is small: the lit side of a planet seen from space
+/// rather than its fading edge, so a crescent is exposed as the full disc is.
+pub const SMALL_SUBJECT_RANGE_EV: f32 = 4.0;
+
+/// Share of a frame's pixels, the black ones counted, within
+/// [`METERED_RANGE_EV`] of the highlight, under which the metered range is
+/// [`SMALL_SUBJECT_RANGE_EV`]. Over [`WIDE_SUBJECT_SHARE`] it is the whole
+/// [`METERED_RANGE_EV`]; between, it narrows smoothly. An ordinary view
+/// counts nearly all of its pixels; a planet against space a tenth or less.
+pub const SMALL_SUBJECT_SHARE: f32 = 0.25;
+
+/// See [`SMALL_SUBJECT_SHARE`].
+pub const WIDE_SUBJECT_SHARE: f32 = 0.6;
 
 /// Default for how many stops over white the brightest
 /// [`HIGHLIGHT_FRACTION`] of a frame may sit after exposure: under the ACES

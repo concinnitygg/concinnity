@@ -36,6 +36,7 @@ pub struct CharacterModel {
     /// asset name or the reserved `builtin:humanoid`.
     pub schema: NameRef<CharacterSchema>,
     /// Path to the `.glb` / `.gltf` body.
+    #[asset(file)]
     pub source: String,
     /// Which skinned mesh of `source` to import, in file order.
     pub skin_index: u32,

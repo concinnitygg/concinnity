@@ -14,8 +14,6 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use crate::directx::builtin_shaders;
-use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::DxContext;
 use crate::directx::error::map_hresult;
 use crate::directx::pso::compute_pso;
@@ -39,11 +37,9 @@ pub(in crate::directx) struct ClusterGrid<'a> {
     pub lists: &'a ID3D12Resource,
 }
 
-// Clustered-lighting GPU state: the binning compute pipeline, the per-cluster
-// list buffer it writes / the forward pass reads, and the per-frame
-// `ClusterParams` constant buffers. All of it always exists (the forward shaders
-// reference the buffers unconditionally, guarded by `use_clusters`); the kernel
-// runs only on frames with a light or a probe to bin.
+// Clustered lighting: the binning pipeline, the per-cluster lists, and the
+// per-frame `ClusterParams`. Always built, since the forward shaders bind the
+// buffers unconditionally; the kernel runs only with a light or probe to bin.
 pub(in crate::directx) struct LightCullState {
     pub root_sig: ID3D12RootSignature,
     pub pso: ID3D12PipelineState,
@@ -65,11 +61,6 @@ impl LightCullState {
             unsafe { res.Unmap(0, None) };
         }
     }
-}
-
-// Compile the clustered light-binning compute kernel to DXIL.
-pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::LIGHT_CULL.compile(hot_reload)
 }
 
 // Root signature for the light-cull kernel: the `ClusterParams` CBV, the
@@ -96,11 +87,8 @@ pub(in crate::directx) fn create_light_cull_pso(
     compute_pso(device, root_sig, cs, "light cull")
 }
 
-// Allocate a per-cluster list buffer. Created in `COMMON` (D3D12
-// creates every buffer there regardless of the requested state); the light-cull
-// pass transitions it to UNORDERED_ACCESS to write and back to
-// PIXEL_SHADER_RESOURCE for the forward pass, matching how the GPU-cull pass
-// cycles its indirect buffers.
+// A per-cluster list buffer, created in COMMON; the light-cull pass moves it to
+// UNORDERED_ACCESS and back to PIXEL_SHADER_RESOURCE.
 pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12Resource> {
@@ -209,13 +197,9 @@ impl DxContext {
         }
     }
 
-    // Dispatch the clustered binning pass for `grid`. One thread per cluster;
-    // the kernel builds the cluster's world-space AABB and tests each local
-    // light's sphere and each probe's influence box against it, writing the
-    // surviving indices into `grid.lists`, which the caller holds in
-    // `UNORDERED_ACCESS` across the dispatch. The executor does that for the
-    // main camera's lists around `LightCull`; each mirror render does it for
-    // its own.
+    // Bin each local light and probe into `grid`'s clusters, one thread per
+    // cluster. The caller holds `grid.lists` in UNORDERED_ACCESS across the
+    // dispatch.
     pub(in crate::directx) fn encode_light_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,

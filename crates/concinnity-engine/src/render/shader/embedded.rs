@@ -26,6 +26,7 @@ macro_rules! embed_shaders {
 }
 
 embed_shaders! {
+    AIR_HAZE => "air_haze.hlsl",
     ATMOSPHERE => "atmosphere.hlsl",
     ATMOSPHERE_COMMON => "atmosphere_common.hlsl",
     ATMOSPHERE_TYPES => "atmosphere_types.hlsl",

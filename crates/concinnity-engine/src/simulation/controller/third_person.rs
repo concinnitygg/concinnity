@@ -405,11 +405,9 @@ impl System for ThirdPersonSystem {
             None => {}
         }
 
-        // The pivot rides `height` above what is followed, moving with it at a
-        // velocity eased toward its own and closing the rest of the gap by the
-        // lag's half life, never trailing it by more than a share of the
-        // boom: steady motion, however fast, holds it still on screen, and
-        // only bumps and sudden changes are smoothed.
+        // The pivot rides `height` above the target, eased toward its velocity
+        // and closing the gap by the lag's half life, so only sudden changes are
+        // smoothed.
         if let Some(at) = at {
             let goal = add(at, scale(up, self.height));
             self.pivot = if self.lag_seconds > 0.0 && dt > 0.0 {
@@ -430,11 +428,8 @@ impl System for ThirdPersonSystem {
             self.last_goal = Some(goal);
         }
 
-        // Place the camera on the orbit sphere behind the pivot, pulled in
-        // to the occlusion probe's clearance (answered by PhysicsSystem this
-        // frame from last frame's ray) so a wall never cuts the view, and
-        // commit the pose. The player-capsule intents stay cleared: in third
-        // person what is followed moves, not a camera capsule.
+        // Place the camera on the orbit behind the pivot, pulled in to the
+        // occlusion probe's clearance.
         let look = scale(view_axes(yaw, pitch, up)[2], -1.0);
         let desired = sub(self.pivot, scale(look, self.distance));
         let mut distance = self.distance;

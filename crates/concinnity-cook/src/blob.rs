@@ -1,5 +1,5 @@
 //! The blob WRITE side (build output): pack compiled payloads + the def table
-//! into .cnb files and emit world-lock.json. The byte format itself -- the
+//! into .cnb files and emit cook-lock.json. The byte format itself -- the
 //! header, the record schema, and the `encode_cnb` image builder -- is owned by
 //! the I/O-free `concinnity_engine::blob` module; this file owns the packing POLICY
 //! (payload distribution across overflow blobs, the size ceiling), the lock, and
@@ -46,9 +46,9 @@ pub(crate) struct BlobLock {
     /// handle) rather than the component def table.
     #[serde(default)]
     pub resources: Vec<LockedResource>,
-    /// Assets the build added that have no world.jsonl line (companions and
+    /// Assets the build added that have no .jsonl line (companions and
     /// engine defaults). Each record carries the asset's world line so it can
-    /// be copied into world.jsonl verbatim as an override.
+    /// be copied into a .jsonl file verbatim as an override.
     pub injected: Vec<LockedInjection>,
     /// Generated assets the world declares its own copy of. The copy won and the
     /// generated entry was dropped, so the source file no longer drives these;
@@ -83,7 +83,7 @@ pub(crate) struct LockedInjection {
     /// The injected asset's name.
     pub name: String,
     /// The asset's world line, `["Type", {args}]`, kept compact in the lock
-    /// so it copies into world.jsonl as it stands.
+    /// so it copies into a .jsonl file as it stands.
     pub entry: Box<serde_json::value::RawValue>,
     /// Which expander injected it.
     pub injected_by: String,
@@ -108,7 +108,7 @@ impl LockedInjection {
 }
 
 /// One generated asset the world overrides with its own copy. Carries no args:
-/// the copy that won is the world.jsonl line of the same name.
+/// the copy that won is the .jsonl line of the same name.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LockedShadow {
     /// The shadowed asset's name.
@@ -378,7 +378,7 @@ pub(crate) fn write_lock(
             .collect(),
     };
 
-    let path = tree.world_lock_path();
+    let path = tree.cook_lock_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -437,7 +437,7 @@ pub(crate) mod test_output {
 
         /// The lock file this tree's builds write.
         pub(crate) fn lock_path(&self) -> PathBuf {
-            self.tree.world_lock_path()
+            self.tree.cook_lock_path()
         }
 
         /// Blob 0 under this tree's `data/`: what a build writes when nothing

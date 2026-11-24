@@ -1,20 +1,19 @@
-//! The Story panel's actions (`hook/edit/story.rs`): key events reaching the
-//! text area only while it holds the keyboard, presses focusing it, the save
-//! shortcut and Apply validating before they write, the status a missing file
-//! reports, and the starter file a create writes along with the import that
-//! names it.
+//! The Story panel's actions (`hook/edit/story.rs`): the source's editor lent
+//! to the text area and taken back, the area's focus, the save shortcut and
+//! Apply validating before they write, the status a missing file reports, and
+//! the starter file a create writes along with the import that names it.
 
-use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
+use concinnity_engine::components::{FrameInput, TextArea, UiEvent};
 use concinnity_engine::ecs::World;
-use concinnity_engine::window::clipboard::Clipboard;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
-use crate::editor::panels::story_panel::{self, StoryAction};
-use crate::editor::text_area::TextArea;
+use crate::editor::ui::BuiltUi;
+use crate::frame_hook::FrameHook;
+use concinnity_engine::presentation::text_edit::TextEditor;
 
 fn story_import(source: &str) -> serde_json::Value {
     serde_json::json!({"type": "StoryImport", "args": {"$id": "tale", "source": source}})
@@ -28,100 +27,60 @@ fn story_session(text: &str) -> (EditorHook, World) {
 
 fn story_session_at(source: &str, text: &str) -> (EditorHook, World) {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![story_import(source)]);
     h.viewport = [1280.0, 720.0];
     h.open[PanelKey::Story] = true;
-    h.story.area = TextArea::from_text(text);
+    h.story.area = TextEditor::from_text(text);
     h.story.focus = true;
     h.focus_panel(PanelKey::Story);
     (h, world)
 }
 
-fn events(events: Vec<KeyEvent>) -> FrameInput {
-    FrameInput {
-        key_events: events,
+// The hook lends the source's editor to the panel's text area for the frame
+// and takes it back whole at the next one, so the area edits the hook's text.
+#[test]
+fn the_editor_is_lent_to_the_text_area_and_taken_back() {
+    let (mut h, mut world) = story_session("one");
+    world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
-    }
+    });
+    h.tick(&mut world);
+    h.tick(&mut world);
+    let area = world.query::<TextArea>().next().unwrap();
+    assert_eq!(area.editor.text(), "one", "lent for the frame");
+    assert!(area.visible && area.focused);
+    h.reclaim_built(&mut world);
+    assert_eq!(h.story.area.text(), "one", "taken back whole");
 }
 
-fn chord(key: InputKey) -> KeyEvent {
-    let mods = if cfg!(target_os = "macos") {
-        KeyMods::CMD
-    } else {
-        KeyMods::CTRL
-    };
-    KeyEvent::Press(KeyPress::new(key, mods))
-}
-
-// A burst of keystrokes landing in one frame all reach the text, in order,
-// and the heading marks the unapplied edit.
+// The area holds the keyboard only while focused and the panel is frontmost,
+// and a press the engine gave the area, or took from it, reaches the hook.
 #[test]
-fn a_frame_of_keys_edits_the_focused_story() {
-    let (mut h, mut world) = story_session("    one");
-    h.story.area.go_to(0, 7);
-    let input = events(vec![
-        KeyEvent::press(InputKey::Enter),
-        KeyEvent::Text('t'),
-        KeyEvent::Text('w'),
-        KeyEvent::Text('o'),
-    ]);
-    h.story_keys(&mut world, &input);
-    assert_eq!(h.story.area.text(), "    one\n    two");
-    assert!(h.make_story_view([0.0, 0.0]).area.is_dirty());
-}
-
-// Keys reach the area only while it is focused and the panel is frontmost.
-#[test]
-fn keys_need_focus_and_the_front_panel() {
+fn focus_follows_the_area_and_the_front_panel() {
     let (mut h, mut world) = story_session("x");
-    let typed = events(vec![KeyEvent::Text('y')]);
-    h.story.focus = false;
-    h.story_keys(&mut world, &typed);
-    assert_eq!(h.story.area.text(), "x", "an unfocused area ignores typing");
-    h.story.focus = true;
+    assert!(h.story_view().focus);
     h.focus_panel(PanelKey::Console);
-    h.story_keys(&mut world, &typed);
-    assert_eq!(
-        h.story.area.text(),
-        "x",
-        "a panel in front takes the keyboard"
-    );
-    assert!(!h.make_story_view([0.0, 0.0]).focus);
+    assert!(!h.story_view().focus, "a panel in front takes the keyboard");
     h.focus_panel(PanelKey::Story);
-    h.story_keys(&mut world, &typed);
-    assert_eq!(h.story.area.text(), "yx");
-}
-
-// A press on the text area focuses it and places the caret; a press on the
-// panel chrome blurs it.
-#[test]
-fn presses_focus_and_blur_the_area() {
-    let (mut h, _world) = story_session("first\nsecond");
-    h.story.focus = false;
-    let o = h.origin(PanelKey::Story, h.viewport);
-    let s = h.effective_size(PanelKey::Story);
-    let r = story_panel::area_rect(o, s);
-    let second_row = r[1] + 1.5 * crate::editor::code_font::LINE_H;
-    h.apply_story_action(StoryAction::Text, r[0] + r[2] - 20.0, second_row);
-    assert!(h.story.focus);
-    assert_eq!(h.story.area.caret().line, 1);
-    h.apply_story_action(StoryAction::Consume, 0.0, 0.0);
-    assert!(!h.story.focus);
-}
-
-// Copy and paste work with no window: the internal clipboard stands in for the
-// system one.
-#[test]
-fn copy_and_paste_fall_back_to_the_internal_clipboard() {
-    let (mut h, mut world) = story_session("abc");
-    let input = events(vec![chord(InputKey::A), chord(InputKey::C)]);
-    h.story_keys(&mut world, &input);
-    assert_eq!(h.text_clipboard.text().as_deref(), Some("abc"));
-    let input = events(vec![KeyEvent::press(InputKey::End), chord(InputKey::V)]);
-    h.story_keys(&mut world, &input);
-    assert_eq!(h.story.area.text(), "abcabc");
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    h.tick(&mut world);
+    h.tick(&mut world);
+    for area in world.query_mut::<TextArea>() {
+        area.focused = false;
+    }
+    let built = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::Story)
+        .unwrap()
+        .clone();
+    h.observe_story(&world, &built);
+    assert!(!h.story.focus, "a press elsewhere blurred it");
 }
 
 // Apply validates with the real story parser before writing: a broken story
@@ -141,7 +100,7 @@ fn story_apply_validates_then_writes() {
     assert_eq!(h.story.area.text(), story::STARTER_STORY);
 
     // Break the story (no frontmatter): Apply rejects and writes nothing.
-    h.story.area = TextArea::from_text("just prose, no frontmatter");
+    h.story.area = TextEditor::from_text("just prose, no frontmatter");
     h.story.area.type_char('!');
     h.apply_story();
     assert!(h.story.status.is_some(), "parse failure shown");
@@ -155,7 +114,7 @@ fn story_apply_validates_then_writes() {
 
     // An error naming its line pins a gutter marker there.
     let broken = story::STARTER_STORY.replace("The story begins here.", "[x](#nowhere) prose");
-    h.story.area = TextArea::from_text(&broken);
+    h.story.area = TextEditor::from_text(&broken);
     h.apply_story();
     let marked: Vec<usize> = h.story.markers.iter().map(|m| m.line).collect();
     let line = broken.lines().position(|l| l.contains("#nowhere")).unwrap();
@@ -191,10 +150,14 @@ fn the_save_shortcut_applies() {
     let path = tree.write("tale.md", story::STARTER_STORY);
     let (mut h, mut world) = story_session_at(&path.to_string_lossy(), "");
     h.load_story();
-    h.story.focus = true;
     h.story.area.go_to(0, 0);
-    let input = events(vec![KeyEvent::press(InputKey::Enter), chord(InputKey::S)]);
-    h.story_keys(&mut world, &input);
+    h.story.area.type_char('\n');
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: "editor.story.save".into(),
+        element: None,
+        value: None,
+    });
+    h.read_ui_events(&mut world);
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(on_disk.starts_with("\n---"), "{on_disk:?}");
     assert!(!h.story.area.is_dirty());
@@ -220,10 +183,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     let mut h = hook(Vec::new());
     h.open[PanelKey::Story] = true;
     h.load_story();
-    assert!(
-        h.make_story_view([0.0, 0.0]).create,
-        "no import: create mode"
-    );
+    assert!(h.story_view().create, "no import: create mode");
     h.create_story();
 
     assert_eq!(h.entries.len(), 1);
@@ -232,7 +192,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     assert!(h.dirty, "the new entry is a world edit");
     assert_eq!(h.story.area.text(), story::STARTER_STORY);
     assert!(h.story.focus, "the new story is ready to type into");
-    assert!(!h.make_story_view([0.0, 0.0]).create);
+    assert!(!h.story_view().create);
     let written = std::fs::read_to_string(state.tree().join("story.md")).unwrap();
     assert_eq!(written, story::STARTER_STORY);
     // A second create is a no-op while an import exists.

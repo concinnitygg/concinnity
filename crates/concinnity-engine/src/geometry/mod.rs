@@ -8,7 +8,7 @@
 //!
 //! The generators produce `(Vec<Vert>, Vec<u16>)`; packing that into a payload
 //! is [`crate::bake::mesh`]. The cook crate's JSON compile front end parses
-//! world.jsonl args and calls down into both.
+//! .jsonl args and calls down into both.
 
 // Procedural voxel-chunk generation, consumed by the backends' chunk-streaming
 // path.

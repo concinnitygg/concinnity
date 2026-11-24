@@ -27,19 +27,14 @@ use crate::metal::error::allocation_failed;
 use crate::metal::pass_timing::{PassId, PassTimer};
 use crate::metal::texture::{REACTIVE_MASK_FORMAT, REACTIVE_MASK_USAGE};
 
-// All MetalFX-temporal-upscaling state grouped into one feature unit: the
-// scaler instance, the input/output scale ratio, the per-frame projection
-// jitter, and the history-reset flag. `scaler` is `Some` only when the world
-// requested temporal upscaling AND the GPU supports it; otherwise `scale` is
-// `1.0` (render-res == output-res) and the rest are inert.
+// MetalFX temporal upscaling. `scaler` is `Some` only when requested and
+// supported; otherwise `scale` is 1.0.
 pub(crate) struct UpscaleState {
     // The MetalFX scaler. `Some` only when upscaling is active.
     pub scaler: Option<MetalFXUpscaler>,
-    // The per-axis input-to-output ratio the world asked for, `1.0` when the
-    // scaler is absent. Kept so a resize can rebuild the scaler from the same
-    // request. Deliberately not the realized `input / output`: that is rounded
-    // to whole pixels, and reusing it as the next request would shrink the input
-    // further on every resize. The realized size lives on the scaler itself.
+    // The requested per-axis ratio, kept so a resize rebuilds from the same
+    // request. Not the realized ratio, which is rounded to whole pixels and
+    // would shrink the input on every resize.
     pub scale: f32,
     // Pixel-space jitter offset the projection applied this frame. Written on
     // the main thread before fan-out, read by `encode_upscale` on a worker;
@@ -54,14 +49,8 @@ pub(crate) struct UpscaleState {
     pub exposure: UpscalerExposure,
 }
 
-// MetalFX temporal upscaler. Owns the descriptor-bound scaler instance plus
-// the output texture the bloom + composite stack consumes (it must be at
-// output resolution, GPU-private, with `ShaderRead | RenderTarget` usage
-// per Apple's compatibility requirements).
-//
-// The scaler is sized once at construction. A window resize or a runtime
-// scale change rebuilds the whole struct via [`MetalFXUpscaler::new`]; the
-// old one drops and Metal retires its GPU storage on the next idle.
+// The MetalFX temporal scaler and its output-resolution Private texture,
+// sized at construction; a resize or scale change rebuilds it.
 pub(crate) struct MetalFXUpscaler {
     // The MetalFX scaler instance. Its `colorTexture` / `depthTexture` /
     // `motionTexture` / `outputTexture` / `jitterOffset` / `reset` properties
@@ -95,16 +84,10 @@ pub(crate) fn temporal_scaler_supported(
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
 }
 
-// Input (render) dimensions for an output size and requested per-axis scale.
-// `ratio_range` is the device's supported OUTPUT-over-INPUT range, which is the
-// inverse of the user-facing scale, so the request is flipped into the device's
-// units, clamped, and flipped back.
-//
-// The one place this arithmetic happens. The realized size does not round-trip:
-// `input / output` is whole pixels over whole pixels, so re-deriving a render
-// size from it lands up to a pixel below what the scaler was built for, and
-// MetalFX asserts that the input content exceeds the input texture. Callers take
-// the render resolution from the built scaler instead of recomputing it.
+// Input dimensions for an output size and requested scale. `ratio_range` is in
+// the device's output-over-input units, so the request is flipped, clamped and
+// flipped back. Callers read the render size off the built scaler, since a
+// rounded ratio does not round-trip.
 fn scaler_input_size(output: (u32, u32), scale: f32, ratio_range: (f32, f32)) -> (u32, u32) {
     let (min_ratio, max_ratio) = ratio_range;
     let requested_ratio = if scale > 0.0 { 1.0 / scale } else { 1.0 };
@@ -128,11 +111,8 @@ impl MetalFXUpscaler {
         output_height: u32,
         scale: f32,
     ) -> RenderResult<Self> {
-        // Apple's `inputContentMin/MaxScale` reports the OUTPUT-over-INPUT
-        // ratio: a 1.0 minimum means "the smallest upscale is no upscale";
-        // a 3.0 maximum means "the largest upscale is 3× per axis". Our
-        // user-facing `scale` is the inverse (input/output, ≤ 1.0), so flip
-        // it to the device's units, clamp, and flip back.
+        // `inputContentMin/MaxScale` are output-over-input ratios, the inverse
+        // of `scale`.
         // SAFETY: a device-capability query taking a live MTLDevice; it only reads.
         let min_ratio = unsafe {
             MTLFXTemporalScalerDescriptor::supportedInputContentMinScaleForDevice(device)
@@ -162,10 +142,7 @@ impl MetalFXUpscaler {
         // pixel coords once `motionVectorScale` rescales the UV delta.
         // SAFETY: RG16Float is a two-channel format MetalFX accepts for motion.
         unsafe { descriptor.setMotionTextureFormat(MTLPixelFormat::RG16Float) };
-        // Output: drawable-res RGBA16Float so the existing post stack
-        // (bloom, composite) can read it without an additional format
-        // conversion. Composite handles ACES + LUT + FXAA when SDR;
-        // skips them on the HDR path.
+        // Output RGBA16F at drawable resolution for the post stack.
         // SAFETY: a plain setter; RGBA16Float is a renderable color format.
         unsafe { descriptor.setOutputTextureFormat(MTLPixelFormat::RGBA16Float) };
         // SAFETY: the input width was clamped to the device's supported scale range.
@@ -246,22 +223,10 @@ impl MetalFXUpscaler {
 }
 
 impl MtlContext {
-    // Encode the MetalFX temporal upscale: feed it the pre-TAA scene
-    // (post-SSR, post-Fog, post-particles), the velocity pre-pass's
-    // motion vectors + depth, and the sub-pixel jitter offset applied to
-    // this frame's projection. Outputs into `upscaler.output`, which the
-    // bloom + composite passes then read as `scene_color`.
-    //
-    // `scene_pre_taa` is whatever pre-TAA texture the graph routed in for
-    // this frame (SSR resolve output when SSR is on; otherwise the main
-    // pass's `hdr_resolve`). The scaler needs its `depthTexture` to be
-    // the depth that produced `scene_pre_taa`: we use the single-sample
-    // depth the velocity pre-pass already writes at render resolution,
-    // which is rasterized from the same geometry the main pass shaded.
-    //
-    // Reset is requested whenever the scaler was just rebuilt (resize or
-    // first frame) or the frame resets the temporal history; the encode
-    // consumes the latch `draw_frame` raises on the main thread between frames.
+    // Encode the MetalFX upscale over the pre-TAA scene, the pre-pass's motion
+    // and render-resolution depth, and this frame's jitter, into
+    // `upscaler.output`. Resets on the latch `draw_frame` raises after a rebuild
+    // or a history reset.
     pub(in crate::metal) fn encode_upscale(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -362,11 +327,8 @@ impl MtlContext {
     }
 }
 
-// Per-axis upscale-jitter holder. Two `f32` slots packed atomically so the
-// main thread (which computes Halton samples) and the worker thread (which
-// reads them in `encode_upscale`) can synchronize without a mutex. Bit-cast
-// through `u64` since `AtomicU64` is widely available on the targets
-// MetalFX runs on (macOS 13+, aarch64 / x86_64).
+// Per-axis jitter as two `f32`s packed into one `AtomicU64`, shared between
+// the main thread and the encoding worker.
 #[derive(Default)]
 pub(crate) struct UpscaleJitter(std::sync::atomic::AtomicU64);
 
@@ -394,12 +356,8 @@ mod tests {
 
     #[test]
     fn the_realized_scale_does_not_round_trip() {
-        // The bug this guards. A 2048x1536 drawable at the default 2/3 quality
-        // scale gives a 1365x1024 input. Feeding the realized ratio
-        // (1365/2048) back in as a request yields 1023 rows -- one short of what
-        // the scaler was built for, which MetalFX rejects outright rather than
-        // tolerating. So the render resolution is read off the scaler, and the
-        // stored scale stays the original request.
+        // Feeding the realized ratio (1365/2048) back as a request gives 1023
+        // rows, one short of what the scaler was built for.
         let out = (2048, 1536);
         let built = scaler_input_size(out, 2.0 / 3.0, RANGE);
         assert_eq!(built, (1365, 1024));

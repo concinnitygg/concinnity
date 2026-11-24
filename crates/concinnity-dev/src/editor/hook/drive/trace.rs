@@ -41,8 +41,11 @@ impl EditorHook {
 
     fn clear_trace(&mut self) {
         self.behavior.pulses.clear();
-        self.live_vars.clear();
-        self.live_locals.clear();
+        if !self.live_vars.is_empty() || !self.live_locals.is_empty() {
+            self.live_vars.clear();
+            self.live_locals.clear();
+            self.live_revision = self.live_revision.wrapping_add(1);
+        }
     }
 
     // The name the Behavior panel is open on. Live data is scoped to it:
@@ -81,11 +84,8 @@ impl EditorHook {
         });
     }
 
-    // Breakpoints are held by behavior name + node path (both survive preview
-    // rebuilds); the behavior system wants (asset id, node id), resolved fresh
-    // against the published path table. One not yet resolvable (the table
-    // appears one frame after the first request) simply stands down until it
-    // is.
+    // Resolve name-and-path breakpoints to (asset id, node id) against the
+    // published path table, skipping any not yet resolvable.
     fn resolve_breakpoints(&self, world: &World) -> Vec<TraceEvent> {
         let Some(table) = world.resource::<TracePaths>() else {
             return Vec::new();
@@ -150,14 +150,14 @@ impl EditorHook {
             }
         }
 
-        self.live_vars = vars
+        let live_vars: Vec<_> = vars
             .into_iter()
             .map(|(name, val)| {
                 let (ty, text) = trace::text(val);
                 (name, ty.to_string(), text)
             })
             .collect();
-        self.live_locals = locals
+        let live_locals: Vec<_> = locals
             .into_iter()
             .filter(|(behavior, _, _)| Some(*behavior) == open_id)
             .map(|(_, name, val)| {
@@ -165,6 +165,11 @@ impl EditorHook {
                 (name, ty.to_string(), text)
             })
             .collect();
+        if live_vars != self.live_vars || live_locals != self.live_locals {
+            self.live_vars = live_vars;
+            self.live_locals = live_locals;
+            self.live_revision = self.live_revision.wrapping_add(1);
+        }
 
         if let Some(hit) = hit {
             self.land_on_hit(hit, open_id, &open_paths, world);

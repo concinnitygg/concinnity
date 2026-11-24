@@ -1,15 +1,6 @@
-// Contact manifolds and the memory that makes stacks stand still.
-//
-// A sequential-impulse solver converges slowly from a cold start, so each
-// contact point begins the step with the impulse its own feature carried last
-// step. That requires two things of this module: every point produced by the
-// narrow phase carries an id naming the geometric feature it came from, and a
-// point's impulse follows that id from one step to the next.
-//
-// The matching is a merge, not a lookup. Manifolds arrive sorted by body slot
-// and are kept that way, so last step's list and this step's list walk in step
-// with each other -- no hashing, and so no iteration order that could differ
-// between two runs of the same scene.
+// Contact manifolds and warm starting: each point carries a feature id, and its
+// impulse follows that id across steps through a sorted merge rather than a
+// hash lookup.
 
 use alloc::vec::Vec;
 

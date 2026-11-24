@@ -497,11 +497,8 @@ mod tests {
         w
     }
 
-    // The ground's shader reads the host's wash from the canopy block: at
-    // heights from the sea floor to above the highest run-up and moments
-    // through several sets, film, wetness and the front's foam match, its
-    // early-out keeps every point the wash reaches, and its constants are
-    // the host's.
+    // The ground shader's wash matches the host's at every height and moment,
+    // its early-out keeps every reached point, and its constants agree.
     #[test]
     fn the_ground_reads_the_hosts_wash() {
         let s = shore();

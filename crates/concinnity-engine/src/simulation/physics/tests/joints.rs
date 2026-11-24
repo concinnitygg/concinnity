@@ -378,13 +378,8 @@ fn a_slider_motor_drives_it_along_the_rail() {
     );
 }
 
-// Every test above starts a joint from rest and lets gravity do the work,
-// which never asks the arm for more than about six units per second. A limb
-// thrown by a hit is handed several times that at once, and it is the speed,
-// not the joint, that decides whether the rows hold: solving through a mass
-// block built before the arm swung overshoots rather than cancels, and past a
-// few degrees of turn per substep the overshoot grows. It diverged inside a
-// single step.
+// A limb thrown at several times gravity's speeds must keep its joint rows
+// holding; past a few degrees of turn per substep the solve used to diverge.
 #[test]
 fn a_thrown_arm_stays_on_its_arc_at_every_speed_a_hit_imparts() {
     for spec in [JointSpec::Spherical, hinge(None, None)] {
@@ -413,11 +408,8 @@ fn a_thrown_arm_stays_on_its_arc_at_every_speed_a_hit_imparts() {
     }
 }
 
-// The sharpest statement of the same thing, and the one the divergence broke
-// by seven orders of magnitude: a joint does no work. An arm pinned to a post
-// can only trade the energy it was thrown with, so the total may fall -- the
-// pin itself is inelastic, and the correction bleeds a little more -- and can
-// never climb.
+// A joint does no work: an arm pinned to a post may lose the energy it was
+// thrown with but never gain.
 #[test]
 fn a_thrown_joint_never_gains_energy() {
     for spec in [
@@ -442,16 +434,8 @@ fn a_thrown_joint_never_gains_energy() {
     }
 }
 
-// A joint's own axis carries its own rows, solved through their own mass, and
-// a thrown hinge is where that mass moves fastest.
-//
-// What is checked is where the hinge ends up rather than where the throw first
-// carries it. The bound is held by a couple about the axis while the arm is
-// also pinned a unit away, so the linear rows take back part of what the bound
-// just applied, and an arm arriving at the stop at forty units per second
-// stretches most of a unit further out before the two agree. It comes back:
-// the arm is on its arc to a thousandth by the time it settles, and inside the
-// range it was given.
+// A thrown hinge ends up on its arc and inside its range once it settles,
+// though the throw first carries it past the stop.
 #[test]
 fn a_thrown_hinge_comes_back_onto_its_arc_and_rests_inside_its_limits() {
     let stop = 1.2f32;

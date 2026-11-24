@@ -4,16 +4,17 @@
 //! row appends, and the focus it yields when it is not frontmost.
 
 use concinnity_core::math::narrow_f32;
-use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::components::{FrameInput, Layout, UiEvent};
 use concinnity_engine::ecs::World;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::hook;
 
-use crate::editor::{inject, widget};
-
-use crate::editor::panels::{lighting, lighting_panel, row_list};
+use crate::editor::hook::EditorHook;
+use crate::editor::install;
+use crate::editor::panels::lighting;
+use crate::editor::ui::BuiltUi;
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -43,41 +44,43 @@ fn fog_density_binding() -> usize {
 }
 
 // The View panel's Lighting row (registry order: Assets, Preview, Templates,
-// Lighting) opens the panel through the real tick + click route and seeds its
+// Lighting) opens the panel through the event its checkbox sends and seeds its
 // controls from the entries.
 #[test]
 fn lighting_opens_via_the_view_panel_and_seeds() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::View] = true;
-    let vp = [1280.0, 720.0];
-    let vo = h.origin(PanelKey::View, vp);
-    let row = row_list::row_rect(vo, 200.0, 3);
-    // Click the row's interior (clear of the edge resize band).
-    assert!(h.try_panel_press(
-        PanelKey::View,
-        row[0] + row[2] * 0.5,
-        row[1] + 5.0,
-        vp,
-        &mut world
-    ));
+    // The first frame takes the freshly built panels in.
+    h.tick(&mut world);
+    world
+        .events_mut::<UiEvent>()
+        .send(crate::editor::panels::view::row_event(3));
+    h.read_ui_events(&mut world);
     assert!(
         h.open[PanelKey::Lighting],
         "the Lighting row opens the panel"
     );
     assert_eq!(
-        widget::field_text(&world, lighting_panel::input(SUN_INTENSITY)),
-        "2.2",
-        "the sun intensity control seeds from the entry"
+        h.lighting.texts[SUN_INTENSITY], "2.2",
+        "the sun intensity text seeds from the entry"
     );
     h.tick(&mut world);
-    let bg = world.get_by_id::<Sprite>(lighting_panel::PANEL_BG).unwrap();
-    assert!(bg.visible, "the panel renders once open");
+    let root = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::Lighting)
+        .unwrap()
+        .root;
+    assert!(
+        world.get_by_id::<Layout>(root).unwrap().visible,
+        "the panel shows once open"
+    );
 }
 
 // Apply captures the text controls and commits through validation; the entry's
@@ -85,12 +88,12 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
 #[test]
 fn lighting_apply_commits_sun_intensity() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
-    h.seed_lighting(&mut world);
-    widget::seed_field(&mut world, lighting_panel::input(SUN_INTENSITY), "5.5");
-    h.apply_lighting(&mut world);
+    h.seed_lighting();
+    h.lighting.texts[SUN_INTENSITY] = "5.5".to_string();
+    h.apply_lighting();
     assert_eq!(h.lighting.status, None);
     assert!(
         h.dirty && h.rebuild_preview,
@@ -110,12 +113,12 @@ fn lighting_apply_commits_sun_intensity() {
 #[test]
 fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
-    h.seed_lighting(&mut world);
-    widget::seed_field(&mut world, lighting_panel::input(SUN_INTENSITY), "garbage");
-    h.apply_lighting(&mut world);
+    h.seed_lighting();
+    h.lighting.texts[SUN_INTENSITY] = "garbage".to_string();
+    h.apply_lighting();
     assert_eq!(h.lighting.status, None);
     let args = h.entries[0]["args"].as_object().unwrap();
     assert_eq!(narrow_f32(args["intensity"].as_f64().unwrap()), 2.2);
@@ -126,16 +129,12 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
 #[test]
 fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![fog_entry(false)]);
     h.open[PanelKey::Lighting] = true;
-    h.seed_lighting(&mut world);
+    h.seed_lighting();
     // An in-progress density edit, not yet applied.
-    widget::seed_field(
-        &mut world,
-        lighting_panel::input(fog_density_binding()),
-        "0.5",
-    );
+    h.lighting.texts[fog_density_binding()] = "0.5".to_string();
     h.toggle_lighting_bool(fog_enabled_binding());
     let args = h.entries[0]["args"].as_object().unwrap();
     assert_eq!(args["enabled"], serde_json::Value::Bool(true));
@@ -145,9 +144,9 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
         "the pending text edit is not committed by the toggle"
     );
     assert_eq!(
-        widget::field_text(&world, lighting_panel::input(fog_density_binding())),
+        h.lighting.texts[fog_density_binding()],
         "0.5",
-        "the typed text stays in its control"
+        "the typed text stays pending"
     );
     assert!(h.dirty, "the toggle itself is committed");
 }
@@ -157,17 +156,17 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
 #[test]
 fn lighting_add_row_appends_the_missing_singleton() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
     assert_eq!(h.lighting_present(), vec![true, false, false, false, false]);
-    h.add_lighting_section(1, &mut world);
+    h.add_lighting_section(1);
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["type"], "VolumetricFog");
     assert!(h.dirty);
     assert!(h.lighting_present()[1]);
     // A second add is a no-op (the section binds the existing entry).
-    h.add_lighting_section(1, &mut world);
+    h.add_lighting_section(1);
     assert_eq!(h.entries.len(), 2);
 }
 
@@ -179,11 +178,9 @@ fn lighting_focus_yields_when_not_frontmost() {
     h.open[PanelKey::Lighting] = true;
     h.lighting.focus = Some(SUN_INTENSITY);
     h.focus_panel(PanelKey::Lighting);
-    let d = h.lighting_data();
-    assert_eq!(
-        h.make_lighting_view(&d, [0.0, 0.0]).focus,
-        Some(SUN_INTENSITY)
-    );
+    h.lighting.view = Some((0, h.lighting_present(), Vec::new()));
+    let focus = |h: &EditorHook| h.make_lighting_view().and_then(|v| v.focus);
+    assert_eq!(focus(&h), Some(SUN_INTENSITY));
     h.focus_panel(PanelKey::Assets);
-    assert_eq!(h.make_lighting_view(&d, [0.0, 0.0]).focus, None);
+    assert_eq!(focus(&h), None);
 }

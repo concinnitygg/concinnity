@@ -14,5 +14,5 @@ a different `size_px`.
 
 ## Parameters
 
-- `path`: A string. Path to the TTF file, relative to the project root. Defaults to `""`.
+- `path`: A string. Path to the TTF file, relative to the root of the file holding the line. Defaults to `""`.
 - `size_px`: An integer. Rasterization size in pixels. Determines the rendered glyph height. Defaults to `20`.

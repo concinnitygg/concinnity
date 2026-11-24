@@ -109,13 +109,9 @@ impl VkContext {
         Ok(())
     }
 
-    // Blur `reflection_view`, the resolve target the SSR / RT pass just wrote
-    // (radiance + weight), by surface roughness and composite it over this
-    // slot's HDR scene into the composite's output, behind the RT pass first
-    // accumulating it over frames from its hits and `denoise`'s constants.
-    // Encoded inline at the tail of `encode_ssr_resolve` /
-    // `encode_rt_reflections`. No-op when the composite is absent (no
-    // reflection path active).
+    // Blur the reflection resolve by roughness and composite it over this slot's
+    // HDR scene (RT first accumulates over frames). Encoded at the tail of the
+    // resolve; a no-op without a reflection path.
     pub(in crate::vulkan) fn encode_reflection_composite(
         &self,
         rec: &Recorder<'_>,

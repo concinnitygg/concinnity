@@ -2,10 +2,15 @@
 
 use super::*;
 
+const FORWARD: SettingKey = SettingKey::KeyRebind(Bindable::Forward);
+
 // A rebind row: a value TextLabel showing the current key + a HitRegion over
 // it whose action enters capture mode.
 fn rebind_world() -> (World, AssetId) {
     let mut world = World::new();
+    let mut values = SettingValues::default();
+    values.set_text(FORWARD, "W");
+    world.insert_resource(values);
     let value = AssetId(7);
     world.push_identified(
         value,
@@ -26,6 +31,7 @@ fn rebind_world() -> (World, AssetId) {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: Some(Binding::Setting(FORWARD)),
         },
     );
     world.add_component(HitRegion {
@@ -39,6 +45,7 @@ fn rebind_world() -> (World, AssetId) {
         action: Some(act(
             serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -49,8 +56,9 @@ fn rebind_world() -> (World, AssetId) {
     (world, value)
 }
 
-// Clicking a rebind row enters capture (the value shows the prompt and no
-// command fires); the next pressed key binds it via a Rebind SettingCommand.
+// Clicking a rebind row enters capture (the setting shows the prompt, which its
+// bound label picks up, and no command fires); the next pressed key binds it
+// via a Rebind SettingCommand.
 #[test]
 fn rebind_click_captures_then_binds_next_key() {
     use crate::components::InputKey;
@@ -60,13 +68,16 @@ fn rebind_click_captures_then_binds_next_key() {
     // command is pushed yet.
     world.add_component(make_frame_input(50.0, 20.0, true));
     world.step();
-    assert_eq!(
-        label_field(&world, value, |l| l.content.clone()),
-        REBIND_PROMPT
-    );
+    assert_eq!(shown(&world, FORWARD), REBIND_PROMPT);
     assert!(
         produced_setting_commands(&world).is_empty(),
         "no command until a key is pressed"
+    );
+    world.add_component(FrameInput::default());
+    world.step();
+    assert_eq!(
+        label_field(&world, value, |l| l.content.clone()),
+        REBIND_PROMPT
     );
 
     // Press a key: it binds, pushing a Rebind command carrying the key.
@@ -79,8 +90,7 @@ fn rebind_click_captures_then_binds_next_key() {
         .into_iter()
         .next()
         .unwrap();
-    assert_eq!(cmd.setting, SettingKey::KeyRebind(Bindable::Forward));
-    assert_eq!(cmd.value_label, Some(value));
+    assert_eq!(cmd.setting, FORWARD);
     assert!(matches!(cmd.op, SettingOp::Rebind(InputKey::Q)));
     assert!(cmd.persist);
 }
@@ -120,13 +130,10 @@ fn rebind_capture_ignores_a_repeat() {
 // Escape while capturing cancels and restores the row's previous value text.
 #[test]
 fn rebind_escape_cancels_and_restores() {
-    let (mut world, value) = rebind_world();
+    let (mut world, _value) = rebind_world();
     world.add_component(make_frame_input(50.0, 20.0, true));
     world.step();
-    assert_eq!(
-        label_field(&world, value, |l| l.content.clone()),
-        REBIND_PROMPT
-    );
+    assert_eq!(shown(&world, FORWARD), REBIND_PROMPT);
 
     // Escape cancels: the previous text returns and nothing is bound.
     world.add_component(FrameInput {
@@ -134,7 +141,7 @@ fn rebind_escape_cancels_and_restores() {
         ..Default::default()
     });
     world.step();
-    assert_eq!(label_field(&world, value, |l| l.content.clone()), "W");
+    assert_eq!(shown(&world, FORWARD), "W");
     assert!(produced_setting_commands(&world).is_empty());
 }
 

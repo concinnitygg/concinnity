@@ -26,7 +26,7 @@ fn reload_clips(anim: &mut AnimationSystem) {
     // same character file.
     let mut parsed_cache: HashMap<String, concinnity_cook::import::gltf_source::GltfDoc> =
         HashMap::new();
-    let assets_dir = crate::project::assets_dir();
+    let root = crate::project::content_root();
     let mut reloaded = 0usize;
     let mut failed = 0usize;
 
@@ -37,7 +37,8 @@ fn reload_clips(anim: &mut AnimationSystem) {
             // FBX parses per entry: the importer owns its tree walk end to
             // end, and rigs are small at hot-reload scale.
             concinnity_cook::import::fbx::import_fbx_animation(
-                &entry.source,
+                &concinnity_host::store::source::resolve(&entry.source, root.as_deref())
+                    .to_string_lossy(),
                 entry.animation_index,
                 &entry.animation_name,
                 entry.sample_rate,
@@ -46,13 +47,12 @@ fn reload_clips(anim: &mut AnimationSystem) {
         } else {
             match parsed_cache.get(&entry.source) {
                 Some(d) => Ok(d),
-                None => match concinnity_cook::import::glb::parse_glb(
-                    &entry.source,
-                    assets_dir.as_deref(),
-                ) {
-                    Ok(d) => Ok(&*parsed_cache.entry(entry.source.clone()).or_insert(d)),
-                    Err(e) => Err(e),
-                },
+                None => {
+                    match concinnity_cook::import::glb::parse_glb(&entry.source, root.as_deref()) {
+                        Ok(d) => Ok(&*parsed_cache.entry(entry.source.clone()).or_insert(d)),
+                        Err(e) => Err(e),
+                    }
+                }
             }
             .and_then(|doc| {
                 concinnity_cook::import::glb::import_glb_animation_from_doc(

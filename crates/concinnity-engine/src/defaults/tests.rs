@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use super::*;
 use crate::components::{
     DebugHud, EngineDefaults, LoadingOverlay, PhysicsConfig, PropBody, Scene, Screen, Sprite,
-    StatHud, StreamingConfig, TextLabel, Window,
+    StatHud, StreamingConfig, TextLabel, UiState, Window,
 };
 use crate::resource::FontTable;
 
@@ -209,8 +209,12 @@ fn a_streamed_world_gets_the_loading_overlay_and_its_pieces() {
         .cloned()
         .expect("an overlay");
     let screen = overlay.screen.expect("a screen");
-    assert_eq!(world.query::<Screen>().count(), 1);
-    assert_eq!(ids::<Screen>(&world), [screen.id()]);
+    let stacked: Vec<AssetId> = world
+        .join2::<Screen, crate::components::Identity>()
+        .filter(|(_, s, _)| !s.persistent)
+        .map(|(_, _, identity)| identity.id())
+        .collect();
+    assert_eq!(stacked, [screen.id()]);
 
     // Backdrop, track, and fill, each on the overlay's screen.
     let sprites: Vec<Sprite> = world.query::<Sprite>().cloned().collect();
@@ -260,7 +264,10 @@ fn a_world_without_scenes_or_streaming_gets_no_overlay() {
         }
         complete(&mut world).unwrap();
         assert!(world.query::<LoadingOverlay>().next().is_none());
-        assert!(world.query::<Screen>().next().is_none());
+        assert!(
+            world.query::<Screen>().all(|s| s.persistent),
+            "only the HUD's"
+        );
     }
 }
 
@@ -305,4 +312,100 @@ fn completing_an_already_completed_world_adds_nothing() {
     complete(&mut world).unwrap();
     assert_eq!(world.component_census(), census);
     assert_eq!(world.resource::<FontTable>().expect("fonts").len(), fonts);
+}
+
+// The debug HUD's chips and a label added in code join one persistent
+// window-space screen; an element already on a screen keeps it.
+#[test]
+fn screenless_elements_join_one_persistent_hud_screen() {
+    let mut world = rendering();
+    world.add_component(TextLabel::default());
+    world.add_component(Sprite {
+        screen: Some(Ref::new(AssetId(3))),
+        ..Default::default()
+    });
+    complete(&mut world).unwrap();
+
+    let huds: Vec<Screen> = world.query::<Screen>().cloned().collect();
+    assert_eq!(huds.len(), 1);
+    assert!(huds[0].persistent && !huds[0].pauses_world);
+    assert_eq!(huds[0].space, crate::components::ScreenSpace::Window);
+    let hud = Some(Ref::new(ids::<Screen>(&world)[0]));
+    assert!(labels(&world).iter().all(|l| l.screen == hud));
+    let sprite = world.query::<Sprite>().next().unwrap();
+    assert_eq!(sprite.screen, Some(Ref::new(AssetId(3))));
+}
+
+// A world whose elements all sit on screens, or that has none, gets no HUD
+// screen.
+#[test]
+fn a_world_with_no_screenless_element_gets_no_hud_screen() {
+    let mut world = World::new();
+    world.add_component(Sprite {
+        screen: Some(Ref::new(AssetId(3))),
+        ..Default::default()
+    });
+    complete(&mut world).unwrap();
+    assert_eq!(world.query::<Screen>().count(), 0);
+}
+
+// The debug HUD's chips stack in a column down the top-right corner.
+#[test]
+fn the_debug_hud_chips_are_laid_out_down_the_top_right() {
+    let mut world = rendering();
+    complete(&mut world).unwrap();
+    let layouts: Vec<crate::components::Layout> = world
+        .query::<crate::components::Layout>()
+        .cloned()
+        .collect();
+    assert_eq!(layouts.len(), 1);
+    let column = &layouts[0];
+    assert_eq!(column.anchor, crate::components::LayoutAnchor::TopRight);
+    let hud = world.query::<DebugHud>().next().unwrap();
+    let order: Vec<AssetId> = column
+        .children
+        .iter()
+        .filter_map(|c| c.item.map(Ref::id))
+        .collect();
+    let named: Vec<AssetId> = [
+        hud.mouse_label,
+        hud.camera_label,
+        hud.sys_label,
+        hud.passes_label,
+    ]
+    .into_iter()
+    .flatten()
+    .map(Ref::id)
+    .collect();
+    assert_eq!(order, named);
+}
+
+// A stat HUD's chips sit in three rows, held by one column at the top left.
+#[test]
+fn the_stat_hud_chips_are_laid_out_in_rows_at_the_top_left() {
+    let mut world = rendering();
+    world.add_component(StatHud::default());
+    complete(&mut world).unwrap();
+    let rows = world
+        .query::<crate::components::Layout>()
+        .filter(|l| l.direction == crate::components::LayoutDirection::Row)
+        .count();
+    assert_eq!(rows, 3);
+    let column = world
+        .query::<crate::components::Layout>()
+        .find(|l| {
+            l.direction == crate::components::LayoutDirection::Column
+                && l.anchor == crate::components::LayoutAnchor::TopLeft
+        })
+        .expect("the stat column");
+    assert_eq!(column.children.len(), 3);
+}
+
+// Every started world holds UI state, so an app's systems can read and write
+// it before any element does.
+#[test]
+fn every_world_starts_with_ui_state() {
+    let mut world = World::new();
+    complete(&mut world).unwrap();
+    assert!(world.resource::<UiState>().is_some());
 }

@@ -272,11 +272,8 @@ pub struct FrameProfile {
     last: Vec<(&'static str, u32)>,
     // Accumulator for the frame currently in progress.
     current: Vec<(&'static str, u32)>,
-    // Heap allocations counted during each system's step, rotated with the
-    // timings. Sampled by the frame loop in dev builds only; empty otherwise.
-    // The counters are process-wide, so a delta includes what other threads
-    // (streaming workers, the pipelined render half) allocated meanwhile --
-    // attribution is approximate, the frame total is exact churn.
+    // Allocations per system step, sampled in dev builds only. The counters are
+    // process-wide, so attribution is approximate.
     last_allocs: Vec<(&'static str, u32)>,
     current_allocs: Vec<(&'static str, u32)>,
     // Heap allocations counted across the whole most recent frame. `None` in

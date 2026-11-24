@@ -44,7 +44,7 @@ ignored.
 
 ## Parameters
 
-- `source`: A string. Path to the source equirectangular panorama -- a Radiance `.hdr`, or a panorama-sphere `.glb` / `.gltf` -- relative to the project root. Mutually exclusive with `generator`. Defaults to `""`.
+- `source`: A string. Path to the source equirectangular panorama -- a Radiance `.hdr`, or a panorama-sphere `.glb` / `.gltf` -- relative to the root of the file holding the line. Mutually exclusive with `generator`. Defaults to `""`.
 - `generator`: A string. Built-in source name, `sky` or `stars`. Mutually exclusive with `source`. Defaults to `""`.
 - `prefilter_face_size`: An integer. Face size of the reflection/sky cubemap, in pixels. Higher is sharper but larger. Defaults to `512`.
 - `irradiance_face_size`: An integer. Face size of the diffuse ambient cubemap, in pixels. Defaults to `8`.

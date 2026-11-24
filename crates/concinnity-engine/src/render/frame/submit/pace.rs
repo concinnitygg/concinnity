@@ -28,12 +28,9 @@ fn effective_cap(cap: u32, minimized: bool) -> u32 {
     }
 }
 
-// Given the current time, the previously scheduled deadline (if any), and the
-// target frame interval, returns `(wait_until, next)`: the deadline to hold
-// this frame's start to, and the deadline to store for the next frame. A
-// deadline still in the future is waited to and accumulated exactly (no
-// drift); one already passed (a frame that overran the budget) resets to `now`
-// so a slow frame never triggers a catch-up burst of un-paced frames.
+// Returns `(wait_until, next)` for this frame's start. A future deadline
+// accumulates exactly; a missed one resets to `now`, so a slow frame never
+// triggers a catch-up burst.
 fn pace_deadline(now: Duration, prev: Option<Duration>, target: Duration) -> (Duration, Duration) {
     let wait_until = prev.filter(|d| *d > now).unwrap_or(now);
     (wait_until, wait_until + target)

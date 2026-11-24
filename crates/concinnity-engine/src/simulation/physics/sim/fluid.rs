@@ -1,8 +1,6 @@
-// Water pressing on a body from outside the solver: the body's pieces and
-// the water's level over each at the start of a step, which every substep
-// reads the body's own motion against. Re-reading the submerged volume at
-// each substep's pose is what keeps a stiff float from gaining energy: the
-// buoyancy is integrated like gravity, not held fixed through the step.
+// Water acting on a body from outside the solver: its pieces and the water
+// level over each, which every substep reads against the body's own pose so a
+// stiff float cannot gain energy.
 
 use crate::simulation::physics::sim::math::{Quat, Vec3};
 

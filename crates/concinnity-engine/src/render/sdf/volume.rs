@@ -113,8 +113,9 @@ pub struct SdfVolume {
     #[asset(default = [1.0, 1.0, 1.0])]
     pub extent: [f32; 3],
     /// Distance-field source path (e.g. `"shaders/chrome_blob.hlsl"`),
-    /// resolved relative to the project's `assets/` at build time. The file
-    /// defines `map` and `shade`, or `sampleVolume` for a volumetric volume.
+    /// relative to the root of the file holding the line. The file defines
+    /// `map` and `shade`, or `sampleVolume` for a volumetric volume.
+    #[asset(file)]
     pub fragment_shader: String,
     /// Worst-case gradient of the SDF, used to size the cone-march step. `1.0`
     /// is correct for any well-formed SDF; higher values shorten the step but

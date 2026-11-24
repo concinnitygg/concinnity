@@ -1,10 +1,6 @@
-// Shrinkable seed VRAM (Metal + DirectX + Vulkan). By default `build_draw_list`
-// bakes every streamed mesh into the shared vertex/index buffers, sizing them for
-// the whole streamed set, so streaming reuses space but never shrinks GPU memory.
-// When the residency cap is smaller than the streamed set, init compacts the
-// resident geometry and reserves a smaller seed headroom, sized to the cap-many
-// largest meshes, that the streamed meshes are placed into on upload. It runs
-// before the backend build so the GPU buffers are born small and the RT
+// Shrinkable seed VRAM. When the residency cap is below the streamed set, init
+// compacts the resident geometry and reserves headroom for the cap-many largest
+// meshes, before the backend build, so the GPU buffers start small and the
 // acceleration structure sees the final offsets.
 
 use alloc::vec;
@@ -18,12 +14,8 @@ use crate::render::streaming::mesh_seed::{self, MeshSeedRegion};
 
 use crate::render::streaming::pools::DecodedMesh;
 
-// Mesh streaming and LOD alternates don't yet cooperate: upload_mesh writes only
-// LOD0 to its newly-allocated region, but `lod_alternates` still carries the
-// build-time offsets for LOD1..N. Once another stream upload reuses those byte
-// ranges, active_lod() returns offsets into unrelated geometry and the draw
-// renders garbage or nothing. Until upload_mesh streams every LOD, strip the
-// alternates from every streamed draw so active_lod() always returns LOD0.
+// Strip LOD alternates from streamed draws, since `upload_mesh` writes only
+// LOD0 and the alternates' build-time offsets would point into reused space.
 pub(super) fn strip_streamed_lod_alternates(
     draw_objects: &mut [DrawObject],
     stream_draw_indices: &[DrawIndex],

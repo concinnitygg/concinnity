@@ -1,18 +1,17 @@
 //! `EditorHook`: the Assets browse panel and header combo, plus the Templates
 //! panel's actions (including applying a template and its detail view).
 
+use concinnity_engine::components::UiEvent;
 use concinnity_engine::ecs::World;
 
-use super::{
-    EditorHook, FormOverridesData, FormTarget, PanelData, TemplateDetailData, declared_id,
-};
-use crate::editor::asset_handle::AssetHandle;
+use super::form_state::FormDataKey;
+use super::{EditorHook, FormData, FormOverridesData, FormTarget, declared_id};
 use crate::editor::entry_list::paths;
-use crate::editor::hud::HudAction;
+use crate::editor::hud::{self, HudAction};
 use crate::editor::overrides;
-use crate::editor::panels::form_panel::{self, FormView};
+use crate::editor::panels::form_panel::{self, FormMenu, FormView};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::template_panel::{TemplateAction, TemplateView};
+use crate::editor::ui::BuiltPanel;
 
 impl EditorHook {
     // Apply every entry of engine-owned template `i`, skipping any whose name
@@ -39,11 +38,9 @@ impl EditorHook {
         }
     }
 
-    // The per-tick Assets-panel data: the flattened tree, the type picker's
-    // options while it is open, and the form heading -- all derived from the
-    // cooked model plus the live search field, then borrowed for both
-    // hit-testing and layout.
-    pub(super) fn panel_data(&self, world: &World) -> PanelData {
+    // The per-tick add / edit form data: its heading, override state, extra
+    // rows, and why it cannot confirm.
+    pub(super) fn form_data(&self) -> FormData {
         let mut form_title = match (self.form.target.is_edit(), &self.form.selected_type) {
             (true, Some(t)) => format!("Edit {t}"),
             (false, Some(t)) => format!("New {t}"),
@@ -55,24 +52,12 @@ impl EditorHook {
         if self.form.touched {
             form_title.push_str(" *");
         }
-        let (form_extras, form_blocked) = self.form_extras_data(world);
-        let names = |set: &std::collections::BTreeSet<AssetHandle>| {
-            set.iter().filter_map(|h| self.handle_name(h)).collect()
-        };
-        PanelData {
-            rows: self.tree_rows(world),
-            hidden: names(&self.hidden_assets),
-            locked: names(&self.locked_assets),
-            row_menu: self
-                .assets
-                .row_menu
-                .as_ref()
-                .and_then(|h| self.handle_name(h)),
-            picker_options: self.picker_options(world),
-            form_title,
-            form_overrides: self.form_overrides_data(),
-            form_extras,
-            form_blocked,
+        let (form_extras, form_blocked) = self.form_extras_data();
+        FormData {
+            title: form_title,
+            overrides: self.form_overrides_data(),
+            extras: form_extras,
+            blocked: form_blocked,
         }
     }
 
@@ -115,31 +100,116 @@ impl EditorHook {
         })
     }
 
-    pub(super) fn make_form_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> FormView<'a> {
-        FormView {
-            title: &d.form_title,
+    // Bring the form's derived data and its rows up to date: the data when
+    // the entries, the fields, the typed name, or an action changed it, and
+    // the rows when the fields or the extra rows changed shape.
+    pub(super) fn prepare_form(&mut self, world: &mut World, built: &mut BuiltPanel) {
+        let key = FormDataKey {
+            entries: self.entries.revision(),
+            rows: self.form.rows_rev,
+            actions: self.form.data_rev,
+            touched: self.form.touched,
+        };
+        let current = self
+            .form
+            .data
+            .as_ref()
+            .is_some_and(|(k, name, _)| *k == key && *name == self.form.name);
+        if !current {
+            self.form.data = Some((key, self.form.name.clone(), self.form_data()));
+        }
+        self.form.reveal_now = self.form.reveal.take();
+        let extras = self
+            .form
+            .data
+            .as_ref()
+            .map_or(&[][..], |(_, _, d)| &d.extras);
+        let fresh = self
+            .form
+            .shown
+            .as_ref()
+            .is_some_and(|s| s.rev == self.form.rows_rev && s.extras_match(extras));
+        if !fresh {
+            let shown = form_panel::rebuild_rows(
+                world,
+                built,
+                &self.form.fields,
+                extras,
+                (self.form.rows_rev, self.form.opened),
+                self.form.shown.as_ref(),
+            );
+            self.form.shown = Some(shown);
+        }
+    }
+
+    // The menu the form has open, and its options.
+    fn form_menu<'a>(&'a self, data: &'a FormData) -> Option<(FormMenu, &'a [String])> {
+        if let Some(i) = self.form.field_dropdown {
+            let options = self.form.fields.get(i)?.variants.as_slice();
+            return Some((FormMenu::Field(i), options));
+        }
+        let ovr = data.overrides.as_ref()?;
+        if let Some((i, labels)) = &ovr.field_menu {
+            return Some((FormMenu::Override(*i), labels.as_slice()));
+        }
+        ovr.entity_menu
+            .as_deref()
+            .map(|labels| (FormMenu::Entity, labels))
+    }
+
+    // Which menu the form has open.
+    pub(super) fn open_form_menu(&self) -> Option<FormMenu> {
+        if let Some(i) = self.form.field_dropdown {
+            return Some(FormMenu::Field(i));
+        }
+        if let Some(i) = self.form.override_menu {
+            return Some(FormMenu::Override(i));
+        }
+        self.form.entity_menu_open.then_some(FormMenu::Entity)
+    }
+
+    // What the form shows this frame.
+    pub(super) fn make_form_view(&self) -> Option<FormView<'_>> {
+        let (_, _, data) = self.form.data.as_ref()?;
+        Some(FormView {
+            title: &data.title,
             editing: self.form.target.is_edit(),
-            form_fields: &self.form.fields,
-            form_scroll: self.form.scroll,
-            form_focus: self.form.focus,
-            field_dropdown: self.form.field_dropdown,
-            field_dropdown_scroll: self.form.field_dropdown_scroll,
-            form_error: self.form.error.as_deref(),
-            extras: &d.form_extras,
-            blocked: d.form_blocked.as_deref(),
-            overrides: d
-                .form_overrides
+            fields: &self.form.fields,
+            texts: &self.form.texts,
+            name: &self.form.name,
+            // Focus is asserted only while frontmost, matching the other
+            // panels' guard against fighting for typed keys.
+            focus: (self.panel_order.last() == Some(&PanelKey::Edit)).then_some(self.form.focus),
+            error: self.form.error.as_deref(),
+            blocked: data.blocked.as_deref(),
+            marks: data
+                .overrides
                 .as_ref()
-                .map(|ovr| form_panel::OverridesView {
-                    marks: &ovr.marks,
-                    count: ovr.count,
-                    field_menu: ovr
-                        .field_menu
-                        .as_ref()
-                        .map(|(i, opts)| (*i, opts.as_slice())),
-                    entity_menu: ovr.entity_menu.as_deref(),
-                }),
-            mouse,
+                .map(|o| (o.marks.as_slice(), o.count)),
+            extras: &data.extras,
+            menu: self.form_menu(data),
+            reveal: self.form.reveal_now,
+        })
+    }
+
+    // Take in what the user typed into the form, the field they focused, and
+    // a menu a press off it closed.
+    pub(super) fn observe_form(&mut self, world: &World, built: &BuiltPanel) {
+        let Some(shown) = &self.form.shown else {
+            return;
+        };
+        let (_, focus) = form_panel::observe(
+            world,
+            built,
+            shown,
+            &mut self.form.name,
+            &mut self.form.texts,
+        );
+        if let Some(focus) = focus {
+            self.form.focus = focus;
+        }
+        if self.open_form_menu().is_some() && !form_panel::menu_open(world) {
+            self.close_form_menus();
         }
     }
 
@@ -147,20 +217,28 @@ impl EditorHook {
 
     // Route a resolved top-bar click: SAVE persists to disk (the live preview is
     // already current), the View button toggles the View panel.
-    pub(super) fn apply_top(&mut self, action: HudAction, world: &mut World) {
+    pub(super) fn apply_top(&mut self, action: HudAction) {
         match action {
             HudAction::Save => self.save(),
-            HudAction::Undo => self.undo(world),
-            HudAction::Redo => self.redo(world),
+            HudAction::Undo => self.undo(),
+            HudAction::Redo => self.redo(),
             HudAction::ToggleView => self.open[PanelKey::View] = !self.open[PanelKey::View],
             HudAction::ToggleDisplay => self.toggle_display_menu(),
             HudAction::PlayPause => self.sim_toggle_play(),
             HudAction::Step => self.sim.step(),
             HudAction::Stop => self.sim_stop(),
-            // A bar click that hit no chip: swallowed (the caller already
-            // dismisses any open overlays).
-            HudAction::Consume => {}
         }
+    }
+
+    // A top-bar chip's click; whether `event` was one.
+    pub(super) fn on_bar_event(&mut self, event: &UiEvent) -> bool {
+        let Some(action) = hud::action(event) else {
+            return false;
+        };
+        self.apply_top(action);
+        self.assets.picker_open = false;
+        self.assets.row_menu = None;
+        true
     }
 
     // Open (or re-target) the Template detail panel on template `i` (a preview of
@@ -171,7 +249,6 @@ impl EditorHook {
             return;
         }
         self.templates.detail = Some(i);
-        self.templates.detail_scroll = 0;
         self.focus_panel(PanelKey::TemplateDetail);
     }
 
@@ -179,49 +256,14 @@ impl EditorHook {
     // stays as it was).
     pub(super) fn close_template_detail(&mut self) {
         self.templates.detail = None;
-        self.templates.detail_scroll = 0;
     }
 
-    // Route a resolved Template-detail click: Apply layers the template's assets
-    // (idempotently) then closes the panel; the "X" just closes it.
-    pub(super) fn apply_template_detail(&mut self, action: TemplateAction) {
-        match action {
-            TemplateAction::Apply => {
-                if let Some(i) = self.templates.detail {
-                    self.apply_template(i);
-                }
-                self.close_template_detail();
-            }
-            TemplateAction::Close => self.close_template_detail(),
-            TemplateAction::Consume => {}
+    // Layer the open template's assets (idempotently), then close its detail
+    // panel.
+    pub(super) fn apply_open_template(&mut self) {
+        if let Some(i) = self.templates.detail {
+            self.apply_template(i);
         }
-    }
-
-    // The per-frame Template detail view data (title, description, grouped rows),
-    // borrowed for both hit-testing and layout.
-    pub(super) fn template_detail_data(i: usize) -> TemplateDetailData {
-        let (title, description) = concinnity_cook::authoring::template::TEMPLATES
-            .get(i)
-            .map(|t| (format!("Template {}", t.title), t.description.to_string()))
-            .unwrap_or_default();
-        TemplateDetailData {
-            title,
-            description,
-            rows: Self::template_rows(i),
-        }
-    }
-
-    pub(super) fn make_template_view<'a>(
-        &self,
-        d: &'a TemplateDetailData,
-        mouse: [f32; 2],
-    ) -> TemplateView<'a> {
-        TemplateView {
-            title: &d.title,
-            description: &d.description,
-            rows: &d.rows,
-            scroll: self.templates.detail_scroll,
-            mouse,
-        }
+        self.close_template_detail();
     }
 }

@@ -33,6 +33,7 @@ use alloc::string::String;
 #[serde(default)]
 pub struct ColorLut {
     /// Path to the source `.cube` or `.png` LUT file.
+    #[asset(file)]
     pub source: String,
     /// Blend in `[0, 1]`: mixes the graded color over the ungraded one by this
     /// amount.

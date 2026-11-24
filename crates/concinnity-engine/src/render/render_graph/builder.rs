@@ -13,12 +13,8 @@ use super::types::{
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
-// One entry in the builder's resource arena. Texture and buffer kinds
-// live in the same Vec so a `ResourceId` is unique across both, which
-// keeps the executor's lookup table flat. The `version` counter tracks
-// how many `write_*` calls have produced a new version of this
-// resource; reading the latest version means reading the resource as
-// of `version - 1` (the last write index).
+// One entry in the resource arena; textures and buffers share it so a
+// `ResourceId` is unique. `version` counts the writes so far.
 #[derive(Debug, Clone)]
 pub(super) enum ResourceDecl {
     Texture {
@@ -185,11 +181,8 @@ impl GraphBuilder {
         self.push_texture(label, desc, ResourceOrigin::Imported, None)
     }
 
-    // Declare an engine-owned texture that rests readable in the stages `rests`
-    // between frames: it holds what an earlier frame wrote. A frame opens it
-    // as read there, so readers of what it holds need no transition and its
-    // next write waits on every stage it rests readable in. Returns a fresh
-    // handle at version 0.
+    // Declare an engine-owned texture that rests readable in `rests` between
+    // frames, so its readers need no transition. Returns version 0.
     pub(crate) fn import_readable_texture(
         &mut self,
         label: &'static str,
@@ -221,11 +214,8 @@ impl GraphBuilder {
         self.push_buffer(label, desc, ResourceOrigin::Transient)
     }
 
-    // Add a pass to the graph. Returns a `PassBuilder` that the caller
-    // uses to declare what the pass reads / writes. Passes are
-    // dispatched in the order returned by `compile`'s topological
-    // sort, not in the order they were added here; the order this
-    // matters for is purely "tie-breaking when toposort has flexibility".
+    // Add a pass and declare its reads and writes on the returned builder.
+    // Insertion order only breaks ties in the topological sort.
     pub(crate) fn add_pass(&mut self, id: PassId, kind: PassKind) -> PassBuilder<'_> {
         let pass_idx = self.passes.len();
         self.passes.push(PassDecl {
@@ -344,12 +334,8 @@ impl PassBuilder<'_> {
         self
     }
 
-    // Declare that this pass writes `h`. Returns a new handle pointing
-    // at the post-write version; the input handle stays valid as a
-    // reference to the pre-write content.
-    //
-    // Returns `TextureHandle::INVALID` when called with the invalid
-    // sentinel so optional passes can chain freely.
+    // Declare that this pass writes `h`, returning the post-write version.
+    // The invalid sentinel passes through so optional passes chain freely.
     pub(crate) fn write_texture(&mut self, h: TextureHandle) -> TextureHandle {
         if !h.is_valid() {
             return TextureHandle::INVALID;

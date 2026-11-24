@@ -4,17 +4,16 @@
 //! performs.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    active, click_row, entry, entry_target, expandable_hook, generated_group, hook, seed_tree,
-    selected, set_field, world_with_fields,
+    active, click_row, entry, entry_target, expandable_hook, generated_group, hook, row_of,
+    seed_tree, selected,
 };
 
 use crate::editor::panels::asset_tree::{self, TreeRow};
 
-use crate::editor::panels::assets_panel::{self, PanelAction};
+use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::registry::PanelKey;
 
 // The tree lists the world's own lines under `World` and each expansion's
@@ -22,7 +21,6 @@ use crate::editor::panels::registry::PanelKey;
 #[test]
 fn tree_rows_group_by_origin_and_narrow_by_search() {
     let mut h = hook(vec![entry("lamp", "PointLight"), entry("sign", "Decal")]);
-    let mut world = world_with_fields();
     h.open[PanelKey::Assets] = true;
     seed_tree(
         &mut h,
@@ -32,8 +30,8 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
         )],
     );
 
-    let names = |h: &EditorHook, w: &World| -> Vec<String> {
-        h.tree_rows(w)
+    let names = |h: &EditorHook| -> Vec<String> {
+        h.tree_rows()
             .iter()
             .filter_map(|r| match r {
                 TreeRow::Asset { name, .. } => Some(name.clone()),
@@ -41,9 +39,9 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
             })
             .collect()
     };
-    assert_eq!(names(&h, &world), ["lamp", "sign", "fox_mat"]);
+    assert_eq!(names(&h), ["lamp", "sign", "fox_mat"]);
     let headers: Vec<String> = h
-        .tree_rows(&world)
+        .tree_rows()
         .iter()
         .filter_map(|r| match r {
             TreeRow::Header { label, .. } => Some(label.clone()),
@@ -53,10 +51,10 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
     assert_eq!(headers, [asset_tree::WORLD_GROUP, "fox"]);
 
     // The search field matches name or type, across every group.
-    set_field(&mut world, assets_panel::SEARCH_INPUT, "mat");
-    assert_eq!(names(&h, &world), ["fox_mat"]);
-    set_field(&mut world, assets_panel::SEARCH_INPUT, "PointLight");
-    assert_eq!(names(&h, &world), ["lamp"], "a type match reaches the row");
+    h.assets.filter = "mat".into();
+    assert_eq!(names(&h), ["fox_mat"]);
+    h.assets.filter = "PointLight".into();
+    assert_eq!(names(&h), ["lamp"], "a type match reaches the row");
 }
 
 // The model is only cooked when the panel is actually showing: a closed panel
@@ -102,15 +100,14 @@ fn an_edit_restales_the_tree() {
 fn groups_fold_and_unfold() {
     let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
-    let world = world_with_fields();
     h.refresh_tree_if_needed();
-    let folded = h.tree_rows(&world).len();
+    let folded = h.tree_rows().len();
     assert_eq!(folded, h.assets.groups.len(), "headers only");
 
-    h.apply_panel(PanelAction::ToggleGroup(0), &mut world_with_fields());
-    assert!(h.tree_rows(&world).len() > folded, "the group unfolded");
-    h.apply_panel(PanelAction::ToggleGroup(0), &mut world_with_fields());
-    assert_eq!(h.tree_rows(&world).len(), folded, "and folded again");
+    h.apply_panel(PanelAction::ToggleGroup(0));
+    assert!(h.tree_rows().len() > folded, "the group unfolded");
+    h.apply_panel(PanelAction::ToggleGroup(0));
+    assert_eq!(h.tree_rows().len(), folded, "and folded again");
 }
 
 // A tree row click mirrors a viewport pick: plain replaces the selection and
@@ -118,11 +115,10 @@ fn groups_fold_and_unfold() {
 // instead.
 #[test]
 fn tree_row_click_selects_and_opens_the_form() {
-    let mut world = world_with_fields();
     let mut h = hook(vec![entry("box", "Sprite"), entry("cam", "Camera3D")]);
     h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
-    click_row(&mut h, "box", &mut world);
+    click_row(&mut h, "box");
     assert_eq!(active(&h).as_deref(), Some("box"));
     assert!(
         h.open[PanelKey::Assets],
@@ -134,9 +130,9 @@ fn tree_row_click_selects_and_opens_the_form() {
         "the form targets the clicked entry"
     );
 
-    h.shift_held = true;
-    click_row(&mut h, "cam", &mut world);
-    assert_eq!(selected(&h), ["box", "cam"], "a shift click adds");
-    click_row(&mut h, "cam", &mut world);
-    assert_eq!(selected(&h), ["box"], "a second shift click removes");
+    let (g, i) = row_of(&h, "cam");
+    h.apply_panel(PanelAction::ExtendRow(g, i));
+    assert_eq!(selected(&h), ["box", "cam"], "a modified click adds");
+    h.apply_panel(PanelAction::ExtendRow(g, i));
+    assert_eq!(selected(&h), ["box"], "a second one removes");
 }

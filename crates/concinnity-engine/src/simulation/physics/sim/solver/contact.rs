@@ -1,15 +1,6 @@
-// The contact rows a step solves, and the passes that move them.
-//
-// Each pass walks a run of constraints and answers them one after another, so
-// a body's velocity carries what the constraints before it decided. That is
-// the sequential in sequential impulses, and it is preserved exactly: a run is
-// one or more whole islands, and constraints keep the order the manifolds gave
-// them within each.
-//
-// What a constraint holds beyond its rows is the two figures a step reports
-// with. The impulse a point ends holding is one substep's worth, which is what
-// the next step warm starts from; the impulse it delivered is the whole step's,
-// accumulated as it is applied, which is what an impact is measured by.
+// The contact rows a step solves and the passes over them, sequential within
+// each run of whole islands. Each constraint also reports its held impulse (for
+// warm starting) and its delivered impulse (for impacts).
 
 use super::bodies::{Bodies, SolverBody};
 use crate::simulation::physics::sim::config::{SimConfig, Softness};

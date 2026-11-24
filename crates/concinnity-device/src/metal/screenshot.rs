@@ -187,11 +187,8 @@ impl FrameCapture for MtlContext {
             ));
         }
 
-        // Host-readable staging texture matching the drawable's format. The
-        // drawable's own storage mode is driver-chosen (often not host-visible),
-        // so blit into a `StorageModeShared` texture we control and `getBytes`
-        // from that. `ShaderRead` is the default usage and is enough for a blit
-        // destination.
+        // A Shared staging texture in the drawable's format, since the
+        // drawable's own storage may not be host-visible.
         let desc = TextureDesc {
             format: self.hw.swap_pixel_format,
             width,

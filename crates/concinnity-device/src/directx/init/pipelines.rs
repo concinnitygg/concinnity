@@ -65,12 +65,9 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
 
 // Root signature builders
 
-// Root signature for the GPU-driven main pass, shared by every shader bucket.
-//
-// Slot [0] is a single-DWORD root constant carrying the per-draw object id
-// (D3D12 `SV_InstanceID` does not include `StartInstanceLocation`, so the id
-// rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool;
-// slot [8] is a root SRV carrying the per-frame `StructuredBuffer<GpuObjectData>`.
+// Root signature for the GPU-driven main pass: [0] the object id as a root
+// constant (`SV_InstanceID` excludes the start instance), [5] the bindless
+// pool, [8] the object buffer root SRV.
 pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -130,14 +127,10 @@ pub(super) fn create_main_bindless_root_signature(
         .build(device, "main bindless root sig")
 }
 
-// Root signature for the GPU-driven shadow pass's depth-only bindless pipeline.
-// Mirrors the bindless main root signature's object-id delivery so the shared
-// cull command signature works against it: [0] is the per-command object-id
-// root constant (set by the `ExecuteIndirect` command signature, so it MUST stay
-// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] the per-view
-// `ShadowPassPush` root constants (set once per view's `ExecuteIndirect`), [3]
-// the per-frame `StructuredBuffer<GpuObjectData>` root SRV the VS reads `model`
-// from, and [4] the shared vertex stream. All vertex-stage only (depth-only pass, no pixel shader).
+// Root signature for the depth-only bindless shadow pipeline: [0] object id
+// (must stay at 0 for the shared command signature), [1] shadow CBV, [2]
+// per-view `ShadowPassPush`, [3] object buffer SRV, [4] vertex stream. Vertex
+// stage only.
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -245,11 +238,8 @@ pub(in crate::directx) fn create_shadow_pso(
 
 // Material-referenced world shader pipelines
 
-// The engine's own compiled bindless main-pass and pre-pass stages, kept past
-// init so a shader bucket that resolves to the engine default can build its
-// pipelines without recompiling, and so the Wireframe twin has its source.
-// Recompiling cost ~140 ms per bucket install, which is the whole point of
-// warming a pipeline behind a loading screen.
+// The engine's compiled bindless main and pre-pass stages, kept so an engine
+// default bucket and the Wireframe twin build without recompiling.
 pub(in crate::directx) struct BindlessMainShaders {
     pub vs: Vec<u8>,
     pub ps: Vec<u8>,
@@ -302,12 +292,8 @@ pub(in crate::directx) struct BucketRootSigs {
     pub prepass: Option<ID3D12RootSignature>,
 }
 
-// Build one shader bucket's PSOs. `bucket` is the `DrawObject::shader_bucket`
-// value (bucket 0 is the world default program) and names the bucket in error
-// messages.
-//
-// A bucket with no programs is one the world declared no Shader for, so the
-// engine's own bindless programs render it.
+// Build one shader bucket's PSOs; a bucket with no programs renders with the
+// engine's bindless programs.
 pub(in crate::directx) fn build_bucket_pipeline(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,

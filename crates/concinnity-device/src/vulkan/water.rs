@@ -128,11 +128,8 @@ fn build_surface_record(
     Ok((record, motion))
 }
 
-// Build the water pipelines and one record per authored surface. The RT pair is
-// built whenever the pass has RT pipeline layouts (regardless of whether RT is on
-// at launch, so a live `quality-set ray_traced_reflections` selects it with no
-// pipeline rebuild); a compile failure leaves it absent and the base
-// probe/planar path runs.
+// Build the water pipelines and one record per surface. The RT pair is built
+// whenever RT layouts exist, so a live toggle needs no rebuild.
 pub(in crate::vulkan) fn build_water_producer(
     ctx: ProducerCtx<'_>,
     surfaces: &[WaterBody],
@@ -277,10 +274,8 @@ impl VkContext {
             .as_ref()
             .and_then(TransparentResources::water)
             .and_then(|w| w.sea_datum(camera));
-        self.wake_frame = match (wakes, sea) {
-            (true, Some(sea)) => self.wake.advance(camera, sea, time, stirs),
-            _ => None,
-        };
+        self.wake
+            .prepare(sea.filter(|_| wakes), camera, time, stirs);
     }
 
     // Write each visible water surface's params, advanced to `time` seconds
@@ -297,7 +292,7 @@ impl VkContext {
             .as_ref()
             .and_then(TransparentResources::water)
         {
-            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let wake = self.wake.draw();
             let trace = self
                 .rt_reflections
                 .as_ref()

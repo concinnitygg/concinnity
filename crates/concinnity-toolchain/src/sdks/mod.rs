@@ -44,9 +44,6 @@ pub(crate) fn check_cfg_directives() -> Vec<String> {
         "backend_dx",
         "backend_vk",
         "agility_sdk_configured",
-        "ffx_dx_sdk_bundled",
-        "ffx_vk_sdk_bundled",
-        "xess_sdk_bundled",
         "ngx_sdk_bundled",
     ]
     .iter()
@@ -215,49 +212,47 @@ struct FfxRuntime {
     api: &'static str,
     loader: &'static str,
     upscaler: &'static str,
-    cfg: &'static str,
 }
 
 const FFX_DX12: FfxRuntime = FfxRuntime {
     api: "DirectX",
     loader: "amd_fidelityfx_loader_dx12.dll",
     upscaler: "amd_fidelityfx_upscaler_dx12.dll",
-    cfg: "ffx_dx_sdk_bundled",
 };
 
 const FFX_VK: FfxRuntime = FfxRuntime {
     api: "Vulkan",
     loader: "amd_fidelityfx_loader_vk.dll",
     upscaler: "amd_fidelityfx_upscaler_vk.dll",
-    cfg: "ffx_vk_sdk_bundled",
 };
 
 // Where the SDK keeps its signed runtimes.
 const FFX_BIN: [&str; 3] = ["Kits", "FidelityFX", "signedbin"];
 
-// AMD FidelityFX upscaler runtime for one API. Bundling only copies its DLLs
-// next to the .exe; the cfg is emitted when the SDK holds both regardless.
+// AMD FidelityFX upscaler runtime for one API, copied next to a final binary.
+// The renderer loads it at runtime, so a package building no binary has
+// nothing to do.
 fn fidelityfx_directives(
     env: &SdkEnv,
     targets: BinaryTargets,
     runtime: FfxRuntime,
     out: &mut Vec<String>,
 ) {
+    if !targets.bundles() {
+        return;
+    }
     let FfxRuntime {
         api,
         loader,
         upscaler,
-        cfg,
     } = runtime;
     out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
     if !env.ffx_enabled {
-        if targets.bundles() {
-            out.push(warning(&format!(
-                "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); {api} temporal \
-                 upscaling will be unavailable unless {loader} and {upscaler} are on PATH \
-                 at runtime"
-            )));
-        }
+        out.push(warning(&format!(
+            "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); {api} temporal \
+             upscaling will be unavailable unless {loader} and {upscaler} are on PATH \
+             at runtime"
+        )));
         return;
     }
     out.push(rerun_env("CN_FIDELITYFX_SDK"));
@@ -266,64 +261,53 @@ fn fidelityfx_directives(
     for dll in [loader, upscaler] {
         let parts = [FFX_BIN.as_slice(), &[dll]].concat();
         let Some(src) = sdk_file(env.fidelityfx_root.as_ref(), &parts) else {
-            if targets.bundles() {
-                out.push(warning(&format!(
-                    "{} - vendor it or set CN_FIDELITYFX_SDK. {api} temporal upscaling will \
-                     be unavailable unless {loader} and {upscaler} are on PATH at runtime.",
-                    missing_sdk(
-                        "FidelityFX SDK",
-                        "CN_FIDELITYFX_SDK",
-                        env.fidelityfx_root.as_ref(),
-                        &parts
-                    )
-                )));
-            }
+            out.push(warning(&format!(
+                "{} - vendor it or set CN_FIDELITYFX_SDK. {api} temporal upscaling will \
+                 be unavailable unless {loader} and {upscaler} are on PATH at runtime.",
+                missing_sdk(
+                    "FidelityFX SDK",
+                    "CN_FIDELITYFX_SDK",
+                    env.fidelityfx_root.as_ref(),
+                    &parts
+                )
+            )));
             return;
         };
         sources.push((src, dll));
     }
-
-    if targets.bundles()
-        && !sources
-            .iter()
-            .all(|(src, dll)| copy_next_to_exe(env, targets, src, dll, out))
-    {
-        return;
+    for (src, dll) in &sources {
+        if !copy_next_to_exe(env, targets, src, dll, out) {
+            return;
+        }
     }
-    out.push(rustc_cfg(cfg));
 }
 
-// Intel XeSS upscaler runtime. Pure `LoadLibrary` at runtime, so bundling only
-// copies the DLL; the cfg gates the copy and a log.
+// Intel XeSS upscaler runtime, copied next to a final binary. The renderer
+// loads it at runtime, so a package building no binary has nothing to do.
 fn xess_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
+    if !targets.bundles() {
+        return;
+    }
     out.push(rerun_env("CN_ENABLE_XESS"));
     if !env.xess_enabled {
-        if targets.bundles() {
-            out.push(warning(
-                "XeSS SDK bundling skipped (CN_ENABLE_XESS=0); the XeSS \
-                 upscaler will be unavailable unless libxess.dll is on PATH at runtime",
-            ));
-        }
+        out.push(warning(
+            "XeSS SDK bundling skipped (CN_ENABLE_XESS=0); the XeSS \
+             upscaler will be unavailable unless libxess.dll is on PATH at runtime",
+        ));
         return;
     }
     out.push(rerun_env("CN_XESS_SDK"));
 
     const XESS_DLL: &[&str] = &["bin", "libxess.dll"];
     let Some(dll_src) = sdk_file(env.xess_root.as_ref(), XESS_DLL) else {
-        if targets.bundles() {
-            out.push(warning(&format!(
-                "{} - vendor it or set CN_XESS_SDK. The XeSS upscaler backend will \
-                 be unavailable unless libxess.dll is on PATH at runtime.",
-                missing_sdk("XeSS SDK", "CN_XESS_SDK", env.xess_root.as_ref(), XESS_DLL)
-            )));
-        }
+        out.push(warning(&format!(
+            "{} - vendor it or set CN_XESS_SDK. The XeSS upscaler backend will \
+             be unavailable unless libxess.dll is on PATH at runtime.",
+            missing_sdk("XeSS SDK", "CN_XESS_SDK", env.xess_root.as_ref(), XESS_DLL)
+        )));
         return;
     };
-
-    if targets.bundles() && !copy_next_to_exe(env, targets, &dll_src, "libxess.dll", out) {
-        return;
-    }
-    out.push(rustc_cfg("xess_sdk_bundled"));
+    copy_next_to_exe(env, targets, &dll_src, "libxess.dll", out);
 }
 
 // DLSS via raw NGX. The import lib is always linked when present (the DLSS code

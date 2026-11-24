@@ -1,82 +1,122 @@
-//! Finding an authored source asset on disk.
+//! Where a path a line names points on disk: one home for the rule, so every
+//! reader of a .jsonl file resolves a path the same way.
 //!
-//! A `source` string in world.jsonl may be a bare filename (a texture, HDRI,
-//! `.cube` LUT, or shader named without a directory), which resolves against
-//! an `assets/` directory by recursive search. Anything carrying a directory
-//! component is a path already and is used verbatim, so absolute and relative
-//! paths still work.
+//! A relative path is relative to a root. A file and each file it includes
+//! take theirs from the nearest directory at or above them, and within the
+//! build's root, holding a [`LIBRARY_MARKER`], so a library of .jsonl files
+//! names its own files the same whether it is run on its own or sits inside a
+//! project. Once a file is read, every path in it is [`rebase`]d onto the one
+//! root the build was given, and everything after that [`resolve`]s against
+//! that root. An [`is_anchored`] path names itself everywhere.
 //!
-//! The directory to search is the caller's: a build threads the root it was
-//! given, and the hot-reload watcher passes the running project's. Nothing
-//! here reads a process-global anchor, so two builds may resolve against
-//! different trees in one process. The shipped runtime plays compiled blobs
-//! and never resolves a source file.
+//! The root is the caller's: nothing here picks one, so two builds may resolve
+//! against different trees in one process.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-/// Recursively search `assets_dir` for a file matching the given bare
-/// filename, returning the first match.
-pub fn find_in(assets_dir: &Path, filename: &str) -> Option<PathBuf> {
-    walk(assets_dir, filename)
+/// The directory whose presence marks its parent as a library root.
+pub const LIBRARY_MARKER: &str = ".concinnity";
+
+/// The nearest directory at or above `file` holding a [`LIBRARY_MARKER`]
+/// directory, looking no higher than `within` (the build's root), so a marker
+/// outside the tree being built never takes a file over.
+pub fn marked_root(file: &Path, within: &Path) -> Option<PathBuf> {
+    let within = normalized(within);
+    normalized(file)
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| dir.starts_with(&within))
+        .find(|dir| dir.join(LIBRARY_MARKER).is_dir())
+        .map(Path::to_path_buf)
 }
 
-/// Resolve a source string into a filesystem path: bare filenames are searched
-/// for under `assets_dir` and fall back to sitting directly in it, so a miss
-/// still names the file the read error will report. With no assets dir the
-/// source is returned verbatim, which is again the path the read error names.
-pub fn resolve_source_path(source: &str, assets_dir: Option<&Path>) -> PathBuf {
-    let Some(assets_dir) = assets_dir else {
-        return PathBuf::from(source);
-    };
-    if !is_bare(source) {
-        return PathBuf::from(source);
+/// Whether `path` carries its own root or drive (`/x`, `C:\x`, or `\x` and
+/// `C:x` on Windows), so it is never read relative to another root.
+pub fn is_anchored(path: &Path) -> bool {
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(_) | Component::RootDir)
+    )
+}
+
+/// The file `path` names under `root`: a relative path joined onto `root`, an
+/// [`is_anchored`] one kept whole, or on Windows given `root`'s drive when it
+/// has none. With no root the path is returned as is.
+pub fn resolve(path: &str, root: Option<&Path>) -> PathBuf {
+    let path = Path::new(path);
+    root.map_or_else(|| path.to_path_buf(), |root| root.join(path))
+}
+
+/// [`resolve`], when the file is there. `None` otherwise, so the caller's read
+/// error names the path it meant.
+pub fn find_existing(path: &str, root: Option<&Path>) -> Option<PathBuf> {
+    Some(resolve(path, root)).filter(|p| p.exists())
+}
+
+/// `path`, written relative to `from`, rewritten to name the same file relative
+/// to `to`, with `/` separators. An [`is_anchored`] or empty path, or one whose
+/// roots are the same, is returned unchanged.
+pub fn rebase(path: &str, from: &Path, to: &Path) -> String {
+    if path.is_empty() || is_anchored(Path::new(path)) {
+        return path.to_string();
     }
-    walk(assets_dir, source).unwrap_or_else(|| assets_dir.join(source))
-}
-
-/// The first file that exists among the places a source string can name, in
-/// order: `<assets_dir>/<source>`; for a bare filename, a recursive search of
-/// `assets_dir`; `assets/<source>`, for a source authored against the
-/// checkout's asset tree; and `source` itself, relative to the working
-/// directory. An absolute `source` names only itself. `None` when nothing
-/// exists, so the caller's read error names the path it tried.
-pub fn find_existing(source: &str, assets_dir: Option<&Path>) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if Path::new(source).is_absolute() {
-        candidates.push(PathBuf::from(source));
-    } else {
-        if let Some(assets) = assets_dir {
-            candidates.push(assets.join(source));
-        }
-        if is_bare(source)
-            && let Some(found) = assets_dir.and_then(|dir| find_in(dir, source))
-        {
-            candidates.push(found);
-        }
-        candidates.push(Path::new("assets").join(source));
-        candidates.push(PathBuf::from(source));
+    let (from, to) = (normalized(from), normalized(to));
+    if from == to {
+        return path.to_string();
     }
-    candidates.into_iter().find(|p| p.exists())
+    relative_from(&to, &normalized(&from.join(path)))
 }
 
-// True when `source` names a file with no directory component.
-fn is_bare(source: &str) -> bool {
-    Path::new(source)
-        .parent()
-        .is_none_or(|d| d.as_os_str().is_empty())
+/// `path` made absolute against the working directory, with every `.` and `..`
+/// folded away lexically: two spellings of one file compare equal.
+pub fn normalized(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut out = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
-fn walk(dir: &Path, filename: &str) -> Option<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return None;
-    };
+/// How a path relative to `dir` names `target`, with `/` separators, so a
+/// file reads the same on every host.
+pub fn relative_from(dir: &Path, target: &Path) -> String {
+    let dir = normalized(dir);
+    let target = normalized(target);
+    let shared = dir
+        .components()
+        .zip(target.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let ups = dir.components().count() - shared;
+    std::iter::repeat_n("..".to_string(), ups)
+        .chain(
+            target
+                .components()
+                .skip(shared)
+                .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+        )
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Recursively search `dir` for a file named `filename`, returning the first
+/// match: how a preset is found by name.
+pub fn find_in(dir: &Path, filename: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && path.file_name().and_then(|n| n.to_str()) == Some(filename) {
             return Some(path);
         }
         if path.is_dir()
-            && let Some(found) = walk(&path, filename)
+            && let Some(found) = find_in(&path, filename)
         {
             return Some(found);
         }
@@ -88,96 +128,142 @@ fn walk(dir: &Path, filename: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn bare_filenames_are_distinguished_from_paths() {
-        assert!(is_bare("sky.hdr"));
-        assert!(!is_bare("hdri/sky.hdr"));
-        assert!(!is_bare("/abs/sky.hdr"));
-        assert!(!is_bare("../sky.hdr"));
+    fn marked(root: &Path) {
+        std::fs::create_dir_all(root.join(LIBRARY_MARKER)).unwrap();
     }
 
     #[test]
-    fn a_path_with_a_directory_component_is_used_verbatim() {
+    fn a_relative_path_joins_onto_the_root() {
+        let root = Path::new("/p");
+        assert_eq!(
+            resolve("shaders/a.hlsl", Some(root)),
+            root.join("shaders/a.hlsl")
+        );
+        assert_eq!(resolve("a.hlsl", Some(root)), root.join("a.hlsl"));
+        assert_eq!(resolve("/abs/a.hlsl", Some(root)), Path::new("/abs/a.hlsl"));
+        assert_eq!(resolve("a.hlsl", None), Path::new("a.hlsl"));
+        if cfg!(windows) {
+            assert_eq!(
+                resolve(r"\abs\a.hlsl", Some(Path::new(r"C:\p"))),
+                Path::new(r"C:\abs\a.hlsl")
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_with_a_root_or_drive_is_anchored() {
+        assert!(is_anchored(Path::new("/abs/a.hlsl")));
+        assert!(!is_anchored(Path::new("a.hlsl")));
+        assert!(!is_anchored(Path::new("./a.hlsl")));
+        assert!(!is_anchored(Path::new("../a.hlsl")));
+        if cfg!(windows) {
+            assert!(is_anchored(Path::new(r"\abs\a.hlsl")));
+            assert!(is_anchored(Path::new(r"C:\abs\a.hlsl")));
+            assert!(is_anchored(Path::new("C:a.hlsl")));
+        }
+    }
+
+    #[test]
+    fn find_existing_names_only_a_file_that_is_there() {
         let dir = tempfile::tempdir().unwrap();
-        // Even a path that does not exist is returned unchanged: it is already
-        // a path, so no search applies.
+        std::fs::create_dir_all(dir.path().join("shaders")).unwrap();
+        std::fs::write(dir.path().join("shaders/blob.hlsl"), b"x").unwrap();
         assert_eq!(
-            resolve_source_path("hdri/sky.hdr", Some(dir.path())),
-            Path::new("hdri/sky.hdr")
+            find_existing("shaders/blob.hlsl", Some(dir.path())),
+            Some(dir.path().join("shaders/blob.hlsl"))
         );
-        assert_eq!(
-            resolve_source_path("/abs/sky.hdr", Some(dir.path())),
-            Path::new("/abs/sky.hdr")
-        );
+        assert_eq!(find_existing("blob.hlsl", Some(dir.path())), None);
     }
 
     #[test]
-    fn a_bare_filename_is_found_in_a_nested_subdirectory() {
+    fn the_nearest_marked_directory_is_the_library_root() {
         let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("hdri").join("outdoor");
-        std::fs::create_dir_all(&nested).unwrap();
-        let target = nested.join("sky.hdr");
-        std::fs::write(&target, b"x").unwrap();
-
-        assert_eq!(resolve_source_path("sky.hdr", Some(dir.path())), target);
+        let project = dir.path();
+        let library = project.join("assets");
+        marked(project);
+        marked(&library);
+        let kit = library.join("shaders/kit.jsonl");
+        assert_eq!(marked_root(&kit, project), Some(normalized(&library)));
+        assert_eq!(
+            marked_root(&project.join("worlds/w.jsonl"), project),
+            Some(normalized(project))
+        );
     }
 
     #[test]
-    fn a_missing_bare_filename_falls_back_to_the_assets_dir() {
+    fn a_file_with_no_marked_directory_above_has_no_library_root() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_source_path("cn_no_such_asset.hdr", Some(dir.path())),
-            dir.path().join("cn_no_such_asset.hdr")
-        );
-    }
-
-    // With no assets dir there is nowhere to search, so a bare filename comes
-    // back untouched rather than anchored to a guessed root.
-    #[test]
-    fn resolving_without_an_assets_dir_returns_the_source_verbatim() {
-        assert_eq!(resolve_source_path("sky.hdr", None), Path::new("sky.hdr"));
-        assert_eq!(
-            resolve_source_path("hdri/sky.hdr", None),
-            Path::new("hdri/sky.hdr")
-        );
-    }
-
-    #[test]
-    fn resolving_against_a_missing_assets_dir_still_names_the_file() {
-        // An unreadable assets dir makes the search miss rather than fail, so
-        // the caller gets a path whose read error names the file.
-        let missing = Path::new("/nonexistent/cn/assets");
-        assert_eq!(
-            resolve_source_path("sky.hdr", Some(missing)),
-            missing.join("sky.hdr")
-        );
-    }
-
-    // A path is tried under the assets dir, and a bare filename is searched
-    // for beneath it.
-    #[test]
-    fn find_existing_tries_the_assets_dir_first() {
-        let assets = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(assets.path().join("shaders")).unwrap();
-        std::fs::write(assets.path().join("shaders/blob.hlsl"), b"x").unwrap();
-        let nested = assets.path().join("shaders").join("blob.hlsl");
-        assert_eq!(
-            find_existing("shaders/blob.hlsl", Some(assets.path())),
-            Some(assets.path().join("shaders/blob.hlsl"))
-        );
-        assert_eq!(
-            find_existing("blob.hlsl", Some(assets.path())),
-            Some(nested)
-        );
-        assert_eq!(
-            find_existing("cn_no_such_field.hlsl", Some(assets.path())),
+            marked_root(&dir.path().join("worlds/w.jsonl"), dir.path()),
             None
         );
     }
 
+    // A marker above the build's root, such as a checkout the project sits
+    // in, is not the project's.
     #[test]
-    fn walk_misses_cleanly_on_an_unreadable_directory() {
-        assert_eq!(walk(Path::new("/nonexistent/cn/assets"), "x.png"), None);
+    fn a_marker_above_the_build_root_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        marked(dir.path());
+        let project = dir.path().join("project");
+        let world = project.join("worlds/w.jsonl");
+        assert_eq!(marked_root(&world, &project), None);
+        assert_eq!(
+            marked_root(&world, dir.path()),
+            Some(normalized(dir.path()))
+        );
+    }
+
+    // A marker that is a file, not a directory, marks nothing.
+    #[test]
+    fn a_marker_file_is_not_a_library_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(LIBRARY_MARKER), b"").unwrap();
+        assert_eq!(marked_root(&dir.path().join("w.jsonl"), dir.path()), None);
+    }
+
+    #[test]
+    fn a_path_is_rebased_onto_another_root() {
+        let project = Path::new("/p");
+        let library = Path::new("/p/assets");
+        assert_eq!(
+            rebase("shaders/a.hlsl", library, project),
+            "assets/shaders/a.hlsl"
+        );
+        assert_eq!(rebase("../x/a.hlsl", library, project), "x/a.hlsl");
+        assert_eq!(
+            rebase("worlds/a.jsonl", project, library),
+            "../worlds/a.jsonl"
+        );
+    }
+
+    #[test]
+    fn an_absolute_empty_or_same_root_path_is_not_rebased() {
+        let (a, b) = (Path::new("/p/assets"), Path::new("/p"));
+        assert_eq!(rebase("/abs/a.hlsl", a, b), "/abs/a.hlsl");
+        assert_eq!(rebase("", a, b), "");
+        assert_eq!(rebase("./a.hlsl", a, Path::new("/p/./assets")), "./a.hlsl");
+    }
+
+    #[test]
+    fn spellings_of_one_file_normalize_alike() {
+        assert_eq!(
+            normalized(Path::new("nested/../assets/g.jsonl")),
+            normalized(Path::new("./assets/g.jsonl"))
+        );
+    }
+
+    #[test]
+    fn a_relative_path_climbs_out_of_its_directory() {
+        let root = Path::new("/p");
+        assert_eq!(
+            relative_from(&root.join("nested"), &root.join("assets/ground/a.jsonl")),
+            "../assets/ground/a.jsonl"
+        );
+        assert_eq!(
+            relative_from(root, &root.join("assets/a.jsonl")),
+            "assets/a.jsonl"
+        );
     }
 
     #[test]
@@ -189,5 +275,6 @@ mod tests {
 
         assert_eq!(find_in(dir.path(), "sky.hdr"), Some(nested.join("sky.hdr")));
         assert_eq!(find_in(dir.path(), "cn_test_no_such_asset.json"), None);
+        assert_eq!(find_in(Path::new("/nonexistent/cn/assets"), "x.png"), None);
     }
 }

@@ -87,22 +87,10 @@ pub(super) struct TransientImagePool {
 }
 
 impl TransientImagePool {
-    // Allocate every slot's per-frame backing memory and bind its member images
-    // into it. Every member is pre-transitioned to `SHADER_READ_ONLY_OPTIMAL`,
-    // the resting layout a producing pass leaves it in, so a consumer that
-    // samples one before any producer has run binds a valid layout. A world
-    // hidden behind an opaque menu masks off every pass that writes a pooled
-    // target while the Composite still samples them, so this is a real frame and
-    // not just the first one. Producers still open from `UNDEFINED` and discard,
-    // so it costs nothing afterwards.
-    //
-    // Every member and not just the last, even though members of a slot share an
-    // allocation: what aliasing makes undefined is an image's *contents*, and a
-    // frame with no producer reads nothing meaningful out of a pooled target
-    // either way. The layout is per-image state, and each member needs a legal
-    // one -- initializing only the last leaves `gbuffer_normal_depth` in
-    // `UNDEFINED` while the masked Composite samples it, which is 1110 layout
-    // errors over a 1036-frame `depth_consumers_masked` run.
+    // Allocate each slot's per-frame memory and bind its members into it. Every
+    // member starts in `SHADER_READ_ONLY_OPTIMAL`, its resting layout, since a frame
+    // behind an opaque menu samples pooled targets no pass wrote; layout is
+    // per-image, so every member needs it, not just the last.
     pub(super) fn build(
         ctx: &TransientPoolGpu<'_>,
         frames: usize,
@@ -147,9 +135,8 @@ impl TransientImagePool {
                 }
                 aliased_bytes += slot_size;
 
-                // One device-local allocation backs every member of this slot
-                // for this frame; bind each member at offset 0 (their disjoint
-                // lifetimes make the overlap safe).
+                // One allocation backs every member of this slot for this frame, all at offset
+                // 0; their lifetimes are disjoint.
                 // SAFETY: the create-info and every slice it borrows are live for the call, and
                 // each handle it names belongs to this device.
                 let memory = unsafe {
@@ -216,11 +203,8 @@ impl TransientImagePool {
         })
     }
 
-    // The label `label` reuses slot memory from, i.e. the member immediately
-    // before it in its slot's lifetime order, or `None` when `label` is the
-    // first member of its slot (or unmanaged, or alone). The executor emits an
-    // aliasing barrier on `label` against this predecessor before `label`'s
-    // first write, since they share one allocation.
+    // The member `label` reuses slot memory from, or `None` for a slot's first
+    // member; the executor emits an aliasing barrier against it.
     pub(super) fn alias_predecessor(&self, label: &str) -> Option<&'static str> {
         self.by_label.get(label)?.alias_predecessor
     }
@@ -230,11 +214,8 @@ impl TransientImagePool {
         self.allocated_bytes
     }
 
-    // The pooled G-buffer color channels for every frame in flight. Empty
-    // `Vec`s when the pool was built without the G-buffer gate (no screen-space
-    // consumer, so the pre-pass node is absent and nothing was allocated); the
-    // caller treats that as "the feature is not built" rather than an error,
-    // matching every other `*_for` lookup here.
+    // The pooled G-buffer channels per frame in flight; empty when built without
+    // the G-buffer gate.
     pub(super) fn gbuffer_pooled(&self, frames: usize) -> super::post::gbuffer::GbufferPooled {
         let channel = |label: &str| {
             self.pairs_for_frames(label, frames)
@@ -249,7 +230,7 @@ impl TransientImagePool {
         }
     }
 
-    // The member labels of each slot, for the executor's per-frame check that
+    // The member labels of each slot, for the executor's check that
     // no slot has two resources live at once in the graph it is about to run.
     // That check runs under `debug_assertions`, and so does this accessor; the
     // field itself backs `alias_predecessor` in every build.
@@ -325,11 +306,8 @@ impl TransientImagePool {
     }
 }
 
-// Resolve each label's per-frame `images` indices and its slot predecessor.
-// `images` is built slot-major then frame-major, so a label's entries arrive in
-// ascending frame order and `frames[f]` is that label's image for frame `f`. A
-// label appearing in no slot (or in none of `images`) simply gets no entry, which
-// is what the `*_for` lookups report as unmanaged.
+// Resolve each label's per-frame `images` indices and its slot predecessor; a
+// label in no slot gets no entry.
 fn index_labels(
     images: &[TransientImage],
     slot_labels: &[Vec<&'static str>],

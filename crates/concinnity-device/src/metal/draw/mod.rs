@@ -65,25 +65,10 @@ impl RenderBackend for MtlContext {
         }
     }
 
-    // Pump the NSEvent queue and encode one frame to the GPU. A GPU-side
-    // failure surfaces asynchronously on a completed command buffer, so a
-    // frame's error is reported here on a later call.
-    //
-    // NSEvent processing must happen here rather than in the run loop because
-    // window close, resize, and key events are only delivered after NSApp
-    // dequeues them. CFRunLoopRunInMode alone does not dispatch NSEvents.
-    //
-    // The whole frame runs inside a fresh autorelease pool. The render loop is
-    // a tight Rust loop with no Cocoa run-loop pool of its own, so without this
-    // the autoreleased per-frame Metal objects (command buffers, which retain
-    // every resource they reference until they are released, plus encoders,
-    // descriptors, and `NSArray`s) would accumulate in the never-drained outer
-    // pool. That keeps each frame's transient buffers / acceleration structures
-    // alive even after they are replaced on the context, so
-    // `device.currentAllocatedSize()` climbs every frame (faster at higher FPS)
-    // until unified memory is exhausted and the GPU faults / the host panics.
-    // Draining per frame frees each frame's command buffers once the GPU
-    // retires them, bounding VRAM to the work actually in flight.
+    // Pump NSEvents and encode one frame. GPU failures surface asynchronously,
+    // on a later call. The frame runs in its own autorelease pool; without one
+    // the per-frame Metal objects pile up in the never-drained outer pool until
+    // memory runs out.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         if let Some(e) = self.take_device_error() {
             return Err(e);
@@ -343,11 +328,8 @@ impl FrameDevice for MtlContext {
             prev_model_buffer,
             history_targets,
         } = self.build_history_buffers(ring_slot, object_buffer.is_some())?;
-        // This frame's HUD text geometry, written into this slot's persistent
-        // upload buffer up front so the composite pass binds sub-ranges of one
-        // buffer instead of minting a pair per label mid-encode. Done here, past
-        // the frames-in-flight fence, so overwriting the slot cannot race a GPU
-        // read of the frame that last used it.
+        // Write this frame's HUD text into the slot's upload buffer up front,
+        // past the fence, so the composite binds sub-ranges of one buffer.
         self.text
             .upload
             .upload(&self.hw.device, ring_slot, text_calls)?;
@@ -380,19 +362,11 @@ impl FrameDevice for MtlContext {
                 None
             },
         };
-        // The frame's completion join. Every command buffer the frame submits
-        // registers a part before it is committed and arrives from its
-        // completion handler; the last arrival resolves the frame's per-pass
-        // timings and releases the frame-in-flight slot. The join is built
-        // before submission because the graph executor attaches the async
-        // queue's parts, and the submission token holds it open until this
-        // frame has finished recording -- including the error paths, where the
-        // token's Drop is the only arrival.
-        //
-        // Per-pass timings resolve here rather than from the presenting command
-        // buffer's own handler because the async queue's terminal pass
-        // (`HizFinal`) is not an ancestor of the composite: its sample-buffer
-        // slots would still be a few frames stale when the composite retires.
+        // The frame's completion join: every command buffer registers before
+        // commit and arrives from its handler, and the last arrival resolves
+        // timings and releases the frame slot. The submission token holds it
+        // open through recording, error paths included. Timings resolve here
+        // because the async queue's `HizFinal` can finish after the composite.
         let gpu_time = std::sync::Arc::clone(&self.diagnostics.gpu_time_us);
         let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
         let pass_async = std::sync::Arc::clone(&self.diagnostics.pass_async_mask);
@@ -401,80 +375,68 @@ impl FrameDevice for MtlContext {
         let gpu_done = std::sync::Arc::clone(&self.diagnostics.gpu_done);
         let span_end = std::sync::Arc::clone(&self.diagnostics.gpu_span_end_ns);
         let async_mask = plan.graph.async_pass_mask();
-        // The composite command buffer's own GPU span, published by its handler
-        // as the fallback whole-frame time when per-pass timing is unavailable.
-        let composite_span_us = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        // Which passes actually ran this frame. The sample buffer is reused
-        // across frames and never cleared, so a pass absent this frame (e.g.
-        // every world pass behind an opaque menu) would otherwise resolve to
-        // its last run's stale timestamps; the resolve zeroes those slots. Read
-        // on this thread once the frame is recorded, which the submission token
-        // orders before any arrival can run the completion work.
-        let active_mask = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let pass_buffer = self
             .diagnostics
             .pass_timing
             .as_ref()
             .map(|p| super::pass_timing::SendableSampleBuf(p.buffer_for(pass_timing_slot)));
-        let (join, submission_token) = frame_slot.into_join({
-            let composite_span_us = std::sync::Arc::clone(&composite_span_us);
-            let active_mask = std::sync::Arc::clone(&active_mask);
-            Box::new(move || {
-                use std::sync::atomic::Ordering as AtomicOrdering;
-                let mut frame_us = composite_span_us.load(AtomicOrdering::Relaxed);
-                let mut overlap_us = 0;
-                let mut gap_beside_async_us = 0;
-                if let Some(buf) = &pass_buffer {
-                    let mask = active_mask.load(AtomicOrdering::Relaxed);
-                    let timings = super::pass_timing::resolve_frame(&buf.0, mask, async_mask);
-                    let per_slot = timings.as_ref().map(|t| &t.per_slot);
-                    for (i, slot) in pass_times.iter().enumerate() {
-                        slot.store(per_slot.map_or(0, |p| p[i]), AtomicOrdering::Relaxed);
-                    }
-                    pass_async.store(async_mask, AtomicOrdering::Relaxed);
-                    let micros = |ns: u64| u32::saturating_from(ns / 1000);
-                    // First graphics-queue pass start to last end, clipped at
-                    // the previous frame's end: what this frame added to the
-                    // GPU timeline, which the per-pass times cannot be summed
-                    // into once passes overlap.
-                    if let Some(t) = &timings
-                        && let Some((start, end)) = t.span
-                    {
-                        let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
-                        let span =
-                            concinnity_engine::render::backend::pass_timing::FrameSpan::after(
-                                start, end, previous,
-                            );
-                        frame_us = micros(span.own);
-                        overlap_us = micros(span.overlap);
-                        gap_beside_async_us = micros(t.gap_beside_async);
-                    }
+        let (join, submission_token) = frame_slot.into_join(Box::new(move |join| {
+            use std::sync::atomic::Ordering as AtomicOrdering;
+            let mut frame_us = join.composite_span_us.load(AtomicOrdering::Relaxed);
+            let mut overlap_us = 0;
+            let mut gap_beside_async_us = 0;
+            if let Some(buf) = &pass_buffer {
+                // Which passes ran this frame. The sample buffer is reused
+                // across frames and never cleared, so a pass absent this
+                // frame would otherwise resolve to its last run's stale
+                // timestamps; the resolve zeroes those slots.
+                let mask = join.active_passes.load(AtomicOrdering::Relaxed);
+                let timings = super::pass_timing::resolve_frame(&buf.0, mask, async_mask);
+                let per_slot = timings.as_ref().map(|t| &t.per_slot);
+                for (i, slot) in pass_times.iter().enumerate() {
+                    slot.store(per_slot.map_or(0, |p| p[i]), AtomicOrdering::Relaxed);
                 }
-                gpu_time.store(frame_us, AtomicOrdering::Relaxed);
-                gpu_overlap.store(overlap_us, AtomicOrdering::Relaxed);
-                gpu_gap_beside_async.store(gap_beside_async_us, AtomicOrdering::Relaxed);
-                // The last part of the frame just retired, so this is when its
-                // GPU work ended on the host clock.
-                if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock())
+                pass_async.store(async_mask, AtomicOrdering::Relaxed);
+                let micros = |ns: u64| u32::saturating_from(ns / 1000);
+                // First graphics-queue pass start to last end, clipped at
+                // the previous frame's end: what this frame added to the
+                // GPU timeline, which the per-pass times cannot be summed
+                // into once passes overlap.
+                if let Some(t) = &timings
+                    && let Some((start, end)) = t.span
                 {
-                    *slot = Some(concinnity_engine::profile::GpuDone {
-                        input_sampled_us,
-                        done_us: concinnity_host::clock::monotonic_micros(),
-                    });
+                    let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
+                    let span = concinnity_engine::render::backend::pass_timing::FrameSpan::after(
+                        start, end, previous,
+                    );
+                    frame_us = micros(span.own);
+                    overlap_us = micros(span.overlap);
+                    gap_beside_async_us = micros(t.gap_beside_async);
                 }
-            })
-        });
+            }
+            gpu_time.store(frame_us, AtomicOrdering::Relaxed);
+            gpu_overlap.store(overlap_us, AtomicOrdering::Relaxed);
+            gpu_gap_beside_async.store(gap_beside_async_us, AtomicOrdering::Relaxed);
+            // The last part of the frame just retired, so this is when its
+            // GPU work ended on the host clock.
+            if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock()) {
+                *slot = Some(concinnity_engine::profile::GpuDone {
+                    input_sampled_us,
+                    done_us: concinnity_host::clock::monotonic_micros(),
+                });
+            }
+        }));
 
         let submission = self.execute_graph(&plan.graph, &params, &join)?;
         if let Some(timing) = self.diagnostics.pass_timing.as_ref() {
-            active_mask.store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
+            join.active_passes
+                .store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
         }
         let started = std::time::Instant::now();
         self.submit_and_present(PresentFrame {
             cmd_buf,
             drawable,
             join,
-            composite_span_us,
             pending_terminal: submission.pending_terminal,
             submission_token,
         });
@@ -504,22 +466,11 @@ impl FrameDevice for MtlContext {
 }
 
 impl MtlContext {
-    // Keep the RT acceleration structure current with this frame's transforms
-    // and skinned pose, following the shared update plan (`rt_accel`): refresh
-    // the draw BLAS head when the participating set changed, then re-skin,
-    // rebuild the TLAS, or keep it. The skinned skin-compute + BLAS/TLAS build
-    // and a topology refresh are committed without waiting and ordered against
-    // the trace by same-queue commit order (both cmd bufs are committed here,
-    // before the trace cmd buf in `execute_graph`, on the shared queue); the
-    // static TLAS rebuild commits and waits. Outgoing structures are retired
-    // through a deferred-free pool keyed on the frame id.
-    //
-    // Non-fatal: a per-frame rebuild can fail transiently (e.g. a momentary
-    // acceleration-structure allocation hiccup under the per-frame skinned
-    // rebuild), and a reflection-BVH update failure must never stop the whole
-    // renderer. On failure the previous frame's BVH is kept (the reflection is
-    // at most one frame stale, imperceptible) and the failure is logged once per
-    // streak (and once on recovery), not at frame rate.
+    // Keep the acceleration structure current per the shared update plan:
+    // refresh the head, re-skin, rebuild the TLAS, or keep it. The skinned and
+    // topology work commits without waiting, ordered by queue order before the
+    // trace. Non-fatal: a failure keeps last frame's BVH and logs once per
+    // streak.
     fn rt_dynamic_update(
         &mut self,
         frame: super::raytrace::RtFrame,
@@ -529,22 +480,34 @@ impl MtlContext {
         // follow (RT off, or a mode that never updates) is not owed later.
         let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         self.rt.collect_retired(frame.id, self.frames_in_flight);
-        if self.rt.settings.is_none() {
-            return;
-        }
-        if let Some(reflection) = &self.ssr.reflection {
-            use concinnity_core::math::SaturatingFrom;
-            use objc2_metal::MTLTexture as _;
-            let extent = (
-                u32::saturating_from(reflection.width()),
-                u32::saturating_from(reflection.height()),
-            );
-            if let Err(e) = super::post::RtRays::fit(&mut self.rt.rays, &self.hw.device, extent) {
-                tracing::error!("ray-traced reflections: ray list allocation failed: {e}");
+        if self.rt.settings.is_some() {
+            if let Some(reflection) = &self.ssr.reflection {
+                use concinnity_core::math::SaturatingFrom;
+                use objc2_metal::MTLTexture as _;
+                let extent = (
+                    u32::saturating_from(reflection.width()),
+                    u32::saturating_from(reflection.height()),
+                );
+                if let Err(e) = super::post::RtRays::fit(&mut self.rt.rays, &self.hw.device, extent)
+                {
+                    tracing::error!("ray-traced reflections: ray list allocation failed: {e}");
+                }
             }
+            let result = self.rt_dynamic_update_inner(frame, joint_buffers, topology_dirty);
+            crate::rt_report::report_rt_update(&mut self.rt.update_streak, result);
         }
-        let result = self.rt_dynamic_update_inner(frame, joint_buffers, topology_dirty);
-        crate::rt_report::report_rt_update(&mut self.rt.update_streak, result);
+        // Runs with RT off too, so a dropped BVH drains out of the set.
+        if let Some(residency) = self.rt.blas_residency.as_mut() {
+            // Retire before sync: a pooled BLAS can rejoin the trace the frame
+            // it retires.
+            residency.retire(frame.id, self.frames_in_flight as u64);
+            let traced = self
+                .rt
+                .accel
+                .iter()
+                .flat_map(super::raytrace::RtAccelData::traced_blas);
+            residency.sync(frame.id, traced);
+        }
     }
 
     fn rt_dynamic_update_inner(
@@ -631,13 +594,8 @@ impl MtlContext {
         result
     }
 
-    // Full BVH rebuild (fresh BLAS + TLAS + table) from the current draw list,
-    // instanced clusters, and skinned pose: seeds a BVH where there was none, and
-    // replaces one whose shared geometry buffers were rebuilt underneath it.
-    // Replaces `rt_accel` only on a successful non-empty build, so a transient
-    // failure or an emptied scene leaves the previous BVH in place. The
-    // immutable borrows of `self` all end when the build returns, before the
-    // assignment, so there is no aliasing.
+    // Full BVH rebuild from the current draw list, clusters and skinned pose.
+    // Replaces `rt_accel` only on a non-empty success.
     pub(in crate::metal) fn rebuild_rt_accel(
         &mut self,
         albedo_count: usize,
@@ -685,22 +643,12 @@ impl MtlContext {
         Ok(())
     }
 
-    // Rebuild the off-screen render targets whose footprint follows the
-    // drawable size: HDR color + depth + resolve, bloom chain, TAA history +
-    // velocity (when TAA is on), SSAO targets (when SSAO is on), SSR targets
-    // (when SSR is on). Called at the top of every frame; only the targets
-    // that actually changed dimensions are recreated.
-    //
-    // When MetalFX upscaling is on, "render resolution" (where the 3D scene
-    // draws) is `output * upscale_scale`, smaller than the drawable. Bloom
-    // and the MetalFX output texture stay at the drawable (output)
-    // resolution so the final composite reads cleanly into the swapchain.
+    // Recreate the drawable-sized targets whose dimensions changed. With
+    // MetalFX, the scene renders at the scaler's input size while bloom and the
+    // scaler output stay at output resolution.
     fn resize_targets_if_needed(&mut self, want_w: u32, want_h: u32) -> error::RenderResult<()> {
-        // A MetalFX scaler is bound to one (input, output) size pair at
-        // construction, so a changed output needs a fresh instance. Rebuild
-        // before deriving the render resolution below, which reads the sizes
-        // this decides. Reset the temporal history on the first frame after, so
-        // the new scaler does not pull from a stale buffer.
+        // A scaler is bound to one size pair, so a new output rebuilds it and
+        // resets the history.
         if let Some(u) = self.upscale.scaler.as_ref()
             && (want_w != u.output_width || want_h != u.output_height)
         {
@@ -713,13 +661,8 @@ impl MtlContext {
             self.upscale.reset.rebuilt();
         }
 
-        // Output (drawable) dimensions are the `want_w/h` arg; the render
-        // dimensions are the scaler's own input size, taken from it rather than
-        // recomputed. `upscale.scale` is a rounded ratio (`input / output`), so
-        // multiplying it back out can land a pixel low -- at 2048x1536 the
-        // scaler declares a 1024-row input and the arithmetic yields 1023, and
-        // MetalFX asserts that the content exceeds the texture. The scaler is
-        // the authority on the size it was built for.
+        // Render dimensions come from the scaler itself, since the rounded
+        // ratio can land a pixel short.
         let (render_w, render_h) = match self.upscale.scaler.as_ref() {
             Some(u) => (u.input_width.max(1), u.input_height.max(1)),
             None => (want_w, want_h),
@@ -745,12 +688,9 @@ impl MtlContext {
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
         let bloom_changed = (want_w, want_h) != self.targets.output;
-        // The transient pool backs `ao_output` and the G-buffer channels (all
-        // render-resolution) plus `bloom_top` (half output-resolution), so
-        // either extent moving invalidates it. Nothing caches a pooled handle:
-        // the per-frame bindless argument buffer re-encodes `ao_output` itself
-        // and every other consumer fetches its texture by label at encode time,
-        // which is what makes a rebuild's slot repack harmless here.
+        // The transient pool spans render and bloom resolution, so either
+        // change rebuilds it. Consumers fetch pooled textures by label, so a
+        // repack is harmless.
         if render_changed || bloom_changed {
             self.targets.transient_pool.rebuild(
                 &self.hw.device,

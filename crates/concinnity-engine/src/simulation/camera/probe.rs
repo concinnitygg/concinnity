@@ -19,7 +19,7 @@ pub enum Followed {
 /// followed prop's own collider. The controller then pulls the camera inside
 /// that distance so walls do not cut between the camera and what it follows.
 ///
-/// Not authored in world files: it has no `args`.
+/// Not authored in .jsonl files: it has no `args`.
 #[derive(Debug, Clone)]
 pub struct CameraProbe {
     /// What the camera follows, whose own body the ray ignores.

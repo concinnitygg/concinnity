@@ -1,18 +1,8 @@
-// The device's VkPipelineCache, persisted across launches.
-//
-// One cache exists per logical device, seeded from the runtime cache segment's
-// `vk-<uuid>` entry at init and handed to every pipeline creation, so a warm
-// launch skips the driver's back-end compile of each pipeline. The handle
-// lives in a process global rather than on `VkContext` because every path
-// that builds pipelines (init, shader hot-reload, lazy wireframe twins, world
-// shader buckets) bottoms out in the same builder functions, and a live
-// editor `reload_world` inherits the device: the cache simply stays installed
-// across the successor context.
-//
-// The blob is machine code for one GPU and driver. The entry key carries the
-// device's `pipeline_cache_uuid` and the blob's own header is checked against
-// the device before use; a mismatched or unreadable blob is dropped and the
-// launch proceeds cold. Nothing here can fail init.
+// The device's VkPipelineCache, persisted across launches: seeded from the
+// runtime cache's `vk-<uuid>` entry and passed to every pipeline creation. A
+// process global, since every pipeline path shares the builders and a reload
+// inherits the device. A blob that does not match the device is dropped and
+// the launch runs cold; nothing here can fail init.
 
 use ash::vk::Handle;
 use ash::{Device, vk};
@@ -40,14 +30,9 @@ fn current() -> vk::PipelineCache {
     vk::PipelineCache::from_raw(CURRENT.load(Ordering::Relaxed))
 }
 
-// `vkCreateGraphicsPipelines` through the installed cache, timed for the init
-// tally. The only way to build a graphics pipeline in this backend, so every
-// pipeline is both cached and owned.
-//
-// Safe because each create-info is a borrow that outlives the call, and because
-// what comes back is owned: a partial failure (ash hands back the pipelines it
-// did manage to create alongside the error) retires them instead of leaking
-// them, and success hands each one to a wrapper that destroys it.
+// `vkCreateGraphicsPipelines` through the cache, timed for the init tally; the
+// only way to build a graphics pipeline here. A partial failure retires what
+// was created.
 pub(in crate::vulkan) fn create_graphics_pipelines(
     device: &VkDevice,
     infos: &[vk::GraphicsPipelineCreateInfo<'_>],

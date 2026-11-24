@@ -7,7 +7,7 @@
 /// path is blocked. The exchange is one frame behind the listener, which is
 /// inaudible. Riding the emitter's entity, the probe despawns with it.
 ///
-/// Not authored in world files: it has no `args`.
+/// Not authored in .jsonl files: it has no `args`.
 #[derive(Debug, Clone, Default)]
 pub struct AudioOcclusionProbe {
     /// Listener position in world space (the ray origin).

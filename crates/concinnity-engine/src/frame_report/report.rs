@@ -65,12 +65,9 @@ pub(super) fn write_report(
     write_input_latency(out, report)?;
     write_slowest(out, &report.slowest)?;
 
-    // The pass block is means, so a pass drawn on some frames reads as its
-    // cost per frame and the rows add up, over the frames the backend timed
-    // plausibly: one it mistimed by orders of magnitude is left out of every
-    // row, and the heading counts them. The system block is means, so that its
-    // shares add up to the work the systems did. Each heading carries the total
-    // its shares are taken against.
+    // Pass and system blocks are means over the frames timed plausibly, so
+    // their rows add up; mistimed frames are left out and counted in the
+    // heading.
     for phase in &report.phases {
         write_block(
             out,

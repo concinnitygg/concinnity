@@ -194,11 +194,9 @@ fn line_input_layout() -> [D3D12_INPUT_ELEMENT_DESC; 3] {
     ]
 }
 
-// PSO for the line pass: world-space ribbon corners transformed by the camera
-// VP and alpha-blended into the resolved HDR target. No depth attachment; the
-// fragment shader tests the scene depth itself so an occluded line can fade
-// instead of vanishing. No culling either: a ribbon faces the camera but its
-// winding depends on which way the line runs.
+// The line PSO: ribbon corners through the camera VP, alpha-blended into the
+// resolved scene. No depth attachment (the fragment fades occluded lines) and
+// no culling (winding follows the line's direction).
 fn create_line_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -282,12 +280,8 @@ impl DxContext {
         }
     }
 
-    // Copy this frame's expanded ribbons into this frame's slot of the upload
-    // ring. Call once per frame on the main thread, before the graph fans its
-    // passes out: growing the ring allocates through the device allocator,
-    // which no worker may touch. The frame fence (waited before the slot is
-    // reused) already retired the lists that read it last trip. `None` when
-    // there is nothing to draw.
+    // Copy this frame's ribbons into its upload ring slot on the main thread, since
+    // growing the ring allocates. `None` with nothing to draw.
     pub(in crate::directx) fn upload_lines(
         &self,
         frame_idx: usize,
@@ -311,11 +305,8 @@ impl DxContext {
         Ok(Some(LineUpload::new(gpu_va, byte_len)))
     }
 
-    // Encode the line pass: one unindexed triangle list covering every expanded
-    // ribbon, alpha-blended into the resolved HDR target. `vp` is the same
-    // view-projection the main pass rasterized with (jittered under TAA), so a
-    // line sits on the pixel its geometry did. `upload` is this frame's ribbon
-    // vertices, already in the ring (`upload_lines`).
+    // Encode the line pass: one triangle list of every ribbon, alpha-blended, with
+    // the main pass's VP.
     pub(in crate::directx) fn encode_lines(
         &self,
         cmd: &ID3D12GraphicsCommandList,

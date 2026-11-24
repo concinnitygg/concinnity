@@ -147,11 +147,9 @@ pub(super) fn create_image_view(
         .map_err(|e| map_vk_result(e, "create_image_view"))
 }
 
-// Record and submit a short-lived command buffer without waiting for it.
-// Returns the still-executing command buffer; the caller must not free it (or
-// destroy anything it references) until the GPU provably retired it -- either
-// by a queue/device wait, or because a later fence on the same queue signaled
-// (fence signals cover all prior submissions on the queue).
+// Submit a short-lived command buffer without waiting. The caller must not free
+// it, or anything it references, until a wait or a later fence on the same
+// queue proves it retired.
 pub(super) fn one_shot_submit_nowait<F>(
     device: &VkDevice,
     command_pool: vk::CommandPool,
@@ -409,13 +407,9 @@ pub(super) struct UploadInFlight {
     pub cmd: vk::CommandBuffer,
 }
 
-// A streamed texture swap's GPU debris, parked on `VkContext`'s `stream.retires`
-// until its window closes: the replaced pool image (pending frames may still
-// sample it, and the per-frame pool copies re-point over the next
-// `frames_in_flight` ticks) plus the upload's in-flight transients (still
-// executing when parked; covered by the first frame fence signaled after the
-// upload's submission). The image and staging buffer retire through the
-// allocator when this drops; only the command buffer is freed by hand.
+// A streamed texture swap's debris, parked until pending frames stop sampling
+// the replaced image and the upload has retired. Only the command buffer is
+// freed by hand.
 pub(super) struct StreamedUploadRetire {
     pub _image: GpuImage,
     pub _staging: PooledBuffer,
@@ -432,15 +426,10 @@ impl StreamedUploadRetire {
     }
 }
 
-// Upload RGBA pixel data to a device-local RGBA8_UNORM image with a full mip
-// chain, without waiting for the copy: the command buffer is submitted and
-// left executing. The final layout transition (TRANSFER_DST -> SHADER_READ_
-// ONLY, fragment-stage scope) orders every later submission on the same queue
-// after the copy, so the image is safe to sample from any subsequently
-// submitted frame; only freeing the returned in-flight resources needs GPU
-// retirement. The chain is box-filtered on the CPU (`concinnity_engine::gfx::mipmap`), for
-// the backend's own init-time textures (fallbacks, text atlases); scene textures
-// arrive with their chain cooked and go through `upload_texture_image_deferred`.
+// Upload RGBA pixels to a device-local RGBA8 image with a CPU box-filtered mip
+// chain, without waiting: the final transition orders every later submission
+// after the copy. For the backend's own textures; scene textures arrive with
+// cooked chains through `upload_texture_image_deferred`.
 pub(super) fn upload_texture_deferred(
     ctx: &GpuUploadContext<'_>,
     width: u32,
@@ -709,12 +698,8 @@ pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext<'_>) -> RenderR
     upload_texture(ctx, 1, 1, &[128u8, 128, 255, 255])
 }
 
-// Upload a 3D color-grading LUT from a `ColorLut` payload. `data` is the raw
-// RGBA8 emitted by `build/color_lut.rs`: `size`³ texels ordered red-fastest,
-// then green, then blue, which is the natural row/slice order of a `TYPE_3D`
-// image, so the byte slice copies in verbatim. The returned `GpuImage` has a
-// `VK_IMAGE_VIEW_TYPE_3D` view left in `SHADER_READ_ONLY_OPTIMAL`, ready for
-// the composite pass to sample as a `sampler3D`.
+// Upload a 3D color-grading LUT: `size`³ RGBA8 texels in red-fastest order,
+// copied verbatim into a 3D image left SHADER_READ_ONLY.
 pub(super) fn upload_color_lut(
     ctx: &GpuUploadContext<'_>,
     size: u32,
@@ -1049,17 +1034,10 @@ fn clear_shadow_fallback(rec: &Recorder<'_>, image: vk::Image, layer_count: u32)
     );
 }
 
-// Create a `layers`-slice D32_SFLOAT array shadow map. The returned `view` is
-// a single sampled 2D-array view covering every layer (bound at descriptor
-// set=0 binding=3 in the main pass); `aux_views` holds one single-layer 2D
-// view per cascade for use as a per-slice depth attachment in the shadow
-// pass.
-//
-// An empty array (`size` or `layers` 0) is a 1×1 single-layer
-// fallback cleared to the depth clear value, the far plane, so every shadow
-// compare against it is fully lit. The fallback intentionally uses a single
-// array layer because the shader's cascade selection falls back to cascade 0
-// when `cascade_splits == +inf`, so layer 0 is the only one ever sampled.
+// Create a `layers`-slice D32 array shadow map: one sampled array view, and one
+// single-layer view per cascade for rendering. An empty request yields a 1x1
+// single-layer map cleared to the far plane, so every compare is lit; cascade
+// selection falls back to layer 0.
 pub(super) fn create_shadow_map_array(
     ctx: &GpuUploadContext<'_>,
     size: u32,
@@ -1103,12 +1081,7 @@ pub(super) fn create_shadow_map_array(
         .map_err(|e| e.context("create_image (shadow array)"))?;
     let image = pooled.image();
 
-    // Rest the cascades sampled. The graph's Shadow producer barrier transitions
-    // them to DEPTH_STENCIL_ATTACHMENT before each shadow loop and Main's consumer
-    // returns them here, so the cross-frame reset is the graph's producer barrier,
-    // not an inline end-of-frame transition. Initializing sampled makes frame 0's
-    // producer barrier (SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT) start from
-    // the image's real layout.
+    // Rest the cascades sampled, as the graph's producer barrier expects on frame 0.
     one_shot_submit(device, command_pool, queue, |rec| {
         if fallback {
             clear_shadow_fallback(rec, image, layer_count);
@@ -1193,11 +1166,7 @@ pub(super) fn create_depth_image(
             height,
             format: vk::Format::D32_SFLOAT,
             tiling: vk::ImageTiling::OPTIMAL,
-            // SAMPLED so the projected-decal pass (and any future depth-
-            // sampling effect) can read it from a fragment shader. Without
-            // this, the validation layer rejects the SHADER_READ_ONLY layout
-            // transition and the SAMPLED-bit-required `vkUpdateDescriptorSets`
-            // write that bind the depth view to the decal's set 0 binding 2.
+            // SAMPLED so the decal pass can read depth in a fragment shader.
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
             samples,
@@ -1263,11 +1232,8 @@ pub(super) fn create_msaa_color_image(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// Create a single-sample color image usable as both a render target and a
-// sampled texture. This is the HDR resolve target: the main pass resolves
-// (or, with MSAA off, draws directly) into it, and the composite pass samples
-// it to tonemap. No pre-transition is needed: the main render pass declares
-// an `UNDEFINED` initial layout for it.
+// A single-sample color image for the HDR resolve: rendered into by the main
+// pass and sampled by the composite.
 pub(super) fn create_hdr_resolve_image(
     alloc: &DeviceAllocator,
     device: &VkDevice,
@@ -1296,11 +1262,8 @@ pub(super) fn create_hdr_resolve_image(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// Linear repeat sampler for albedo and normal map sampling. Now that scene
-// textures carry a full mip chain, `max_lod` is unclamped so minified surfaces
-// trilinear-select down the chain. `max_anisotropy > 1.0` enables anisotropic
-// filtering (the caller passes the device-supported degree, or <= 1.0 when the
-// `samplerAnisotropy` feature is unavailable).
+// Linear repeat sampler for scene textures, unclamped LOD, with anisotropy when
+// `max_anisotropy > 1.0`.
 pub(super) fn create_sampler_linear_repeat(
     device: &VkDevice,
     max_anisotropy: f32,
@@ -1373,11 +1336,8 @@ pub(super) struct EnvironmentMapTextures {
     pub prefilter_mip_count: u32,
 }
 
-// Create a RGBA32_SFLOAT cubemap image with `mip_count` mips, then upload the
-// supplied byte slices via a staging buffer. `mip_bytes[m]` must hold
-// `6 * (face_size >> m)² * 16` bytes in face-major order
-// (+X, -X, +Y, -Y, +Z, -Z). Returns a `GpuImage` whose `view` is a
-// `VK_IMAGE_VIEW_TYPE_CUBE` view spanning every mip.
+// Create an RGBA32F cube with `mip_count` mips and upload it. `mip_bytes[m]`
+// holds `6 * (face_size >> m)² * 16` bytes, face-major (+X, -X, +Y, -Y, +Z, -Z).
 fn create_cube_image(
     ctx: &GpuUploadContext<'_>,
     face_size: u32,

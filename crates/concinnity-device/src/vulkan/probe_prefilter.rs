@@ -606,12 +606,8 @@ fn storage_barrier(rec: &Recorder<'_>) {
     );
 }
 
-// One side of a layout transition: the layout the image is in, the accesses that
-// have to be made available (source) or visible (destination), and the stage they
-// happen in. The shared `transition_image_layout_range` cannot serve these: it
-// derives the masks from the layout pair alone, and its table is graphics-staged
-// and falls back to empty masks for a pair it does not know -- which is exactly
-// the compute pairs this convolution needs.
+// One side of a layout transition: layout, accesses and stage. The shared
+// helper derives masks from the layout pair and has no compute pairs.
 #[derive(Clone, Copy)]
 struct LayoutSide {
     layout: vk::ImageLayout,

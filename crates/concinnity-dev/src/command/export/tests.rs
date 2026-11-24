@@ -78,7 +78,7 @@ fn name_precedence_is_cli_then_app_config_then_menu_then_default() {
 #[test]
 fn menu_title_names_an_app_after_the_menu_expands() {
     let world = r#"["MainMenu",{"$id":"pause","title":"Menu Title"}]"#;
-    let meta = world_app_meta(world.into(), None, None, None).unwrap();
+    let meta = world_app_meta(world.into(), None, None).unwrap();
     assert_eq!(meta.display_name, "Menu Title");
     assert_eq!(meta.identifier, "gg.concinnity.menu-title");
 
@@ -86,8 +86,17 @@ fn menu_title_names_an_app_after_the_menu_expands() {
         "{world}\n{}",
         r#"["AppConfig",{"$id":"app","name":"App Name"}]"#
     );
-    let meta = world_app_meta((&world).into(), None, None, None).unwrap();
+    let meta = world_app_meta((&world).into(), None, None).unwrap();
     assert_eq!(meta.display_name, "App Name");
+}
+
+// The icon is read where the build read it: under the world's root.
+#[test]
+fn the_icon_is_read_under_the_worlds_root() {
+    let world = r#"["AppConfig",{"$id":"app","name":"App","icon":"art/i.png"}]"#;
+    let root = Path::new("/cn-none/project");
+    let meta = world_app_meta(WorldSource::text(world, Some(root)), None, None).unwrap();
+    assert_eq!(meta.icon.as_deref(), Some(root.join("art/i.png").as_path()));
 }
 
 #[test]

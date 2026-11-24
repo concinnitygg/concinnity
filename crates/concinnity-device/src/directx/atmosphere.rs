@@ -627,6 +627,14 @@ impl AtmosphereState {
         self.params_buffers.get(frame_idx).map(|b| com::gpu_va(b))
     }
 
+    // What the transparent pass hazes through in frame slot `frame_idx`: this
+    // frame's constant block and the table of the four tables' SRVs, once a
+    // frame carries the atmosphere's inputs.
+    pub(in crate::directx) fn transparent_air(&self, frame_idx: usize) -> Option<(u64, SrvSlot)> {
+        self.frame.as_ref()?;
+        Some((self.params_gva(frame_idx)?, self.srv_gpu[0]))
+    }
+
     // What the clouds' march reads of the atmosphere in frame slot
     // `frame_idx`.
     pub(in crate::directx) fn cloud_inputs(&self, frame_idx: usize) -> Option<MarchInputs> {

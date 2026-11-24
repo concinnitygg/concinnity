@@ -1,9 +1,5 @@
-// The read phase of a tick: what the bodies may see, the buffers they run
-// against, and how those buffers are worked through.
-//
-// Bodies never observe another body's same-tick writes (the apply phase runs
-// after every body), which is what makes evaluation order unobservable and lets
-// a host fan the runs across threads.
+// The read phase of a tick. Bodies never see another body's same-tick writes,
+// so evaluation order is unobservable and runs can fan across threads.
 
 use alloc::vec::Vec;
 
@@ -27,10 +23,7 @@ pub(crate) struct EvalBucket {
 }
 
 // The entity sets a body iterates this tick, resolved before anything runs.
-//
-// Single-entity reads (a name, a position, a liveness test) are not here: no
-// body runs while the world is mutable, so they read the world directly and
-// cost one lookup each instead of a whole-world copy per tick.
+// Single-entity reads go to the world directly.
 #[derive(Debug, Default)]
 pub(super) struct Snapshot {
     // Per program, per declared query, in stable order.
@@ -39,11 +32,8 @@ pub(super) struct Snapshot {
     pub(super) scoped: Vec<Vec<Entity>>,
 }
 
-// What a body run reads that the tick, rather than the body, determines: the
-// per-tick half of the behavior VM's `View`. Everything here is shared and
-// immutable, so evaluation can fan across workers; single-entity reads (a name,
-// a position, a liveness test) read the storage directly and cost one lookup
-// each instead of a whole-world copy per tick.
+// The per-tick half of the behavior VM's `View`, shared and immutable so
+// evaluation can fan across workers.
 pub(super) struct EvalCtx<'a> {
     pub(super) components: &'a ComponentStorage,
     // Resolved once per tick rather than per name lookup.
@@ -60,14 +50,8 @@ pub(super) struct EvalCtx<'a> {
 }
 
 // Run one instance's body against the tick's starting state, appending its
-// effects to `out`. Returns how many it appended, plus the nodes it executed
-// when tracing.
-//
-// `bindings` is the caller's reused buffer: resized to the body's compiled
-// binding high-water mark and cleared per run, so however many instances fire
-// a tick, binding scratch costs zero allocations in steady state. (The
-// previous per-run frame-arena grab exhausted the reserve on behavior-heavy
-// worlds and degraded to contended heap allocation across eval workers.)
+// effects to `out`. Returns how many, plus the nodes executed when tracing.
+// `bindings` is the caller's reused buffer, so runs allocate nothing.
 pub(super) fn eval_one(
     ec: &EvalCtx<'_>,
     bindings: &mut Vec<Option<Val>>,
@@ -180,11 +164,8 @@ pub(super) struct Resume {
 }
 
 impl BehaviorSystem {
-    // Entities carrying every one of these component tags, filled into `out`
-    // in stable order. Column order shifts as entities are removed
-    // (swap-remove), so the result is sorted: an unstable iteration order
-    // would make a body's effects depend on unrelated despawns. `scratch`
-    // holds each extra tag's sorted set; both buffers keep their capacity.
+    // Entities carrying every one of these tags, sorted, since swap-remove
+    // shifts column order. Both buffers keep their capacity.
     pub(super) fn entities_matching_into(
         ctx: &PipelineContext<'_>,
         tags: &[u8],

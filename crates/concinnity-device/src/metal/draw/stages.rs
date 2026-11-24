@@ -2,6 +2,7 @@
 //! dispatch.
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_core::memory::InlineVec;
 use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::WindowControl;
@@ -34,7 +35,6 @@ pub(super) struct PresentFrame {
     pub(super) cmd_buf: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
     pub(super) drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
     pub(super) join: std::sync::Arc<FrameJoin>,
-    pub(super) composite_span_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub(super) pending_terminal: Option<u64>,
     pub(super) submission_token: SubmissionToken,
 }
@@ -68,7 +68,7 @@ pub(super) struct HistoryBuffers {
     pub(super) deformed_this_frame: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) deformed_prev_frame: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) prev_model_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub(super) history_targets: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) history_targets: InlineVec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 impl MtlContext {
@@ -103,11 +103,8 @@ impl MtlContext {
 
     // Returns false once the window has closed.
     pub(super) fn pump_window_events(&mut self, mtm: objc2::MainThreadMarker) -> bool {
-        // Drain all pending NSEvents so the window stays responsive. The
-        // preview tab leaves `pump_events` false so the host owns event
-        // delivery (pumping there would dequeue mouse clicks meant for the
-        // tab bar before they reach their targets); the windowed CLI path
-        // and the blocking-in-view play path opt in.
+        // Drain pending NSEvents unless the host owns event delivery (the
+        // preview tab), where pumping would steal its clicks.
         if self.window().appkit.pump_events() {
             self.window_mut().appkit.pump_ns_events(mtm);
             if self.window_closed() {
@@ -115,43 +112,28 @@ impl MtlContext {
             }
         }
 
-        // Converge the display on the fullscreen state: hold the chosen mode
-        // while the window is fullscreen, restore the desktop mode otherwise.
-        // Runs off the delegate-tracked flag so OS-driven fullscreen exits
-        // (green traffic-light button, Mission Control) restore too. Cheap
-        // when nothing changed.
+        // Hold the chosen display mode while fullscreen and restore the desktop
+        // mode otherwise, including OS-driven exits.
         self.window_mut().appkit.reconcile_display_mode();
         true
     }
 
     // None when no drawable is ready, which skips the frame.
     pub(super) fn acquire_frame(&mut self, world_hidden: bool) -> Option<AcquiredFrame> {
-        // Frames-in-flight gate: block until the GPU has retired an older frame
-        // so the CPU never queues more than `frames_in_flight` frames ahead,
-        // bounding how many sets of per-frame transient buffers pile up. Taken
-        // here, before drawable prep and all per-frame buffer building, unless
-        // `prepare_frame` already reserved it (that wait is the caller's). The slot
-        // is handed to the frame command buffer's completion handler below
-        // (released on GPU retirement); if this frame is abandoned before commit
-        // (the drawable isn't ready, or a `?` fails mid-encode) `frame_slot`
-        // drops and releases the slot synchronously, keeping the count balanced.
-        // Both blocking calls this frame makes are measured into `gpu_wait`
-        // and published on the frame's stats: this one and the drawable
-        // acquire below. They are wall time inside `draw_frame`, which the
-        // engine times its graphics system around, so a GPU-bound frame is
-        // only distinguishable from a CPU-bound one with this reading.
+        // Frames-in-flight gate, unless `prepare_frame` already reserved the
+        // slot. The slot is released by the frame's completion handler, or on
+        // drop if the frame is abandoned before commit. This wait and the
+        // drawable acquire are measured into `gpu_wait`, which separates a
+        // GPU-bound frame from a CPU-bound one.
         let mut gpu_wait = crate::gpu_wait::GpuWait::none();
         let frame_slot = match self.prepared_slot.take() {
             Some(slot) => slot,
             None => gpu_wait.measure(|| self.frame_pacing.acquire()),
         };
 
-        // Asynchronous reflection-probe bake, prefiltering half: convolve one mip of
-        // a finished capture or install its cube, ahead of the argument buffers
-        // below so an installed cube is sampled this frame. The capture half runs
-        // once those buffers exist. Runs AFTER `acquire()` so the bake's retire-pool
-        // collection sees a fence-consistent frame id. Skipped while the world is
-        // hidden: a probe bake feeds reflections no pass will sample this frame.
+        // Probe bake prefiltering: convolve a mip or install a cube ahead of the
+        // argument buffers, so an installed cube is sampled this frame. Skipped
+        // while the world is hidden.
         if !world_hidden {
             self.advance_probe_prefilter();
         }
@@ -168,11 +150,8 @@ impl MtlContext {
         // drawable not yet available -- skip this frame silently
         let drawable = drawable?;
 
-        // This frame's transient-buffer ring slot. The fence guarantees the
-        // frame that last used `frame_ring_index - frames_in_flight` has retired
-        // on the GPU, so overwriting this slot's buffers can't race an in-flight
-        // read. Advanced once per built frame; skipped frames (no drawable) bail
-        // above without consuming a slot.
+        // This frame's ring slot, safe to overwrite once the fence retired its
+        // last user. Skipped frames do not consume one.
         let frame_id = self.frame_ring_index;
         let ring_slot = usize::saturating_from(frame_id % self.frames_in_flight as u64);
         self.frame_ring_index = frame_id.wrapping_add(1);
@@ -194,13 +173,10 @@ impl MtlContext {
 
     // Rebuilds requested since last frame: hot-reloaded shaders.
     pub(super) fn apply_pending_rebuilds(&mut self) -> error::RenderResult<()> {
-        // Shader hot-reload: if the debug `reload-shaders` command set the
-        // flag, rebuild every built-in pipeline from disk-resident source
-        // before the frame's passes start using them. The flag is cleared
-        // regardless of outcome so a failed rebuild (typo in a shader edit)
-        // doesn't loop, and the previous pipelines stay live so the session
-        // keeps rendering; only a device failure propagates. In-flight command
-        // buffers retain the pipelines they encoded, so no GPU drain is needed.
+        // Shader hot reload: rebuild every built-in pipeline from source. The
+        // flag clears either way and a failed rebuild keeps the old pipelines;
+        // only a device failure propagates. In-flight buffers retain their
+        // pipelines, so no drain.
         if self.hot_reload.requested() {
             self.hot_reload.clear();
             match self.reload_shaders() {
@@ -213,11 +189,7 @@ impl MtlContext {
     }
 
     pub(super) fn service_background_work(&mut self, elapsed: f32, ring_slot: usize) {
-        // Update auto-exposure from the previous frame's GPU-measured average
-        // log-luminance, *before* any pass reads `self.post_process.exposure`
-        // (the bloom prefilter and composite both consume it). A no-op when
-        // auto-exposure is disabled -- the static authored EV then drives the
-        // exposure multiplier unchanged.
+        // Step auto-exposure before anything reads the exposure.
         self.update_auto_exposure(elapsed, ring_slot);
         self.pre_exposure.advance(self.post_process.exposure);
         if self.upscale.scaler.is_some() && self.upscale.exposure.advance(&self.pre_exposure) {
@@ -365,7 +337,6 @@ impl MtlContext {
             cmd_buf,
             drawable,
             join,
-            composite_span_us,
             pending_terminal,
             submission_token,
         } = frame;
@@ -374,24 +345,16 @@ impl MtlContext {
         self.record_frame_capture(&cmd_buf, &texture);
         cmd_buf.presentDrawable(ProtocolObject::from_ref(&*drawable));
 
-        // Retain this drawable's color texture so the headless `screenshot`
-        // command can blit the last presented frame back to the host. Only
-        // under `hot_reload` (the `cn run -f` path that runs the debug endpoint able
-        // to request a capture, and the only path where the MTKView has
-        // `framebufferOnly` switched off so this texture is blit-readable);
-        // production keeps this `None`. Reading it next frame is safe: the
-        // composite pass that wrote it committed earlier on the same queue, so
-        // same-queue FIFO order guarantees it is fully rendered, and a
-        // read-only blit may run alongside the compositor's scan-out.
+        // Retain the drawable's texture under `hot_reload` so `screenshot` can
+        // read the last presented frame. Queue order guarantees it is fully
+        // rendered by the next frame.
         if self.capture {
             self.last_present_texture = Some(texture);
         }
 
-        // The presenting command buffer's own completion handler. It reports
-        // the buffer's fault status and publishes its GPU span as the
-        // whole-frame fallback, then arrives at the frame's completion join;
-        // the per-pass resolve and the frame-slot release belong to the join's
-        // last arrival, since the async queue may still be running.
+        // The presenting buffer's handler reports faults and the whole-frame GPU
+        // span, then arrives at the frame's completion join, whose last arrival
+        // resolves timing and releases the slot.
         {
             let device_error = std::sync::Arc::clone(&self.diagnostics.device_error);
             let part = std::sync::Arc::clone(&join);
@@ -423,7 +386,7 @@ impl MtlContext {
                     // the fallback for a device with no per-pass timing.
                     // GPUStartTime / GPUEndTime are valid only inside the handler.
                     let span = cb.GPUEndTime() - cb.GPUStartTime();
-                    composite_span_us.store(
+                    part.composite_span_us.store(
                         u32::saturating_from((span * 1.0e6).clamp(0.0, f64::from(u32::MAX))),
                         std::sync::atomic::Ordering::Relaxed,
                     );
@@ -485,11 +448,8 @@ impl MtlContext {
         &mut self,
         ring_slot: usize,
     ) -> error::RenderResult<u64> {
-        // The probe records, for every pass that samples the set. Built ahead
-        // of `build_scene_buffers` and outside its world-hidden gate: the
-        // transparent and post passes read the set without a static draw list
-        // of their own, and a slot left holding last frame's ring buffer would
-        // outlive the frame that wrote it.
+        // Probe records for every pass that samples the set, built outside the
+        // world-hidden gate since transparent and post passes read them too.
         self.probe.records_buf = Some(self.build_probe_records(ring_slot)?);
         // The residency the bindless block's contents need. Refreshed before
         // any pass encodes, and a no-op on a frame whose textures are
@@ -515,21 +475,13 @@ impl MtlContext {
             skinned_joint_bufs,
             texture_signature,
         } = args;
-        // While the world is hidden behind an opaque menu, the surviving Main
-        // pass is fed an empty scene -- no bindless object / cull / texture
-        // buffers, no instanced clusters, and no acceleration-structure refresh
-        // -- so it runs as a bare clear that the opaque overlay then covers. The
-        // masked graph drops every other world pass, so none of this work would
-        // be consumed anyway.
+        // A hidden world feeds Main an empty scene, so it runs as a bare clear
+        // under the opaque overlay.
         let (object_buffer, material_params, cull_draw_args, bindless_tex_args) = if world_hidden {
             (None, None, None, None)
         } else {
-            // Per-frame GPU buffer prep for the bindless path.
-            // The object data + indirect-args + bindless texture argbuf are
-            // all per-frame Metal buffers the bindless Main pass + Cull
-            // compute pass consume. They must outlive the command buffer,
-            // hence the bindings handed back to the caller, which holds them
-            // through to `cmd_buf.commit()`.
+            // Per-frame bindless buffers, handed back so the caller holds them
+            // until commit.
             let packed = std::time::Instant::now();
             let records = match records {
                 Some(history) => self.build_record_buffers(ring_slot, cam_pos, history)?,
@@ -583,12 +535,8 @@ impl MtlContext {
                 elapsed,
                 tex_args: bindless_tex_args.as_ref(),
             });
-            // Keep the RT acceleration structure current with this frame's
-            // transforms before any pass reads `rt_accel`. The default `Auto` mode
-            // rebuilds the TLAS only when a participating prop actually moved; a
-            // fully static scene pays just a matrix compare here. Non-fatal: a
-            // transient rebuild failure keeps last frame's BVH rather than stopping
-            // the renderer.
+            // Keep the acceleration structure current before any pass reads it.
+            // A failed rebuild keeps last frame's BVH.
             let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(
                 crate::metal::raytrace::RtFrame {
@@ -624,13 +572,8 @@ impl MtlContext {
         ring_slot: usize,
         object_buffer_live: bool,
     ) -> error::RenderResult<HistoryBuffers> {
-        // This frame's skinned deformed-vertex buffer (skinned fold), cloned into
-        // a local so `params` owns a handle rather than borrowing `self.skinned`
-        // across the `&mut self` execute_graph call (every other GraphFrameParams
-        // buffer is likewise a local). `Some` only when the fold is active
-        // (draw.n_skinned > 0, set in upload_skinned under bindless + static geometry);
-        // the Cull pass writes it via encode_main_skin and the Main / MainLate
-        // skinned ICB tail binds it.
+        // This frame's deformed skinned buffer, cloned so `params` owns a
+        // handle. `Some` only while the fold is active.
         let deformed_this_frame = if self.state.draw.n_skinned > 0 {
             self.skinned.deformed.get(ring_slot).cloned()
         } else {
@@ -645,13 +588,9 @@ impl MtlContext {
         } else {
             None
         };
-        // Model-history ring slots for the GPU-driven G-buffer pass: the one the
-        // previous frame's snapshot filled, which this frame reprojects through,
-        // and the one(s) this frame's snapshot fills. Both are bound whenever the
-        // pre-pass runs, motion consumer or not -- the pass still writes the
-        // normals and depth every screen-space consumer reads. Priming writes
-        // every slot, so the first pre-pass after a rebuild reads this frame's
-        // models rather than an unwritten buffer.
+        // Model-history slots: the one last frame's snapshot filled and the
+        // ones this frame fills. Bound whenever the pre-pass runs; priming fills
+        // every slot.
         let (prev_model_buffer, history_targets) = if object_buffer_live
             && self.gbuffer.targets.is_some()
             && self.cull.main_pipeline.is_some()
@@ -659,7 +598,7 @@ impl MtlContext {
             let bytes = self.cull_count() * size_of::<[[f32; 4]; 4]>();
             let prime = self.state.model_history.get_mut().take_prime();
             let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
-            let mut targets = Vec::new();
+            let mut targets = InlineVec::new();
             if prime {
                 for slot in 0..self.frames_in_flight {
                     targets.push(
@@ -681,7 +620,7 @@ impl MtlContext {
                 .slot(&self.hw.device, read_slot, bytes)?;
             (Some(read), targets)
         } else {
-            (None, Vec::new())
+            (None, InlineVec::new())
         };
         Ok(HistoryBuffers {
             deformed_this_frame,

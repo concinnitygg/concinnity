@@ -10,90 +10,65 @@
 //! the compile is one call, and a bar frozen mid-sweep reads as a hang.
 
 use concinnity_engine::components::TextAlign;
-use concinnity_engine::ecs::World;
 
-use crate::editor::hud_ids::{Family, family_base, hud_ids};
-use crate::editor::{theme, widget};
-
-hud_ids! {
-    base: family_base(Family::Loading);
-    sprites: [pub(crate) COVER];
-    labels: [pub(crate) CAPTION];
-}
+use crate::editor::theme;
+use crate::editor::ui::shapes::{Shape, Shapes};
 
 // The same black the shots hand over through, so the cover gives way to the
 // opening fade without a step in between.
 const COVER_TINT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-const CAPTION_SCALE: f32 = 1.0;
 
-// The caption a world's name earns, or the bare word while nothing is named.
-pub(crate) fn caption(name: Option<&str>) -> String {
-    match name {
-        Some(name) => format!("Loading {name}"),
-        None => "Loading".to_string(),
+// Write the caption a world's name earns into `out`, or the bare word while
+// nothing is named.
+pub(crate) fn caption(name: Option<&str>, out: &mut String) {
+    out.clear();
+    out.push_str("Loading");
+    if let Some(name) = name {
+        out.push(' ');
+        out.push_str(name);
     }
 }
 
-// Cover `area` (the window the sidebar does not stand on) and caption it.
-pub(crate) fn place(world: &mut World, area: [f32; 4], name: Option<&str>) {
-    widget::place_sprite(world, COVER, area, COVER_TINT, true);
-    if let Some(label) = widget::label_mut(world, CAPTION) {
-        label.x = area[0] + area[2] * 0.5;
-        label.y = area[1] + area[3] * 0.5 - 10.0 * CAPTION_SCALE;
-        label.align = TextAlign::Center;
-        label.color = theme::LABEL_DIM;
-        label.scale = CAPTION_SCALE;
-        label.visible = true;
-        label.content = caption(name);
-    }
-}
-
-pub(crate) fn hide(world: &mut World) {
-    ids().hide(world);
+// Cover `area` (the window the sidebar does not stand on) and caption it in
+// its middle.
+pub(crate) fn push(shapes: &mut Shapes<'_>, area: [f32; 4], caption: &str) {
+    shapes.push(Shape {
+        rect: area,
+        fill: COVER_TINT,
+        text: caption,
+        text_color: theme::LABEL_DIM,
+        align: TextAlign::Center,
+        ..Shape::default()
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextLabel};
-
-    fn injected_world() -> World {
-        let mut world = World::new();
-        world.push_identified(COVER, Sprite::default());
-        world.push_identified(CAPTION, TextLabel::default());
-        world
-    }
 
     #[test]
     fn the_cover_fills_its_area_and_names_what_is_loading() {
-        let mut world = injected_world();
-        place(&mut world, [280.0, 0.0, 1000.0, 720.0], Some("bistro"));
+        let mut text = String::new();
+        caption(Some("bistro"), &mut text);
+        let mut list = Vec::new();
+        let mut shapes = Shapes::new(&mut list);
+        push(&mut shapes, [280.0, 0.0, 1000.0, 720.0], &text);
+        shapes.finish();
 
-        let cover = world.query::<Sprite>().next().expect("the cover");
-        assert!(cover.visible);
-        assert_eq!((cover.x, cover.y), (280.0, 0.0));
-        assert_eq!((cover.width, cover.height), (1000.0, 720.0));
+        let cover = &list[0];
+        assert_eq!(cover.rect, [280.0, 0.0, 1000.0, 720.0]);
         assert_eq!(
-            cover.tint, COVER_TINT,
+            cover.fill, COVER_TINT,
             "opaque, so nothing half-built shows"
         );
-
-        let label = world.query::<TextLabel>().next().expect("the caption");
-        assert!(label.visible);
-        assert_eq!(label.content, "Loading bistro");
-        assert_eq!(label.align, TextAlign::Center);
-        assert_eq!(
-            label.x, 780.0,
-            "centered in the covered area, not the window"
-        );
-
-        hide(&mut world);
-        assert!(!world.query::<Sprite>().next().unwrap().visible);
-        assert!(!world.query::<TextLabel>().next().unwrap().visible);
+        assert_eq!(cover.text, "Loading bistro");
+        assert_eq!(cover.align, TextAlign::Center);
     }
 
     #[test]
     fn an_unnamed_world_still_says_what_is_happening() {
-        assert_eq!(caption(None), "Loading");
+        let mut text = "stale".to_string();
+        caption(None, &mut text);
+        assert_eq!(text, "Loading");
     }
 }

@@ -28,14 +28,6 @@ impl EditorHook {
     // Skipped: generated assets (no authored entry to clone), singleton types
     // (a second instance is a cook error), and a type at its world limit.
     pub(super) fn duplicate(&mut self, handles: Vec<AssetHandle>) -> usize {
-        let assets = crate::project::assets_dir();
-        let resolve =
-            |d: &str| concinnity_host::store::source::resolve_source_path(d, assets.as_deref());
-        let find = |name: &str| {
-            assets
-                .as_deref()
-                .is_some_and(|dir| concinnity_host::store::source::find_in(dir, name).is_some())
-        };
         let mut copies = Vec::new();
         let mut copied: Vec<Copied> = Vec::new();
         let mut refused = Vec::new();
@@ -60,13 +52,16 @@ impl EditorHook {
                 let new_name = self.unique_from(base);
                 set_entry_id(&mut clone, &new_name);
             }
-            copied.extend(owned_files::copy_owned(&mut clone, resolve, find));
+            let root = self.entries.root_of(idx, self.world_origin());
+            copied.extend(owned_files::copy_owned(&mut clone, |d| {
+                concinnity_host::store::source::resolve(d, Some(&root))
+            }));
             let file = self.entries.included_from(idx).map(Path::to_path_buf);
             let home = match &file {
                 Some(file) if !self.entries.is_read_only(idx) => EntryHome::File(file),
                 _ => EntryHome::World,
             };
-            if let Some(key) = self.add_entry(clone, home) {
+            if let Some(key) = self.add_entry_from(clone, &root, home) {
                 copies.push(AssetHandle::Entry(key));
             }
         }

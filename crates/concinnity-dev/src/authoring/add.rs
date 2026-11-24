@@ -1,4 +1,4 @@
-//! Add assets to a world JSONL.
+//! Add assets to a .jsonl file.
 //!
 //! `cn add` funnels through `add_to_path`, which:
 //!   - bootstraps a missing world from a `.glb` / `.fbx` / `.txt` / `.md`
@@ -9,7 +9,7 @@
 //!     when one is requested for a scene landing in a renderer-less world,
 //!   - resolves each target as a file path, a known asset type name, or an
 //!     inline `["Type", {args}]` entry, building one or more asset entries,
-//!   - patches the world JSONL atomically. Every target resolves before the
+//!   - patches the .jsonl file atomically. Every target resolves before the
 //!     file is touched, so one bad target leaves the world as it was. Only the
 //!     requested entries are written; injected companions and engine defaults
 //!     stay build-time only, and nothing is cooked until the next `cn run` or
@@ -20,7 +20,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::math::SaturatingFrom;
 
 use concinnity_cook::authoring::world::{
-    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, entry_type_name, parse_entry,
+    args_with_id, entry_errors, entry_handle, entry_id, entry_type_name, parse_entry,
     patch_world_jsonl_to, set_entry_id, take_entry_id,
 };
 use std::path::Path;
@@ -29,7 +29,7 @@ use std::path::Path;
 ///
 /// `template` selects a named scaffold preset when scaffolding fires (a scene
 /// target landing in a world with no renderer trigger). Unknown names error out
-/// before touching the world file. `id` declares the `$id` written into the
+/// before touching the file. `id` declares the `$id` written into the
 /// world (see [`apply_id_override`]) and names a single target only.
 pub(crate) fn add_to_path<T: AsRef<str>>(
     world_path: &Path,
@@ -131,7 +131,7 @@ fn merge_target(
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!(
-                    "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
+                    "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in the file; \
                      remove it first with `concinnity rm {entry_name}`"
                 ),
             ));
@@ -243,7 +243,7 @@ pub(crate) fn try_retarget_environment_map(
 // empty when no scaffolding is needed: no target bootstraps a world, the world
 // already has a renderer-trigger asset (a TextLabel, a Window, or any other
 // type that renders), or the targets provide their own renderer trigger (e.g. a
-// text target's TextLabel). Errors when the world file is missing and no target
+// text target's TextLabel). Errors when the file is missing and no target
 // can bootstrap one: only scene (`.glb`, `.gltf`, `.fbx`) and text (`.txt`,
 // `.md`) targets may create a world from nothing.
 //
@@ -267,7 +267,7 @@ fn scaffold_to_inject<T: AsRef<str>>(
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
-                "no world found at '{}': create one with `concinnity init` or `concinnity new`",
+                "no file at '{}': only a scene or text target starts one; create an application with `concinnity init` or `concinnity new`",
                 world_path.display()
             ),
         ));
@@ -365,7 +365,7 @@ fn ensure_world_file_exists(world_path: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(world_path, "")?;
-    tracing::info!("created empty world file at {}", world_path.display());
+    tracing::info!("created empty file at {}", world_path.display());
     Ok(())
 }
 
@@ -460,7 +460,7 @@ fn validated_entry(
     }))
 }
 
-// The args JSON written into world.jsonl for a validated add: the supplied
+// The args JSON written into a .jsonl file for a validated add: the supplied
 // args merged over the type's defaults (as `create_asset_def` resolves them)
 // and normalized through the typed schema. The def's baked bytes are postcard
 // and cannot round-trip to JSON.
@@ -629,7 +629,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
-        // world.jsonl stays compact (see concinnity_engine::bake::import).
+        // the authored file stays compact (see concinnity_engine::bake::import).
         //
         // A `.glb` is checked for the panorama-sphere packaging first: those
         // files carry an environment image, not geometry, and importing one as
@@ -641,7 +641,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
             std::io::ErrorKind::InvalidInput,
             format!(
                 "unknown extension '.{other}'; pass a type name instead \
-                 (e.g. `concinnity add Logger`) or edit {WORLD_JSONL} directly"
+                 (e.g. `concinnity add Logger`) or edit the file directly"
             ),
         )),
     }
@@ -708,7 +708,7 @@ fn read_source_file(path_str: &str) -> std::io::Result<String> {
 
 // Cap text-label contents at a size that makes sense for a HUD overlay. A
 // TextLabel isn't a document viewer; multi-MB drops would silently bloat
-// world.jsonl and the per-frame layout pass.
+// the .jsonl file and the per-frame layout pass.
 const TEXT_LABEL_MAX_BYTES: usize = 64 * 1024;
 
 // Read a `.txt` / `.md` file for use as TextLabel `content`. Strips a single
@@ -818,9 +818,7 @@ fn refuse_build_config(asset_type: &str) -> std::io::Result<()> {
     if asset_type.to_lowercase().replace('_', "") == "buildconfig" {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!(
-                "BuildConfig cannot be added via `concinnity add`; edit {WORLD_JSONL} directly"
-            ),
+            "BuildConfig cannot be added via `concinnity add`; edit the file directly",
         ));
     }
     Ok(())
@@ -888,7 +886,7 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
             "could not resolve '{target}' as any of:\n  \
              - a file path (no such file found)\n  \
              - a known asset type (use `concinnity list` to see available types)\n  \
-             - an inline entry, a world line such as '[\"Window\", {{}}]'"
+             - an inline entry, a line such as '[\"Window\", {{}}]'"
         ),
     ))
 }
@@ -1890,9 +1888,9 @@ mod tests {
         )
         .unwrap();
 
-        let ids = concinnity_cook::authoring::world::known_names(&world).unwrap();
+        let ids = concinnity_cook::authoring::world::known_names(&world, Some(dir.path())).unwrap();
         assert_eq!(ids, ["notes", "main"]);
-        assert!(!dir.join(".concinnity").exists(), "add cooks nothing");
+        assert!(!dir.join("data").exists(), "add cooks nothing");
     }
 
     #[test]

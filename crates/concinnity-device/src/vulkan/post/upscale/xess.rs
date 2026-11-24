@@ -29,7 +29,7 @@ use crate::upscale_sdk::xess::{
 };
 use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};
 
-const LIBRARY: &str = if cfg!(windows) {
+pub(super) const LIBRARY: &str = if cfg!(windows) {
     "libxess.dll"
 } else {
     "libxess.so"
@@ -164,11 +164,8 @@ impl XessExtQuery {
         unsafe { copy_ext_names(count, exts) }
     }
 
-    // Patch the device-feature `pNext` chain with XeSS's required features and
-    // return the (possibly new) chain head, to be set as `VkDeviceCreateInfo.pNext`.
-    // `head` is the caller's existing chain; the memory the SDK adds is owned by
-    // the library and valid while `self` lives. On failure the caller's `head`
-    // is returned unchanged.
+    // Patch the device-feature chain with XeSS's features and return the new head;
+    // `head` unchanged on failure.
     pub(super) fn device_features(
         &self,
         instance: &ash::Instance,
@@ -236,10 +233,6 @@ impl XessUpscaler {
         extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
         let Some(library) = open_library(LIBRARY) else {
-            tracing::warn!(
-                "{LABEL}: {LIBRARY} not found (build.rs did not bundle it; set CN_XESS_SDK or put \
-                 the library on the search path). Trying the next backend."
-            );
             return Ok(None);
         };
         let Some(api) = XessVkApi::resolve(&library) else {

@@ -157,12 +157,9 @@ impl System for InputSystem {
         ];
         let nav = self.nav.step(dpad_held, pad.move_axis, dt);
 
-        // While a world-pausing screen is open (the overlay build published
-        // the state earlier this tick), freeze gameplay input so the camera
-        // does not drift behind the menu; the UI still gets the cursor
-        // position, clicks, and Escape. A non-pausing screen that captures
-        // input (a live console) also suppresses gameplay keys -- the world
-        // keeps simulating, but keystrokes belong to the screen.
+        // A world-pausing screen freezes gameplay input; an input-capturing
+        // screen also takes the keys. The UI still gets the cursor, clicks and
+        // Escape.
         let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         let screen_captures = ctx
             .resource::<ScreenStack>()
@@ -178,11 +175,8 @@ impl System for InputSystem {
             top_inset,
             ..compose_frame_input(&raw, &pad, self.bindings, nav, gameplay)
         };
-        // Publish the same snapshot two ways: the resource readers can
-        // fetch by type, and the component column the camera and UI
-        // systems still query. Both readers query rather than drain, so the
-        // column carries one entity for the world's life (seeded at init) and
-        // each frame overwrites it in place.
+        // Publish the snapshot as a resource and overwrite the one-entity
+        // component column the camera and UI query.
         ctx.insert_resource(frame_input.clone());
         if let Some(slot) = ctx.query_mut::<FrameInput>().next() {
             *slot = frame_input;

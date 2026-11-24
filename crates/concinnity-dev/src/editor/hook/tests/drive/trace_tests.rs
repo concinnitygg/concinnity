@@ -64,13 +64,17 @@ fn trace_events_become_pulses_and_live_values() {
         h.live_vars,
         vec![("n".to_string(), "int".to_string(), "3".to_string())]
     );
-    let data = h.behavior_data();
+    h.prepare_behavior(&mut world);
     assert_eq!(
-        data.pulse_cards.len(),
+        h.behavior.marks.pulse_cards.len(),
         1,
         "the node's card carries the pulse"
     );
-    assert_eq!(data.pulse_rows.len(), 1, "so does its outline row");
+    assert_eq!(
+        h.behavior.marks.pulse_rows.len(),
+        1,
+        "so does its outline row"
+    );
     // The same frame again reports nothing new; the pulse just decays.
     h.drive_trace(&mut world);
     assert_eq!(h.behavior.pulses.len(), 1);
@@ -83,6 +87,15 @@ fn trace_events_become_pulses_and_live_values() {
         "{:?}",
         vdata.rows
     );
+
+    // A new trace frame with the same values leaves the live revision alone,
+    // so the Variables rows are not read again.
+    let revision = h.live_revision;
+    if let Some(t) = world.resource_mut::<concinnity_engine::protocol::ExecutionTrace>() {
+        t.frame = 2;
+    }
+    h.drive_trace(&mut world);
+    assert_eq!(h.live_revision, revision);
 }
 
 // A pulse fades by frame time rather than wall time: frames short of the pulse
@@ -176,15 +189,16 @@ fn ctrl_click_toggles_a_card_breakpoint() {
         .expect("the body has a node card");
 
     h.ctrl_held = true;
-    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world);
     assert_eq!(h.behavior.breakpoints.len(), 1);
     assert_eq!(h.behavior.breakpoints[0].0, "b", "held by behavior name");
+    h.prepare_behavior(&mut world);
     assert_eq!(
-        h.behavior_data().break_cards,
+        h.behavior.marks.break_cards,
         vec![card],
         "the card shows its marker"
     );
-    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world);
     assert!(
         h.behavior.breakpoints.is_empty(),
         "a second toggle removes it"
@@ -192,6 +206,6 @@ fn ctrl_click_toggles_a_card_breakpoint() {
 
     // A plain click still selects.
     h.ctrl_held = false;
-    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world);
     assert!(h.behavior.row.is_some());
 }

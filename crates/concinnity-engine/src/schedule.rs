@@ -17,7 +17,7 @@ use crate::environment::sky::SkyRotationSystem;
 use crate::environment::water::spray::WaterSpraySystem;
 use crate::frame_report::FrameReportSystem;
 use crate::input::system::{InputSystem, PadSource};
-use crate::input::text_input::TextInputSystem;
+use crate::input::text_field::TextFieldSystem;
 use crate::launch::LaunchRequest;
 use crate::presentation::hud::debug_hud::DebugHudSystem;
 use crate::presentation::hud::fps_counter::FpsCounterSystem;
@@ -148,7 +148,7 @@ impl<H: SystemHost> CoreSystems<H> {
     /// The world's behaviors, whose requests drain later this tick.
     pub const BEHAVIOR: SystemEntry = SystemEntry {
         name: "BehaviorSystem",
-        present_when: "the world declares any Behavior",
+        present_when: "the world declares any Behavior or Variables",
         phase: Phase::Logic,
         gate: behavior::<H>,
         after: &["OverlaySystem"],
@@ -250,11 +250,11 @@ impl<H: SystemHost> CoreSystems<H> {
     };
 
     /// Editing of the focused text field.
-    pub const TEXT_INPUT: SystemEntry = SystemEntry {
-        name: "TextInputSystem",
-        present_when: "the world declares any TextInput",
+    pub const TEXT_FIELD: SystemEntry = SystemEntry {
+        name: "TextFieldSystem",
+        present_when: "the world declares any TextField",
         phase: Phase::Late,
-        gate: |world| boxed(TextInputSystem::for_world(world)),
+        gate: |world| boxed(TextFieldSystem::for_world(world)),
         after: &[],
         before: &[],
     };
@@ -341,13 +341,14 @@ impl<H: SystemHost> CoreSystems<H> {
         before: &["UiInputSystem"],
     };
 
-    /// UI hit testing, navigation and screen commands.
+    /// UI hit testing, navigation and screen commands, after the settings
+    /// drain so bound labels and handles show the values it published.
     pub const UI_INPUT: SystemEntry = SystemEntry {
         name: "UiInputSystem",
         present_when: "the world declares any HitRegion, Screen, or KeyBinding",
         phase: Phase::PreRender,
         gate: |world| boxed(UiInputSystem::for_world(world)),
-        after: &["LoadingOverlaySystem"],
+        after: &["LoadingOverlaySystem", "SettingsSystem"],
         before: &[],
     };
 
@@ -388,7 +389,7 @@ impl<H: SystemHost> CoreSystems<H> {
         Self::STORY,
         Self::AUDIO,
         Self::SCREENSHOT,
-        Self::TEXT_INPUT,
+        Self::TEXT_FIELD,
         Self::STAT_HUD,
         Self::DEBUG_HUD,
         Self::FPS_COUNTER,

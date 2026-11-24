@@ -3,4 +3,5 @@
 
 pub(crate) mod hud;
 pub mod screenshot;
+pub mod text_edit;
 pub(crate) mod ui;

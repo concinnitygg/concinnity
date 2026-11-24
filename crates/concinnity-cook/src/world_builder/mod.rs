@@ -14,8 +14,8 @@ use concinnity_host::store::blob::BlobData;
 
 use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
 use crate::authoring::world::{
-    anonymous_label, entry_handle, entry_handles, entry_id, find_entry, parse_world_jsonl,
-    write_world_jsonl,
+    WorldSource, anonymous_label, entry_handle, entry_handles, entry_id, find_entry,
+    parse_world_jsonl, write_world_jsonl,
 };
 use crate::build_only::{LoadedWorld, merge_args, prepare_world};
 use crate::pipeline::{PipelineResult, build_compiled, write_blobs_to};
@@ -34,9 +34,8 @@ pub struct WorldBuilder {
     targets: PlatformSet,
     // The declared entries, built as each asset is added.
     entries: Vec<serde_json::Value>,
-    // The search root a bare `source` filename resolves under, when the
-    // embedder named one.
-    assets_dir: Option<PathBuf>,
+    // The root every relative path resolves under, when the embedder named one.
+    root: Option<PathBuf>,
     // Id and type per entry, so the declaration order can be inspected
     // without re-reading the entries.
     declared: Vec<(String, &'static str)>,
@@ -51,24 +50,24 @@ pub fn world(targets: impl Into<PlatformSet>) -> WorldBuilder {
     WorldBuilder {
         targets: targets.into(),
         entries: Vec::new(),
-        assets_dir: None,
+        root: None,
         declared: Vec::new(),
         error: None,
     }
 }
 
 impl WorldBuilder {
-    /// Resolve bare `source` filenames under `dir`, the way a build resolves
-    /// them under a state tree's `assets/`. Without one only a path that stands
-    /// on its own resolves, since nothing here guesses a root.
-    pub fn assets_in(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
-        self.assets_dir = Some(dir.into());
+    /// Resolve every relative path under `dir`, the way a build resolves them
+    /// under a state tree's content root. Without one only an absolute path
+    /// resolves, since nothing here guesses a root.
+    pub fn rooted_at(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
+        self.root = Some(dir.into());
         self
     }
 
-    /// The asset search root this build resolves against, if one was named.
-    pub fn assets_dir(&self) -> Option<&Path> {
-        self.assets_dir.as_deref()
+    /// The root this build resolves against, if one was named.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
     }
 
     /// Declare `value` under the `$id` `id`, the name a reference to it uses.
@@ -88,7 +87,7 @@ impl WorldBuilder {
         self
     }
 
-    /// Declare every entry of world file text, one `["Type", {args}]` per
+    /// Declare every entry of file text, one `["Type", {args}]` per
     /// line, in file order after the assets already declared. An entry
     /// without a `$id` is listed by its anonymous label, such as `Prop#0`.
     pub fn add_jsonl(&mut self, text: &str) -> &mut Self {
@@ -108,7 +107,7 @@ impl WorldBuilder {
         self
     }
 
-    /// Lay world file text over the assets already declared. An entry with
+    /// Lay file text over the assets already declared. An entry with
     /// the `$id` of a declared asset, or with no `$id` and the type of an
     /// anonymous one, patches the first such asset: objects merge field by
     /// field, and anything else, `null` included, replaces the field. Any
@@ -288,13 +287,11 @@ impl WorldBuilder {
             )));
         }
 
-        // Bare `source` filenames resolve under the root the embedder named
-        // (`assets_in`). Without one there is no tree to search, so only paths
-        // that stand on their own resolve.
-        let assets_dir = self.assets_dir.clone();
+        // Paths resolve under the root the embedder named (`rooted_at`).
+        let root = self.root.clone();
         let text = write_world_jsonl(&self.entries).map_err(WorldBuildError::Build)?;
-        let loaded: LoadedWorld = prepare_world(&text, assets_dir.as_deref())?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), self.targets)
+        let loaded: LoadedWorld = prepare_world(WorldSource::text(&text, root.as_deref()))?;
+        build_compiled(loaded.assets, root.as_deref(), self.targets)
     }
 }
 
@@ -577,14 +574,14 @@ mod tests {
         assert!(err.contains("missing"), "{err}");
     }
 
-    // The search root is what a bare `source` filename resolves under, so a
+    // The root is what a relative path resolves under, so a
     // caller can read back the one it named.
     #[test]
     fn the_named_asset_root_is_readable() {
         let mut spec = builder();
-        assert!(spec.assets_dir().is_none());
-        spec.assets_in("project/assets");
-        assert_eq!(spec.assets_dir(), Some(Path::new("project/assets")));
+        assert!(spec.root().is_none());
+        spec.rooted_at("project");
+        assert_eq!(spec.root(), Some(Path::new("project")));
     }
 
     // Naming a reference with nothing to attach it to is the caller's

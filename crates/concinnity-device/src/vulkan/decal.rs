@@ -45,28 +45,13 @@ pub(in crate::vulkan) const MAX_DECALS: usize = concinnity_engine::render::decal
 // The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
 const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 
-// Stride for the per-decal params uniform buffer ring. Vulkan's
-// `minUniformBufferOffsetAlignment` is at most 256 bytes on every
-// desktop GPU we target (spec-guaranteed upper bound), so a constant
-// 256 byte stride keeps each dynamic-offset slot naturally aligned
-// without querying the device.
+// Stride of the per-decal params ring: `minUniformBufferOffsetAlignment` is at
+// most 256 by spec, so 256 always aligns.
 const PARAMS_STRIDE: u64 = 256;
 
-// Owned by `VkContext` exactly once: the decal pipeline + its dependent
-// resources. The decal slot table lives on `VkContext` itself (mirroring the
-// DirectX / Metal layout).
-//
-// Decal-pass descriptor sets follow a two-set layout:
-//   * **set 0** (per-frame, FRAMES sets):
-//       - binding 0: UNIFORM_BUFFER, `DecalView` (per-frame)
-//       - binding 1: UNIFORM_BUFFER_DYNAMIC, `DecalParams` ring (per-frame,
-//         MAX_DECALS slots; dynamic offset picks the per-decal slot)
-//       - binding 2: SAMPLED_IMAGE, main depth view, read by texel (per-frame
-//         so a future-frame depth swap doesn't break a binding allocated
-//         from a sibling frame slot)
-//   * **set 1** (per-decal, MAX_DECALS sets):
-//       - binding 0: SAMPLED_IMAGE, decal albedo
-//       - binding 1: SAMPLER, the albedo's sampler
+// The decal pipeline and its resources. Set 0 is per frame: the `DecalView`
+// UBO (0), the dynamic `DecalParams` ring (1), and the main depth (2). Set 1 is
+// per decal: its albedo (0) and sampler (1).
 pub(in crate::vulkan) struct DecalResources {
     pub(in crate::vulkan) render_pass: OwnedRenderPass,
     pub(in crate::vulkan) pipeline: OwnedPipeline,
@@ -277,11 +262,7 @@ impl DecalResources {
         })
     }
 
-    // Rebuild the framebuffers + re-point the per-frame view set's depth
-    // binding after a swapchain resize. Called from
-    // `VkContext::rebuild_swapchain`; same pattern as `SsrResources` /
-    // `SsaoResources`. The pipeline, layouts, buffers, and
-    // per-decal albedo sets all survive.
+    // Rebuild the framebuffers and re-point the view set's depth after a resize.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkDevice,
@@ -331,13 +312,8 @@ fn create_decal_render_pass(
     device: &VkDevice,
     format: vk::Format,
 ) -> RenderResult<OwnedRenderPass> {
-    // One color attachment: the resolved HDR scene. The main pass left
-    // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
-    // during the subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so
-    // SSR / TAA / bloom / composite can sample it. The subpass
-    // dependencies + (initial=SHADER_READ_ONLY, final=SHADER_READ_ONLY)
-    // do the round-trip transition without an explicit barrier from the
-    // caller.
+    // The resolved HDR scene as the one attachment; the subpass dependencies make
+    // the SHADER_READ_ONLY round trip.
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -536,13 +512,9 @@ fn bytemuck_cast<T: bytemuck::NoUninit>(s: &[T]) -> &[u8] {
 // Encoder
 
 impl VkContext {
-    // Encode the projected-decal pass. Called between the main HDR
-    // resolve and the SSR resolve so a decal is reflected by SSR and
-    // tracked by TAA's history buffer like the rest of the scene.
-    //
-    // `vp` is the same jittered view-projection the main pass
-    // rasterized with; the inverse drives the world-space reconstruction
-    // in the fragment shader.
+    // Encode the projected-decal pass between the main resolve and SSR, so decals
+    // are reflected and accumulated like the scene. `vp` is the main pass's
+    // jittered view-projection.
     pub(in crate::vulkan) fn encode_decals(
         &self,
         rec: &Recorder<'_>,
@@ -642,15 +614,8 @@ impl VkContext {
 // Runtime decals (`RenderBackend::add_decal` / `remove_decal`)
 
 impl VkContext {
-    // Re-point every decal albedo set that pointed at texture-pool slot
-    // `slot` to the new `GpuImage` at that slot. Called from the
-    // streaming-texture path when an evicted slot is replaced. Walks
-    // `decal.resources.decal_texture_slots` so a world with no decals pays
-    // nothing.
-    // Whether any live decal's albedo set samples texture-pool `slot`. The
-    // streaming fast path checks this: decal sets are single-copy and bound
-    // whenever the decal pass runs, so a swap of a slot they sample must
-    // drain the device before rewriting.
+    // Whether any live decal samples texture-pool `slot`. Decal sets are
+    // single-copy and always bound, so a swap of such a slot must drain first.
     pub(in crate::vulkan) fn decal_samples_slot(&self, slot: usize) -> bool {
         match &self.decal.resources {
             Some(s) => s.decal_texture_slots.get().contains(&slot),
@@ -658,6 +623,7 @@ impl VkContext {
         }
     }
 
+    // Re-point every decal albedo set that samples pool `slot` at its new view.
     pub(in crate::vulkan) fn rewrite_decal_albedo_slot(&self, slot: usize) {
         let Some(decals) = &self.decal.resources else {
             return;

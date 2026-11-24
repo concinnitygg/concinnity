@@ -1,3 +1,6 @@
 [submodule "tools"]
 	path = tools
 	url = https://github.com/concinnitygg/tools
+[submodule "assets"]
+	path = assets
+	url = https://github.com/concinnitygg/assets

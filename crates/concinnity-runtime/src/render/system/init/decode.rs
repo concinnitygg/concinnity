@@ -222,10 +222,10 @@ impl GraphicsSystem {
         }
 
         let source_map = if capture_sources {
-            let assets_dir = self.assets_dir();
+            let root = self.content_root();
             ShaderSourceMap::build(
                 shader_ids.iter().copied().zip(&world_shaders),
-                |raw| source_path_text(raw, assets_dir.as_deref()),
+                |raw| source_path_text(raw, root.as_deref()),
                 concinnity_host::thread::asset_id::name_of,
             )
         } else {
@@ -257,7 +257,7 @@ impl GraphicsSystem {
                 .and_then(|s| s.0.clone())
         {
             environment_map_source = Some(EnvironmentMapSource {
-                resolved_path: source_path_text(&info.source, self.assets_dir().as_deref()),
+                resolved_path: source_path_text(&info.source, self.content_root().as_deref()),
                 prefilter_face_size: info.prefilter_face_size,
                 irradiance_face_size: info.irradiance_face_size,
                 prefilter_samples: info.prefilter_samples,
@@ -283,7 +283,7 @@ impl GraphicsSystem {
                 .and_then(|c| c.0.clone())
         {
             color_lut_source = Some(ColorLutSource {
-                resolved_path: source_path_text(&src, self.assets_dir().as_deref()),
+                resolved_path: source_path_text(&src, self.content_root().as_deref()),
             });
         }
         Some((color_lut_bytes, color_lut_source))
@@ -573,8 +573,8 @@ fn decode_failed(ctx: &mut PipelineContext<'_>, error: &impl core::fmt::Display)
 }
 
 // A source's resolved path as the text the engine's no_std source catalogs hold.
-fn source_path_text(source: &str, assets_dir: Option<&std::path::Path>) -> String {
-    concinnity_host::store::source::resolve_source_path(source, assets_dir)
+fn source_path_text(source: &str, root: Option<&std::path::Path>) -> String {
+    concinnity_host::store::source::resolve(source, root)
         .to_string_lossy()
         .into_owned()
 }

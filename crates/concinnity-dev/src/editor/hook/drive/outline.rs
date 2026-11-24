@@ -215,11 +215,8 @@ fn push_probe(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     }
 }
 
-// The live Camera3D is the editor's own viewpoint (fly moves it), so the
-// frustum builds from the authored args, anchored on the seeded Transform so
-// a gizmo drag carries it. Each projection key carries a usable fallback: an
-// authored value that is not a number would otherwise collapse the frustum
-// and the outline would silently disappear.
+// The camera frustum from the authored args on the seeded Transform, each
+// projection key falling back to a usable value.
 fn push_camera(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let args = form::working_args(ctx.ty, ctx.entry.get("args").and_then(|v| v.as_object()));
     let num = |key: &str, default: f32| {

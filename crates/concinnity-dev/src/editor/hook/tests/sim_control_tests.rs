@@ -77,16 +77,15 @@ fn a_held_ctrl_p_toggles_once() {
 #[test]
 fn transport_chips_drive_the_transport() {
     let mut h = hook(Vec::new());
-    let mut world = World::new();
-    h.apply_top(HudAction::PlayPause, &mut world);
+    h.apply_top(HudAction::PlayPause);
     assert!(h.sim.playing());
-    h.apply_top(HudAction::Step, &mut world);
+    h.apply_top(HudAction::Step);
     assert_eq!(
         h.sim.state,
         sim::SimState::Paused,
         "Step while playing pauses"
     );
-    h.apply_top(HudAction::Stop, &mut world);
+    h.apply_top(HudAction::Stop);
     assert_eq!(h.sim.state, sim::SimState::Stopped);
     assert!(h.rebuild_preview);
 }

@@ -81,7 +81,9 @@ impl FileKind {
 /// becomes mesh data); other kinds are path-only references.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, crate::ecs::AssetFields)]
 pub struct FileArgs {
-    /// Path to the source file, relative to the project root.
+    /// Path to the source file, relative to the root of the file holding the
+    /// line.
+    #[asset(file)]
     pub path: String,
     /// File category. Inferred from the path extension when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,7 +138,7 @@ mod tests {
     }
 
     // `cn add` writes normalized args back, so an inferred kind stays absent
-    // rather than being frozen into the world file.
+    // rather than being frozen into the file.
     #[test]
     fn an_absent_kind_is_omitted_from_the_serialized_args() {
         let args: FileArgs = serde_json::from_str(r#"{"path":"assets/board.obj"}"#).unwrap();
@@ -161,7 +163,7 @@ mod tests {
 /// [`cook::File`](crate::components::cook::File) plus its payload locator.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct File {
-    /// Path to the source file, relative to the world.
+    /// Path to the source file, relative to the build's root.
     pub path: String,
     /// Content category, derived from the extension when not authored.
     pub kind: Option<FileKind>,

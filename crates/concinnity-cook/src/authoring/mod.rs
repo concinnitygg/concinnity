@@ -1,6 +1,6 @@
 //! The authored world model: the input side of the cook.
 //!
-//! Owns world.jsonl parsing and I/O plus structural validation
+//! Owns .jsonl parsing and I/O plus structural validation
 //! (`world`), the authoring type vocabulary (`registry`, whose
 //! `RegisteredType` is instantiated from the shared registry list in
 //! concinnity-engine), the asset cross-reference metadata (`refs`,

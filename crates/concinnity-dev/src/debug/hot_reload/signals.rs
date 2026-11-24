@@ -51,7 +51,7 @@ impl<K: Ord> Pending<K> {
 pub(crate) struct ReloadSignals {
     // File-backed texture / LUT / environment map / mesh payloads to decode again.
     assets: AtomicBool,
-    // world.jsonl changed: regenerate ProceduralMeshes and re-apply VolumetricFog.
+    // .jsonl changed: regenerate ProceduralMeshes and re-apply VolumetricFog.
     world: AtomicBool,
     // Animation source changed: re-import every file-backed clip.
     animations: AtomicBool,
@@ -121,7 +121,7 @@ impl ReloadSignals {
         std::mem::take(&mut *lock(&self.sdf_volumes))
     }
 
-    // Ask for every asset payload, animation clip, world.jsonl pass, Shader and
+    // Ask for every asset payload, animation clip, .jsonl pass, Shader and
     // SdfVolume field. Stories reload only on their own `.md` watch.
     pub(crate) fn request_all(&self) {
         self.request_assets();

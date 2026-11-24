@@ -16,8 +16,7 @@ pub struct ShaderFile {
     /// Which of the Shader's files this is.
     pub stage: ShaderStage,
     /// Resolved on-disk path. Stored resolved (not as declared) so the watcher
-    /// can subscribe to a real parent directory even when the declaration used
-    /// a bare filename.
+    /// can subscribe to its real parent directory.
     pub resolved_path: String,
 }
 

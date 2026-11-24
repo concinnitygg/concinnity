@@ -3,7 +3,7 @@ use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, button, label, screen};
-use crate::build_only::ui_spec::sprite;
+use crate::authoring::spec::{asset, spec_to_value};
 
 // The ending screen, shown by the story system when the last node runs out
 // of pages. Its button returns to the title screen, or restarts the story
@@ -13,7 +13,11 @@ pub(super) fn emit_ending_screen(names: &StoryNames) -> Vec<serde_json::Value> {
     let ending = &names.ending;
     let mut out = vec![
         screen(&ending.screen, false),
-        sprite(&ending.bg, 0.0, 0.0, win_w, win_h, [0.03, 0.03, 0.05, 1.0]),
+        spec_to_value(&asset::sprite(
+            &ending.bg,
+            [0.0, 0.0, win_w, win_h],
+            [0.03, 0.03, 0.05, 1.0],
+        )),
         label(
             &ending.fin,
             &names.font_title,

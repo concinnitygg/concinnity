@@ -1,67 +1,69 @@
-//! `EditorHook`: the toast stack's per-frame drive and click routing. The queue
-//! and lifetime policy live in `editor/notify.rs`, the card geometry in
-//! `editor/toast_overlay.rs`; here the hook draws the live stack each frame and
-//! resolves presses (a card runs its action and dismisses, the overflow row
-//! opens the Console, where the full history lives).
+//! `EditorHook`: the toast stack's per-frame drive and the clicks it reports.
+//! The inbox and feed live in `editor/notify.rs`, the stack widget in
+//! `editor/toasts.rs`; here the hook feeds what was pushed into the stack each
+//! frame, replays it into a world the panels were just built into, and runs a
+//! clicked card's action (the line counting the waiting cards opens the
+//! Console, where the full history lives).
 
+use std::time::Instant;
+
+use concinnity_engine::components::{Toast, UiEvent};
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
+use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::{notify, toast_overlay};
+use crate::editor::toasts::{self, ToastClick};
+use crate::editor::ui::BuiltUi;
 
 impl EditorHook {
-    pub(in crate::editor::hook) fn drive_toasts(
-        &mut self,
-        world: &mut World,
-        vp: [f32; 2],
-        shown: bool,
-        mouse: [f32; 2],
-    ) {
-        if !shown || vp[0] <= 0.0 || self.notifier.is_empty() {
-            // One hide pass after the last toast goes; zero work while idle.
-            if !self.toasts_hidden {
-                toast_overlay::hide(world);
-                self.toasts_hidden = true;
-            }
-            return;
+    // Feed what was pushed since the last frame into the stack, shown while
+    // the HUD is.
+    pub(in crate::editor::hook) fn drive_toasts(&mut self, world: &mut World, shown: bool) {
+        let mut out = std::mem::take(&mut self.toast_out);
+        self.toasts.feed(&self.notifier, Instant::now(), &mut out);
+        send_toasts(world, &mut out);
+        self.toast_out = out;
+        if let Some(id) = world.resource::<BuiltUi>().and_then(|b| b.toasts) {
+            toasts::set_visible(world, id, shown);
         }
-        let stack = self.notifier.stack();
-        if stack.cards.is_empty() {
-            if !self.toasts_hidden {
-                toast_overlay::hide(world);
-                self.toasts_hidden = true;
-            }
-            return;
-        }
-        toast_overlay::place(world, &stack, vp, mouse);
-        self.toasts_hidden = false;
     }
 
-    // Resolve a press over the toast stack; `false` when it misses (the caller
-    // routes on). Toasts draw above every panel, so this runs first.
-    pub(in crate::editor::hook) fn try_toast_press(
-        &mut self,
-        mx: f32,
-        my: f32,
+    // Show every live toast again in a world that has none.
+    pub(in crate::editor::hook) fn replay_toasts(&mut self, world: &mut World) {
+        let mut out = std::mem::take(&mut self.toast_out);
+        self.toasts.replay(Instant::now(), &mut out);
+        send_toasts(world, &mut out);
+        self.toast_out = out;
+    }
+
+    // Whether `(x, y)` lands on the toast stack, which takes the press itself.
+    pub(in crate::editor::hook) fn over_toasts(
+        world: &World,
+        x: f32,
+        y: f32,
         vp: [f32; 2],
-        world: &mut World,
     ) -> bool {
-        if self.toasts_hidden || self.notifier.is_empty() {
-            return false;
-        }
-        let stack = self.notifier.stack();
-        match toast_overlay::hit(mx, my, vp, &stack) {
-            Some(toast_overlay::Hit::Card(slot)) => {
-                if let Some(action) = self.notifier.click_card(slot) {
+        world
+            .resource::<BuiltUi>()
+            .and_then(|b| b.toasts)
+            .is_some_and(|id| toasts::covers(world, id, x, y, vp))
+    }
+
+    // Act on a click the stack reported; whether `event` was one.
+    pub(in crate::editor::hook) fn on_toast_event(
+        &mut self,
+        world: &mut World,
+        event: &UiEvent,
+    ) -> bool {
+        match toasts::click(event) {
+            Some(ToastClick::Dismissed(key)) => {
+                if let Some(action) = self.toasts.dismiss(&key) {
                     self.run_toast_action(action, world);
                 }
                 true
             }
-            // An operation card is not dismissible; it just absorbs the press
-            // so nothing behind it is clicked through.
-            Some(toast_overlay::Hit::Op) => true,
-            Some(toast_overlay::Hit::Overflow) => {
+            Some(ToastClick::More) => {
                 self.open_console_panel(world);
                 true
             }
@@ -89,8 +91,8 @@ impl EditorHook {
             }
             notify::Action::SelectAsset(name) => {
                 self.select_named(&name);
-                self.open_asset_form(&name, world);
-                self.reveal_in_tree(&name, world);
+                self.open_asset_form(&name);
+                self.reveal_in_tree(&name);
                 self.pick_last = None;
                 self.frame_selection(self.viewport, world);
             }
@@ -131,5 +133,16 @@ impl EditorHook {
             .as_ref()
             .and_then(|s| s.error())
             .map(String::from)
+    }
+}
+
+// Send the toasts in `out` to the world's stacks, leaving `out` empty.
+fn send_toasts(world: &mut World, out: &mut Vec<Toast>) {
+    if out.is_empty() {
+        return;
+    }
+    let events = world.events_mut::<Toast>();
+    for toast in out.drain(..) {
+        events.send(toast);
     }
 }

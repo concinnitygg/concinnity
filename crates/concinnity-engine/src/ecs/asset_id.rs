@@ -1,4 +1,4 @@
-//! Asset identity: names declared in world.jsonl are interned to an `AssetId` in
+//! Asset identity: names declared in a .jsonl file are interned to an `AssetId` in
 //! declaration order, and the blob and the runtime carry only the integer, so
 //! every cross-reference lookup is an integer compare.
 //!
@@ -51,6 +51,17 @@ pub struct MintedIds {
 }
 
 impl MintedIds {
+    /// A counter that mints past every id in `taken`, so a world loaded with
+    /// minted ids already in it never mints one of them again.
+    pub(crate) fn past(taken: impl Iterator<Item = AssetId>) -> Self {
+        let next = taken
+            .filter(|id| id.is_minted())
+            .map(|id| id.0.saturating_sub(AssetId::MINTED_BASE).saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        Self { next }
+    }
+
     /// The next unused minted id.
     ///
     /// Errors once the world has minted [`AssetId::MINTED_CAPACITY`] of them:
@@ -133,6 +144,19 @@ mod tests {
     use alloc::string::ToString;
 
     use super::*;
+
+    #[test]
+    fn a_counter_past_taken_ids_mints_after_the_highest() {
+        let taken = [
+            AssetId(3),
+            AssetId(AssetId::MINTED_BASE + 4),
+            AssetId(AssetId::MINTED_BASE),
+        ];
+        let mut ids = MintedIds::past(taken.into_iter());
+        assert_eq!(ids.next_id(), Ok(AssetId(AssetId::MINTED_BASE + 5)));
+        let mut fresh = MintedIds::past([AssetId(3)].into_iter());
+        assert_eq!(fresh.next_id(), Ok(AssetId(AssetId::MINTED_BASE)));
+    }
 
     #[test]
     fn round_trips_through_json_as_a_bare_integer() {

@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use concinnity_cook::authoring::world::write_world_jsonl;
-use concinnity_cook::build_only::include::{SourcedEntry, is_include};
+use concinnity_cook::build_only::include::{SourcedEntry, file_root, is_include, rebase_files};
 
 use layout::Layout;
 
@@ -65,19 +65,29 @@ pub(crate) enum Refusal {
     Moved(usize),
 }
 
-// The working entry list: the parsed world.jsonl values, each with its key
-// and the included file it was read from.
-//
-// Derefs to the values, so every read and every in-place value edit works as
-// it does on a `Vec`. The operations that change the length go through
-// `push`, `push_to` and `remove`, which keep the other columns in step.
+// The working entry list: parsed world.jsonl values with their keys and source
+// files. It derefs to the values; length changes go through `push`, `push_to`
+// and `remove`.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct EntryList {
     values: Vec<serde_json::Value>,
     keys: Vec<EntryId>,
     files: Vec<Option<Arc<Path>>>,
+    // The root each file's paths resolve against, `None` standing for the
+    // world file, as the read that built the list found it.
+    roots: Vec<(Option<Arc<Path>>, Arc<Path>)>,
     // Included files the world includes more than once.
     repeated: Vec<Arc<Path>>,
+    // Which version of the values this is: every change takes a number no
+    // list has held before, so equal revisions mean equal values.
+    revision: u64,
+}
+
+// The next revision any list takes.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
 }
 
 impl EntryList {
@@ -90,20 +100,36 @@ impl EntryList {
             values,
             keys,
             files,
+            revision: next_revision(),
             ..Self::default()
         }
     }
 
-    // Take the world at `world` with its includes resolved, keeping where each
-    // entry came from.
-    pub(crate) fn with_includes(sourced: Vec<SourcedEntry>, world: &Path) -> Self {
-        let mut list = Self::default();
-        for SourcedEntry { entry, file } in sourced {
+    // Which version of the values this is, for a reader that rebuilds what it
+    // shows only when they change.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    // Take a world with its includes resolved, keeping where each entry came
+    // from.
+    pub(crate) fn with_includes(sourced: Vec<SourcedEntry>, origin: Origin<'_>) -> Self {
+        let mut list = Self {
+            revision: next_revision(),
+            ..Self::default()
+        };
+        for SourcedEntry { entry, file, root } in sourced {
+            let file: Option<Arc<Path>> = file.map(PathBuf::into);
+            if let Some(root) = root
+                && !list.roots.iter().any(|(f, _)| *f == file)
+            {
+                list.roots.push((file.clone(), root.into()));
+            }
             list.values.push(entry);
             list.keys.push(EntryId::mint());
-            list.files.push(file.map(PathBuf::into));
+            list.files.push(file);
         }
-        let layout = list.layout(world);
+        let layout = list.layout(origin);
         for file in list.files.iter().flatten() {
             if !list.repeated.contains(file) && layout.times_opened(file) > 1 {
                 list.repeated.push(Arc::clone(file));
@@ -112,10 +138,71 @@ impl EntryList {
         list
     }
 
-    // The include structure, with the world file's `Include` lines resolved
-    // against `world`.
-    fn layout(&self, world: &Path) -> Layout {
-        Layout::of(&self.values, &self.files, world)
+    // The include structure, with every `Include` line resolved as the build
+    // resolves it.
+    fn layout(&self, origin: Origin<'_>) -> Layout {
+        Layout::of(&self.values, &self.files, |file| {
+            self.file_root(file, origin)
+        })
+    }
+
+    // The root the paths of the entry at `index` resolve against: the root of
+    // the file holding it.
+    pub(crate) fn root_of(&self, index: usize, origin: Origin<'_>) -> PathBuf {
+        self.file_root(self.included_from(index), origin)
+    }
+
+    // The root `file`'s paths resolve against (`None` for the world file): the
+    // one the read found, or for a file the list has not read, its library
+    // root, else the world file's, since the world is what includes it.
+    pub(crate) fn file_root(&self, file: Option<&Path>, origin: Origin<'_>) -> PathBuf {
+        let recorded = self
+            .roots
+            .iter()
+            .find(|(f, _)| f.as_deref() == file)
+            .or_else(|| {
+                let file = file?;
+                self.roots
+                    .iter()
+                    .find(|(f, _)| f.as_deref().is_some_and(|f| paths::same_file(f, file)))
+            });
+        if let Some((_, root)) = recorded {
+            return root.to_path_buf();
+        }
+        let world = || {
+            file_root(Some(origin.world), Some(origin.root), Some(origin.root))
+                .unwrap_or_else(|| origin.root.to_path_buf())
+        };
+        match file {
+            None => world(),
+            Some(file) => {
+                concinnity_host::store::source::marked_root(file, origin.root).unwrap_or_else(world)
+            }
+        }
+    }
+
+    // The text a build compiles the list from: every entry but the `Include`
+    // lines, whose files' entries the list already holds in their place, with
+    // each entry's file paths rebased onto the root as the build reads them.
+    pub(crate) fn build_text(&self, origin: Origin<'_>) -> std::io::Result<String> {
+        let mut roots: Vec<(Option<&Path>, PathBuf)> = Vec::new();
+        let mut inlined = Vec::with_capacity(self.values.len());
+        for (i, entry) in self.values.iter().enumerate() {
+            if is_include(entry) {
+                continue;
+            }
+            let file = self.included_from(i);
+            if !roots.iter().any(|(f, _)| *f == file) {
+                roots.push((file, self.file_root(file, origin)));
+            }
+            let from = roots.iter().find(|(f, _)| *f == file).map(|(_, r)| r);
+            let mut entry = entry.clone();
+            if let Some(from) = from {
+                rebase_files(&mut entry, from, origin.root);
+            }
+            inlined.push(entry);
+        }
+        write_world_jsonl(&inlined)
     }
 
     // Append an entry of the world file, returning the key minted for it.
@@ -123,22 +210,20 @@ impl EntryList {
         self.insert(self.values.len(), value, None)
     }
 
-    // Add an entry to `file` in the list read from the world file `world`,
-    // returning the key minted for it. A file the world includes takes it at
-    // the end of its entries. Any other file is included first, by an `Include`
-    // line appended to the world file naming it relative to the world file's
-    // directory; the save that writes the line creates the file. A file the
-    // world includes more than once, or the world file itself, takes nothing.
+    // Add an entry to `file`, returning its key. A file the world does not
+    // include gets an `Include` line first, naming it from the world file's
+    // root; a file included more than once, or the world file itself, takes
+    // nothing.
     pub(crate) fn push_to(
         &mut self,
         value: serde_json::Value,
         file: &Path,
-        world: &Path,
+        origin: Origin<'_>,
     ) -> Result<EntryId, String> {
-        if paths::same_file(file, world) {
+        if paths::same_file(file, origin.world) {
             return Err(format!("{} is the world file", paths::shown(file)));
         }
-        let layout = self.layout(world);
+        let layout = self.layout(origin);
         let mut opened = layout
             .openings
             .iter()
@@ -150,9 +235,14 @@ impl EntryList {
             }
             (Some(_), Some(_)) => Err(format!("{} is included more than once", paths::shown(file))),
             (None, _) => {
-                let dir = world.parent().unwrap_or_else(|| Path::new(""));
-                let path = paths::relative_from(dir, file);
-                let tag: Arc<Path> = Arc::from(paths::include_target(world, &path));
+                let world_root = self.file_root(None, origin);
+                let path = concinnity_host::store::source::relative_from(&world_root, file);
+                let tag: Arc<Path> = Arc::from(concinnity_host::store::source::resolve(
+                    &path,
+                    Some(&world_root),
+                ));
+                let root = self.file_root(Some(&tag), origin);
+                self.roots.push((Some(Arc::clone(&tag)), root.into()));
                 let line = serde_json::json!({"type": "Include", "args": {"path": path}});
                 self.insert(self.values.len(), line, None);
                 Ok(self.insert(self.values.len(), value, Some(tag)))
@@ -167,6 +257,7 @@ impl EntryList {
         file: Option<Arc<Path>>,
     ) -> EntryId {
         let key = EntryId::mint();
+        self.revision = next_revision();
         self.values.insert(index, value);
         self.keys.insert(index, key);
         self.files.insert(index, file);
@@ -178,6 +269,7 @@ impl EntryList {
         if index >= self.values.len() {
             return None;
         }
+        self.revision = next_revision();
         self.keys.remove(index);
         self.files.remove(index);
         Some(self.values.remove(index))
@@ -189,6 +281,7 @@ impl EntryList {
         if from >= self.values.len() || to >= self.values.len() {
             return;
         }
+        self.revision = next_revision();
         let value = self.values.remove(from);
         let key = self.keys.remove(from);
         let file = self.files.remove(from);
@@ -215,8 +308,8 @@ impl EntryList {
     }
 
     // Why this list, edited from `before`, cannot stand, or `None` when it can.
-    // `world` is the world file both were read from.
-    pub(crate) fn refusal(&self, before: &Self, world: &Path) -> Option<Refusal> {
+    // Both were read from the world `origin` names.
+    pub(crate) fn refusal(&self, before: &Self, origin: Origin<'_>) -> Option<Refusal> {
         let changed = (0..before.len()).find(|&i| {
             before.is_read_only(i) && self.by_key(before.keys[i]) != Some(&before.values[i])
         });
@@ -227,7 +320,7 @@ impl EntryList {
                 Refusal::Repeated(i)
             });
         }
-        self.layout(world).misplaced.map(Refusal::Moved)
+        self.layout(origin).misplaced.map(Refusal::Moved)
     }
 
     // The text of `file` (`None` for the world file): its own entries in list
@@ -286,19 +379,17 @@ impl EntryList {
     // `key`'s entry for in-place edit.
     pub(crate) fn by_key_mut(&mut self, key: EntryId) -> Option<&mut serde_json::Value> {
         let index = self.index_of(key)?;
+        self.revision = next_revision();
         self.values.get_mut(index)
     }
 }
 
-// The text a build compiles `entries` from: every entry but the `Include` lines,
-// whose files' entries the list already holds in their place.
-pub(crate) fn build_text(entries: &[serde_json::Value]) -> std::io::Result<String> {
-    let inlined: Vec<serde_json::Value> = entries
-        .iter()
-        .filter(|entry| !is_include(entry))
-        .cloned()
-        .collect();
-    write_world_jsonl(&inlined)
+// The world file a list was read from and the build's root: what an `Include`
+// line or a file path in the list resolves against.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Origin<'a> {
+    pub world: &'a Path,
+    pub root: &'a Path,
 }
 
 impl From<Vec<serde_json::Value>> for EntryList {
@@ -327,6 +418,7 @@ impl Deref for EntryList {
 // column stays in step.
 impl DerefMut for EntryList {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.revision = next_revision();
         &mut self.values
     }
 }
@@ -343,6 +435,21 @@ mod tests {
                 .map(|n| json!({"type": "Prop", "args": {"$id": n}}))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn every_change_takes_a_new_revision_and_a_copy_keeps_its_own() {
+        let mut l = list(&["a", "b"]);
+        let start = l.revision();
+        let copy = l.clone();
+        l.push(json!({"type": "Prop", "args": {"$id": "c"}}));
+        let pushed = l.revision();
+        assert_ne!(pushed, start);
+        l[0]["args"]["$id"] = json!("z");
+        assert_ne!(l.revision(), pushed, "an in-place edit changes it too");
+        assert_eq!(copy.revision(), start, "the copy is the version it was");
+        let _ = l.remove(0);
+        assert_ne!(l.revision(), start);
     }
 
     #[test]
@@ -434,18 +541,35 @@ mod tests {
         );
     }
 
+    const ROOT: &str = "/p";
+
+    // `name` under the content root, as the build tags an included entry.
+    fn at(name: &str) -> PathBuf {
+        Path::new(ROOT).join(name)
+    }
+
+    fn root() -> &'static Path {
+        Path::new(ROOT)
+    }
+
+    fn origin() -> Origin<'static> {
+        Origin {
+            world: Path::new("/p/world.jsonl"),
+            root: root(),
+        }
+    }
+
     fn sourced(entry: serde_json::Value, file: Option<&str>) -> SourcedEntry {
         SourcedEntry {
             entry,
-            file: file.map(PathBuf::from),
+            file: file.map(at),
+            root: None,
         }
     }
 
     fn include(path: &str) -> serde_json::Value {
         json!({"type": "Include", "args": {"path": path}})
     }
-
-    const WORLD: &str = "world.jsonl";
 
     // `Scene`, an `Include` line, the entry it brought in from `lights.jsonl`,
     // then `Prop`.
@@ -460,12 +584,8 @@ mod tests {
                 ),
                 sourced(json!({"type": "Prop", "args": {}}), None),
             ],
-            Path::new(WORLD),
+            origin(),
         )
-    }
-
-    fn world() -> &'static Path {
-        Path::new(WORLD)
     }
 
     #[test]
@@ -473,7 +593,7 @@ mod tests {
         let l = included();
         let read_only: Vec<bool> = (0..l.len()).map(|i| l.is_read_only(i)).collect();
         assert_eq!(read_only, [false, true, false, false]);
-        assert_eq!(l.included_from(2), Some(Path::new("lights.jsonl")));
+        assert_eq!(l.included_from(2), Some(at("lights.jsonl").as_path()));
         assert_eq!(l.included_from(3), None);
     }
 
@@ -483,7 +603,7 @@ mod tests {
     fn push_and_remove_keep_the_file_column_in_step() {
         let mut l = included();
         l.remove(0);
-        assert_eq!(l.included_from(1), Some(Path::new("lights.jsonl")));
+        assert_eq!(l.included_from(1), Some(at("lights.jsonl").as_path()));
         l.push(json!({"type": "Prop", "args": {}}));
         assert_eq!(l.included_from(3), None);
         assert!(!l.is_read_only(3));
@@ -497,7 +617,7 @@ mod tests {
             "[\"Scene\",{}]\n[\"Include\",{\"path\":\"lights.jsonl\"}]\n[\"Prop\",{}]\n"
         );
         assert_eq!(
-            l.file_text(Some(Path::new("lights.jsonl"))).unwrap(),
+            l.file_text(Some(&at("lights.jsonl"))).unwrap(),
             "[\"PointLight\",{}]\n"
         );
     }
@@ -505,7 +625,7 @@ mod tests {
     #[test]
     fn the_build_text_keeps_what_was_inlined_and_drops_the_include_line() {
         assert_eq!(
-            build_text(&included()).unwrap(),
+            included().build_text(origin()).unwrap(),
             "[\"Scene\",{}]\n[\"PointLight\",{}]\n[\"Prop\",{}]\n"
         );
     }
@@ -516,19 +636,19 @@ mod tests {
         let mut after = before.clone();
         after[2]["args"]["intensity"] = json!(2.0);
         after[3]["args"]["mesh"] = json!("m");
-        assert_eq!(after.refusal(&before, world()), None);
+        assert_eq!(after.refusal(&before, origin()), None);
 
         let mut after = before.clone();
         after[1]["args"]["path"] = json!("other.jsonl");
         assert_eq!(
-            after.refusal(&before, world()),
+            after.refusal(&before, origin()),
             Some(Refusal::IncludeLine(1))
         );
 
         let mut after = before.clone();
         after.remove(1);
         assert_eq!(
-            after.refusal(&before, world()),
+            after.refusal(&before, origin()),
             Some(Refusal::IncludeLine(1))
         );
     }
@@ -538,12 +658,12 @@ mod tests {
         let before = included();
         let mut after = before.clone();
         after.move_entry(2, 0);
-        assert_eq!(after.refusal(&before, world()), Some(Refusal::Moved(0)));
+        assert_eq!(after.refusal(&before, origin()), Some(Refusal::Moved(0)));
 
         let mut after = before.clone();
         after.move_entry(3, 0);
         assert_eq!(
-            after.refusal(&before, world()),
+            after.refusal(&before, origin()),
             None,
             "the world's own entries reorder freely"
         );
@@ -558,7 +678,7 @@ mod tests {
                 sourced(include("a.jsonl"), None),
                 sourced(json!({"type": "Prop", "args": {}}), Some("a.jsonl")),
             ],
-            world(),
+            origin(),
         )
     }
 
@@ -568,11 +688,11 @@ mod tests {
         assert!(before.is_read_only(1) && before.is_read_only(3));
         let mut after = before.clone();
         after[3]["args"]["mesh"] = json!("m");
-        assert_eq!(after.refusal(&before, world()), Some(Refusal::Repeated(3)));
+        assert_eq!(after.refusal(&before, origin()), Some(Refusal::Repeated(3)));
         assert!(after.unsaved_files(&before).is_empty());
         assert!(
             after
-                .push_to(json!({"type": "Prop"}), Path::new("a.jsonl"), world())
+                .push_to(json!({"type": "Prop"}), &at("a.jsonl"), origin())
                 .unwrap_err()
                 .contains("more than once")
         );
@@ -587,13 +707,13 @@ mod tests {
         l[2]["args"]["intensity"] = json!(2.0);
         assert_eq!(
             l.unsaved_files(&saved),
-            [Some(Arc::from(Path::new("lights.jsonl")))]
+            [Some(Arc::from(at("lights.jsonl")))]
         );
 
         l.push(json!({"type": "Prop", "args": {}}));
         assert_eq!(
             l.unsaved_files(&saved),
-            [Some(Arc::from(Path::new("lights.jsonl"))), None]
+            [Some(Arc::from(at("lights.jsonl"))), None]
         );
     }
 
@@ -604,9 +724,9 @@ mod tests {
         l.remove(2);
         assert_eq!(
             l.unsaved_files(&saved),
-            [Some(Arc::from(Path::new("lights.jsonl")))]
+            [Some(Arc::from(at("lights.jsonl")))]
         );
-        assert_eq!(l.file_text(Some(Path::new("lights.jsonl"))).unwrap(), "");
+        assert_eq!(l.file_text(Some(&at("lights.jsonl"))).unwrap(), "");
     }
 
     #[test]
@@ -616,13 +736,13 @@ mod tests {
         let key = l
             .push_to(
                 json!({"type": "SpotLight", "args": {}}),
-                Path::new("./lights.jsonl"),
-                world(),
+                &at("./lights.jsonl"),
+                origin(),
             )
             .unwrap();
         assert_eq!(l.index_of(key), Some(3));
-        assert_eq!(l.included_from(3), Some(Path::new("lights.jsonl")));
-        assert_eq!(l.refusal(&before, world()), None);
+        assert_eq!(l.included_from(3), Some(at("lights.jsonl").as_path()));
+        assert_eq!(l.refusal(&before, origin()), None);
     }
 
     // A nested file's run ends inside its parent's, so the parent's entry goes
@@ -636,44 +756,52 @@ mod tests {
                 sourced(json!({"type": "Prop"}), Some("b.jsonl")),
                 sourced(json!({"type": "Scene"}), None),
             ],
-            world(),
+            origin(),
         );
         let key = l
-            .push_to(json!({"type": "Sphere"}), Path::new("a.jsonl"), world())
+            .push_to(json!({"type": "Sphere"}), &at("a.jsonl"), origin())
             .unwrap();
         assert_eq!(l.index_of(key), Some(3));
         assert_eq!(
-            l.file_text(Some(Path::new("a.jsonl"))).unwrap(),
+            l.file_text(Some(&at("a.jsonl"))).unwrap(),
             "[\"Include\",{\"path\":\"b.jsonl\"}]\n[\"Sphere\",{}]\n"
         );
     }
 
     #[test]
-    fn an_entry_pushed_to_a_new_file_includes_it_from_the_world() {
-        let world = Path::new("nested/w.jsonl");
+    fn an_entry_pushed_to_a_new_file_includes_it_from_the_root() {
+        let world = at("nested/w.jsonl");
         let mut l = EntryList::new(vec![json!({"type": "Scene", "args": {}})]);
         let saved = l.clone();
-        let file = Path::new("assets/ground/a.jsonl");
-        let first = l.push_to(json!({"type": "Prop"}), file, world).unwrap();
-        let second = l.push_to(json!({"type": "Sphere"}), file, world).unwrap();
+        let file = at("assets/ground/a.jsonl");
+        let origin = Origin {
+            world: &world,
+            root: root(),
+        };
+        let first = l.push_to(json!({"type": "Prop"}), &file, origin).unwrap();
+        let second = l.push_to(json!({"type": "Sphere"}), &file, origin).unwrap();
         assert_eq!(l.index_of(first), Some(2));
         assert_eq!(
             l.index_of(second),
             Some(3),
             "the second joins the first's run"
         );
-        assert_eq!(l[1], include("../assets/ground/a.jsonl"));
-        let tag = Path::new("nested/../assets/ground/a.jsonl");
-        assert_eq!(l.included_from(2), Some(tag), "tagged as a reload tags it");
+        assert_eq!(
+            l[1],
+            include("assets/ground/a.jsonl"),
+            "named from the root, not from the world file's directory"
+        );
+        assert_eq!(
+            l.included_from(2),
+            Some(file.as_path()),
+            "tagged as a reload tags it"
+        );
         assert_eq!(
             l.unsaved_files(&saved),
-            [Some(Arc::from(tag)), None],
+            [Some(Arc::from(file.as_path())), None],
             "the new file is written ahead of the line naming it"
         );
-        assert!(
-            l.push_to(json!({"type": "Prop"}), Path::new("nested/w.jsonl"), world)
-                .is_err()
-        );
+        assert!(l.push_to(json!({"type": "Prop"}), &world, origin).is_err());
     }
 
     #[test]
@@ -682,5 +810,70 @@ mod tests {
         let b = a.clone();
         a.files[2] = None;
         assert_ne!(a, b);
+    }
+
+    // An entry of a library the world includes builds with its file paths
+    // read from the library's root, and keeps its own spelling in the list; a
+    // file with no marker of its own reads from the root of the file that
+    // included it, as the build does.
+    #[test]
+    fn the_build_text_reads_each_file_from_its_own_root() {
+        use concinnity_host::store::source::{LIBRARY_MARKER, normalized};
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, text: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let library = dir.path().join("assets");
+        std::fs::create_dir_all(library.join(LIBRARY_MARKER)).unwrap();
+        write(
+            "assets/kit.jsonl",
+            "[\"Shader\",{\"$id\":\"lib\",\"fragment\":\"shaders/a.hlsl\"}]\n\
+             [\"Include\",{\"path\":\"../shared/loose.jsonl\"}]\n",
+        );
+        let loose = write(
+            "shared/loose.jsonl",
+            "[\"Shader\",{\"$id\":\"loose\",\"fragment\":\"shaders/b.hlsl\"}]\n",
+        );
+        let world = write(
+            "world.jsonl",
+            "[\"Include\",{\"path\":\"assets/kit.jsonl\"}]\n\
+             [\"Shader\",{\"$id\":\"own\",\"fragment\":\"shaders/c.hlsl\"}]\n",
+        );
+        let origin = Origin {
+            world: &world,
+            root: dir.path(),
+        };
+        let lines = concinnity_cook::authoring::world::parse_world_jsonl(
+            &std::fs::read_to_string(&world).unwrap(),
+        )
+        .unwrap();
+        let sourced = concinnity_cook::build_only::include::with_includes(
+            lines,
+            Some(&world),
+            Some(dir.path()),
+        )
+        .unwrap();
+        let l = EntryList::with_includes(sourced, origin);
+        assert_eq!(
+            l.build_text(origin).unwrap(),
+            "[\"Shader\",{\"$id\":\"lib\",\"fragment\":\"assets/shaders/a.hlsl\"}]\n\
+             [\"Shader\",{\"$id\":\"loose\",\"fragment\":\"assets/shaders/b.hlsl\"}]\n\
+             [\"Shader\",{\"$id\":\"own\",\"fragment\":\"shaders/c.hlsl\"}]\n"
+        );
+        assert_eq!(l[1]["args"]["fragment"], "shaders/a.hlsl");
+        assert_eq!(normalized(&l.root_of(1, origin)), normalized(&library));
+        assert_eq!(
+            normalized(&l.file_root(Some(&loose), origin)),
+            normalized(&library),
+            "the unmarked file reads from its includer's root"
+        );
+        assert_eq!(
+            l.refusal(&l.clone(), origin),
+            None,
+            "the includes read as the build reads them"
+        );
     }
 }

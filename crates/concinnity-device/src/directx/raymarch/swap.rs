@@ -1,9 +1,5 @@
-// Replacing a live volume's raymarch PSOs from a hot-reloaded field.
-//
-// D3D12 command lists do not keep a pipeline state alive, so the frames in
-// flight that recorded against the old PSOs have to finish before those drop.
-// A save is a developer's edit, not a frame a player sees, so draining the
-// queue for it costs nothing that matters.
+// Replacing a live volume's raymarch PSOs from a hot-reloaded field, after
+// draining the queue since command lists do not keep a PSO alive.
 
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{PipelineSwap, PreparedPipelines};

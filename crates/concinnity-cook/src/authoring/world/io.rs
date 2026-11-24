@@ -1,7 +1,7 @@
-// world.jsonl I/O: parsing, serialization, and file-patch utilities. This is
+// .jsonl I/O: parsing, serialization, and file-patch utilities. This is
 // authoring input handling -- the compile pipeline and the editor read and
-// rewrite world.jsonl through here. The shipped runtime plays compiled blobs
-// and never touches world.jsonl, so this lives in the build crate, not core.
+// rewrite .jsonl files through here. The shipped runtime plays compiled blobs
+// and never touches a .jsonl file, so this lives in the build crate, not core.
 
 use super::identity::{ID_KEY, entry_handles, is_label_of};
 use super::line::{parse_world_jsonl, write_world_jsonl};
@@ -107,20 +107,20 @@ where
     })
 }
 
-/// Read every entry's handle from world.jsonl without a full parse, for error
+/// Read every entry's handle from a .jsonl file without a full parse, for error
 /// messages: its `$id`, else its `<Type>#<ordinal>` label, counted over the
-/// world with its includes resolved.
+/// world with its includes resolved against the content root `root`.
 ///
 /// # Errors
 ///
 /// Returns an error if the file cannot be read or parsed, or an include does
 /// not resolve.
-pub fn known_names(json_path: &Path) -> std::io::Result<Vec<String>> {
+pub fn known_names(json_path: &Path, root: Option<&Path>) -> std::io::Result<Vec<String>> {
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let content = std::fs::read_to_string(json_path)?;
     let assets = parse_world_jsonl(&content).map_err(|e| invalid(e.to_string()))?;
-    let assets =
-        crate::build_only::include::resolve_includes(assets, Some(json_path)).map_err(invalid)?;
+    let assets = crate::build_only::include::resolve_includes(assets, Some(json_path), root)
+        .map_err(invalid)?;
     Ok(entry_handles(&assets).into_iter().flatten().collect())
 }
 
@@ -257,7 +257,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"Logger\",{\"$id\":\"a\"}]\n[\"Window\"]\n").unwrap();
-        let names = known_names(&path).unwrap();
+        let names = known_names(&path, Some(dir.path())).unwrap();
         assert_eq!(names, vec!["a", "Window#0"]);
     }
 
@@ -266,7 +266,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "").unwrap();
-        let names = known_names(&path).unwrap();
+        let names = known_names(&path, Some(dir.path())).unwrap();
         assert!(names.is_empty());
     }
 }

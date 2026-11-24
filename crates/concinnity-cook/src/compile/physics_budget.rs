@@ -648,7 +648,7 @@ mod tests {
             r#"["Spawner",{"$id":"drop","template":"crate_a"}]"#,
             "\n",
         );
-        let expanded = crate::build_only::prepare_world(world, None)
+        let expanded = crate::build_only::prepare_world(world)
             .expect("prepare")
             .assets;
         assert!(

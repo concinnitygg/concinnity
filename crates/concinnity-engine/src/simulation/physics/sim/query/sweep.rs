@@ -1,19 +1,7 @@
-// How far a shape gets before it meets another one.
-//
-// Conservative advancement over the distance query next door, rather than a
-// ray cast against the Minkowski sum. Both are correct; this one is chosen
-// because the sweep is a pure translation. With no rotation to bound, the rate
-// the gap can close at is exactly the motion projected on the current
-// separating direction, so each step advances by the whole gap and is
-// guaranteed not to step over the contact. That makes the advancement a dozen
-// lines over a distance routine that is separately testable, where the ray-cast
-// formulation would fold the search into the simplex iteration and be testable
-// only as a whole.
-//
-// What it costs is linear convergence: a shape arriving almost tangentially
-// takes many small steps. The iteration is capped, and a sweep that runs out
-// reports the contact where it had got to. That is early rather than late,
-// which is the direction a character controller can survive being wrong in.
+// How far a shape translates before it meets another, by conservative
+// advancement over the distance query: with no rotation, each step advances
+// the whole gap without overshooting. Near-tangent arrivals converge slowly, so
+// the iteration is capped and reports early rather than late.
 
 use crate::simulation::physics::sim::collide;
 use crate::simulation::physics::sim::contact::Manifold;

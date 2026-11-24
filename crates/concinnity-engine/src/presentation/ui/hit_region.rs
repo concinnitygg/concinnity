@@ -1,7 +1,8 @@
 // Screen-space hit-region schema.
 
-use crate::components::{Screen, Sprite, SpriteFit, TextLabel, UiAction};
+use crate::components::{Binding, Screen, Sprite, SpriteFit, TextLabel, UiAction};
 use crate::ecs::Ref;
+use crate::settings::SettingKey;
 
 /// A responsive invisible rectangular region in screen space.
 ///
@@ -50,14 +51,19 @@ pub struct HitRegion {
     pub hover_scale: Option<f32>,
     /// What a click fires. Unset fires nothing.
     pub action: Option<UiAction>,
-    /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
-    /// track. `None` for ordinary regions. Set automatically when a `Slider`
-    /// expands; you don't set this directly.
+    /// A number, 0 to 1, that dragging across the region sets to the fraction
+    /// of its width under the cursor: a `setting:` slider, or a `state:` or
+    /// `var:` float. The `drag_handle` sprite follows the value.
+    #[serde(default)]
+    pub slider: Option<Binding>,
+    /// The [Sprite](#sprite) that slides along the region to show its
+    /// `slider` value.
     #[serde(default)]
     pub drag_handle: Option<Ref<Sprite>>,
-    /// [Screen](#screen) this region belongs to. While a screen is active,
-    /// only the top capturing screen's regions fire; with no screen active,
-    /// only screen-less regions fire.
+    /// [Screen](#screen) this region belongs to. While a capturing screen is
+    /// open, only the topmost one's regions fire; with none open, persistent
+    /// screens' regions do. Unset, the region joins the world's HUD: a
+    /// persistent window-space screen made for the elements that name none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// Whether this region is inert. A disabled region never hovers or fires.
@@ -66,10 +72,10 @@ pub struct HitRegion {
     #[serde(default)]
     pub disabled: bool,
     /// When set, this region tracks its referenced [`label`](#hitregion): it
-    /// follows the label's vertical position (so a menu the engine lays out at
-    /// runtime keeps its buttons clickable) and is inert while the label's text
-    /// is empty (so a hidden menu entry does not catch clicks). Requires
-    /// `label`.
+    /// moves with the label (so a menu the engine lays out at runtime, or a
+    /// panel the user drags, keeps its buttons clickable) and is inert while
+    /// the label's text is empty (so a hidden menu entry does not catch
+    /// clicks). Requires `label`.
     #[serde(default)]
     pub follow_label: bool,
     /// How a screen-owned region maps from the reference canvas to the window
@@ -79,4 +85,26 @@ pub struct HitRegion {
     /// full window regardless of `fit`.
     #[serde(default)]
     pub fit: SpriteFit,
+}
+
+impl HitRegion {
+    /// The setting this region operates, when it operates one: through a
+    /// `setting:` slider, a `Value` action on a `setting:` binding, or a
+    /// `Setting` action.
+    #[must_use]
+    pub fn setting(&self) -> Option<SettingKey> {
+        if let Some(Binding::Setting(key)) = &self.slider {
+            return Some(*key);
+        }
+        match &self.action {
+            Some(
+                UiAction::Setting { key, .. }
+                | UiAction::Value {
+                    binding: Binding::Setting(key),
+                    ..
+                },
+            ) => Some(*key),
+            _ => None,
+        }
+    }
 }

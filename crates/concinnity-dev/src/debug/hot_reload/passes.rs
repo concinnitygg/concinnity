@@ -1,4 +1,4 @@
-//! The world.jsonl / `ProceduralMesh` / `VolumetricFog` / world-loaded Shader stage
+//! The .jsonl / `ProceduralMesh` / `VolumetricFog` / world-loaded Shader stage
 //! reload passes: re-read the on-disk source, diff against the captured state,
 //! and apply changes through the backend. Each returns a small tally the drive
 //! logs.
@@ -20,7 +20,7 @@ pub(crate) struct FogReloadResult {
     pub updated: bool,
 }
 
-// Re-read `world.jsonl` and push the first declared `VolumetricFog` through
+// Re-read the `.jsonl` file and push the first declared `VolumetricFog` through
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
 // [`concinnity_engine::components::VolumetricFog::from_args`] (asset-side floors) then
@@ -51,8 +51,11 @@ pub(super) fn reload_volumetric_fog(
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, path),
-        crate::project::assets_dir().as_deref(),
+        concinnity_cook::WorldSource::file(
+            &content,
+            path,
+            crate::project::content_root().as_deref(),
+        ),
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -115,7 +118,7 @@ pub(crate) struct ProceduralMeshReloadResult {
     pub failed: usize,
 }
 
-// Re-read `world.jsonl` and, for every captured `ProceduralMesh`, diff its
+// Re-read the `.jsonl` file and, for every captured `ProceduralMesh`, diff its
 // current generator args against the init-time snapshot. When the args
 // differ, re-run `compile_mesh_payload` + `deserialize_with_lods` to get
 // fresh vertices / indices / LOD alternates, then dispatch to
@@ -152,8 +155,11 @@ pub(super) fn reload_procedural_meshes(
     // init-time captured set; otherwise an unchanged entry shows up as
     // "missing from JSONL" every reload.
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, path),
-        crate::project::assets_dir().as_deref(),
+        concinnity_cook::WorldSource::file(
+            &content,
+            path,
+            crate::project::content_root().as_deref(),
+        ),
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -375,8 +381,11 @@ pub(super) fn reload_stories(
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, path),
-        crate::project::assets_dir().as_deref(),
+        concinnity_cook::WorldSource::file(
+            &content,
+            path,
+            crate::project::content_root().as_deref(),
+        ),
     ) {
         Ok(v) => v,
         Err(e) => {

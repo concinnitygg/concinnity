@@ -333,12 +333,9 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The G-buffer pre-pass, from the main pass's file: the main pass's view
-    // block, records, parameter table, texture argument buffer and samplers at
-    // their main-pass slots, plus the pre-pass's own view block, model history
-    // and draw args, pinned clear of the vertex streams at buffer(1) and
-    // buffer(2). The pre-pass encoder binds them once for every ICB-executed
-    // draw.
+    // The G-buffer pre-pass: the main pass's bindings at their slots plus its
+    // own view, model history and draw args, clear of the vertex streams at
+    // buffer(1) and buffer(2).
     MetalAbi {
         program: &shared::MAIN_PREPASS_VERT,
         slots: &[&[
@@ -361,11 +358,9 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[("tex_pool", bindless_textures::pool(0)), ("tex_sampler", 0)],
     },
-    // The grass kernel: its block, the blades it
-    // appends, the draw arguments, and the terrain heights and mask texels it
-    // reads, at buffer(0..4) by register, last frame's depth pyramid at
-    // texture(5), the bend field, the planet tiles, the shared vertex stream
-    // and the tile records at buffer(6..9).
+    // The grass kernel: its block, blades, draw arguments, heights and mask at
+    // buffer(0..4), the depth pyramid at texture(5), and the bend field, planet
+    // tiles, vertex stream and tile records at buffer(6..9).
     MetalAbi {
         program: &shared::GRASS_GENERATE,
         slots: &[&[
@@ -603,12 +598,9 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     // The bindless main pass. Its two argument buffers are whole descriptor
-    // sets, each at the index `[[cn::metal_argument_buffer(n)]]` names, and the
-    // ids inside the texture one are where the cull writes each member:
-    // the fixed shadow / IBL / screen-indirect / probe / spot / LTC members first, then
-    // the unsized pool. `EngineSamplers` is written 0..2 by
-    // `build_bindless_sampler_args`. Only the grass variants read the canopy
-    // block, and only the canopy variant its view tables.
+    // sets at their `[[cn::metal_argument_buffer(n)]]` indices: the fixed
+    // texture members, then the unsized pool, and `EngineSamplers` 0..2. Only
+    // the grass variants read the canopy block.
     MetalAbi {
         program: &shared::MAIN_BINDLESS_FRAG,
         slots: &[MAIN_BINDLESS_SLOTS],
@@ -992,12 +984,8 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The volumetric-fog pair. The froxel kernel is the one place the two ABIs
-    // disagree: its destination volume is a UAV, which D3D numbers in a space of
-    // its own and Metal folds into the texture namespace behind the cascades, so
-    // the non-DXIL leg declares it `u1` and lands on texture(1) -- which is what
-    // the fog encoder binds, and the opposite of where the emitter would place
-    // it unaided.
+    // The fog pair. The froxel kernel's destination UAV is declared `u1` so it
+    // lands on texture(1) behind the cascades, where the encoder binds it.
     MetalAbi {
         program: &shared::FOG_FROXEL,
         slots: &[&[
@@ -1051,12 +1039,9 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The reflection pair and the final composite, the heaviest source counts
-    // in the tree. The reflection encoder binds each source at its declaration
-    // index and repeats one sampler across the same range, and
-    // the post encoder puts the composite constants on buffer(0).
-    // The denoiser's draws put their constants on buffer(0) and read by point
-    // load where they need no filtering, so those samplers are compiled out.
+    // The reflection pair, the composite and the denoiser. Encoders bind each
+    // source at its declaration index; point-loaded sources compile out their
+    // samplers.
     MetalAbi {
         program: &shared::REFLECTION_SURFACE,
         slots: &[&[
@@ -1307,6 +1292,16 @@ const TRANSPARENT_SLOTS: &[MetalBinding] = &[
     transparent::PREFILTER_CUBE_SAMPLER.binding(),
 ];
 
+// The air in front of what a transparent fragment draws: the atmosphere's
+// block, its two tables, its aerial volume and their sampler.
+const TRANSPARENT_AIR_SLOTS: &[MetalBinding] = &[
+    transparent::ATMOSPHERE.binding(),
+    transparent::TRANSMITTANCE.binding(),
+    transparent::MULTISCATTER.binding(),
+    transparent::AERIAL_VOLUME.binding(),
+    transparent::AIR_SAMPLER.binding(),
+];
+
 // The transparent pass's probe set and the cluster grid that bins it.
 const TRANSPARENT_PROBE_SLOTS: &[MetalBinding] = &[
     transparent::PROBE_SET.binding(),
@@ -1408,12 +1403,14 @@ const RT_REFLECTIONS_POOL_SLOTS: &[MetalBinding] = &[
 
 const GLASS_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
 ];
 const GLASS_RT_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
@@ -1421,6 +1418,7 @@ const GLASS_RT_SLOTS: &[&[MetalBinding]] = &[
 ];
 const GLASS_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
@@ -1459,6 +1457,7 @@ const WATER_OCEAN_SLOTS: &[MetalBinding] = &[
 ];
 const WATER_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1467,6 +1466,7 @@ const WATER_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_RT_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1476,6 +1476,7 @@ const WATER_RT_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1488,6 +1489,7 @@ const WATER_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
 const WATER_WAKE_SLOTS: &[MetalBinding] = &[transparent::WAKE_FIELD.binding()];
 const WATER_SEA_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1497,6 +1499,7 @@ const WATER_SEA_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_SEA_RT_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1507,6 +1510,7 @@ const WATER_SEA_RT_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_SEA_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,

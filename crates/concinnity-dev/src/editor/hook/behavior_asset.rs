@@ -13,7 +13,7 @@ use concinnity_engine::ecs::World;
 
 use super::{EditorHook, declared_id};
 use crate::editor::behavior::panel::Status;
-use crate::editor::{behavior, widget};
+use crate::editor::ui::field;
 
 impl EditorHook {
     // Arm the removal, then carry it out. Any other press on the panel disarms
@@ -60,19 +60,18 @@ impl EditorHook {
             .and_then(|i| declared_id(&self.entries[i]))
             .unwrap_or("")
             .to_string();
-        widget::seed_field(world, behavior::panel::NAME_INPUT, &name);
+        let [field, _, _] = self.behavior_fields();
+        field::set_text(world, field, &name);
     }
 
-    // Commit the name field onto the open behavior. A blank name is refused
-    // rather than written, and one already taken is suffixed until it is free,
-    // so the entry list keeps its one-name-one-asset rule. The field is re-seeded
-    // from what actually landed, so the panel never shows a name the world does
-    // not hold.
+    // Commit the name field onto the open behavior: blank is refused, taken
+    // names are suffixed, and the field re-seeds from what landed.
     pub(super) fn rename_behavior(&mut self, world: &mut World) {
         let Some(idx) = self.behavior_entry() else {
             return;
         };
-        let typed = widget::field_text(world, behavior::panel::NAME_INPUT);
+        let [field, _, _] = self.behavior_fields();
+        let typed = field::text(world, field);
         if typed.trim().is_empty() {
             self.behavior.status = Some(Status::message("a behavior needs a name"));
             self.blur_behavior_name(world);

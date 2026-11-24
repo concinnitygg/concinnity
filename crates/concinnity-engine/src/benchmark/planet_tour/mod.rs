@@ -1,13 +1,6 @@
-// The benchmark route a planet gets by default: a tour along one great circle
-// round the planet through where the world starts, timed against its sun.
-//
-// The tour pays the planet's costs along a path rather than at a station: on
-// the ground, where the grass and the finest tiles are, over the water,
-// through a climb and a descent that cross hundreds of frame moves, and from
-// orbit, where the whole planet is in view. Each point of the path is a fixed
-// height over the ground the planet's own shape puts there, or over the sea
-// where the ground lies under it, so the subject rides the hills and the waves
-// rather than cutting through them.
+// The default planet benchmark route: a great-circle tour through the start,
+// timed against the sun, over ground, water, a climb, orbit and a descent. Each
+// point rides a fixed height over the ground or sea.
 
 mod course;
 mod framing;

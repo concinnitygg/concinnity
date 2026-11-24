@@ -74,16 +74,8 @@ impl ViewCull {
     }
 }
 
-// All GPU-driven main pass + cull state grouped into one feature unit: the
-// main and world-shader pipelines the indirect draws execute under, the
-// early + late cull pipelines, their indirect command buffers + argument
-// encoders/buffers, the per-object status buffer, the two-pass-occlusion
-// toggle, and the Hi-Z depth pyramid + the view-projection snapshots the
-// occlusion test reprojects through. All `Some`/active only when the world
-// has 3D scene content; a UI-only world leaves every field `None` / default.
-// Command slots for an ICB that must hold `needed` records: the whole
-// `reserved` count while that covers them, so it is built once, else the next
-// power of two so growth past the reserve rebuilds rarely.
+// Command slots for an ICB holding `needed` records: the whole `reserved` count
+// while it covers them, else the next power of two so growth rebuilds rarely.
 pub(super) fn icb_capacity(needed: usize, reserved: usize) -> usize {
     if needed <= reserved {
         reserved
@@ -93,6 +85,8 @@ pub(super) fn icb_capacity(needed: usize, reserved: usize) -> usize {
     .max(64)
 }
 
+// GPU-driven main pass and cull state: the pipelines, ICBs, status buffer,
+// two-pass occlusion and Hi-Z. Empty in a UI-only world.
 pub(crate) struct CullState {
     // True when the GPU-driven main pass exists: a world with 3D scene
     // content. The static draw loop then reads each object from the per-frame
@@ -103,13 +97,9 @@ pub(crate) struct CullState {
     // world with no 3D scene content: the Main pass then encodes as a bare
     // clear and every geometry sub-path early-outs.
     pub main_pipeline: Option<BucketPipelines>,
-    // Pipelines for the material-referenced world shaders, indexed by
-    // `shader_bucket - 1` (bucket 0 is `main_pipeline`). Each executes its
-    // bucket's ICB in the main pass and the pre-pass; empty for single-shader
-    // worlds. `None` while the bucket's Shader is not resident -- init defers a
-    // shader owned by a scene other than the start scene, and
-    // `install_world_shader` builds it when that scene pins. Draws carrying a
-    // `None` bucket are skipped.
+    // Pipelines for the material buckets, indexed by `shader_bucket - 1`
+    // (bucket 0 is `main_pipeline`). `None` until `install_world_shader` builds
+    // a deferred bucket when its scene pins; its draws are skipped meanwhile.
     pub world_pipelines:
         concinnity_engine::render::shader::world_pipelines::WorldPipelines<BucketPipelines>,
     // The early decision kernel (`cull.hlsl`). `Some` only when `bindless`
@@ -168,29 +158,20 @@ pub(crate) struct CullState {
     // This frame's un-jittered view-projection, captured before `execute_graph`
     // so the late cull can project AABBs against the freshly built pyramid.
     pub cur_view_proj: [[f32; 4]; 4],
-    // GPU-driven shadow views. Both pipelines are `Some` only on the bindless
-    // path with shadows enabled (`bindless && shadow.map_size > 0`). The
-    // frustum-only shadow decision kernel (`shadow_pipeline`) writes each
-    // view's outcomes and group counts, the packing lays its kept draws into
-    // the view's ICB lists, and the depth-only `shadow_bindless_pipeline`
-    // executes them. `shadow_views` holds the cascades, `spot_views` the spot
-    // slices and `far_view` the far shadow's one view: separate ICBs, so the
-    // shadow passes share no command slots. The far view draws through its own
-    // pipeline, for its Depth16Unorm map, and only beside the cascades.
+    // GPU-driven shadow views, `Some` only on the bindless path with shadows
+    // on. The decision kernel writes each view's outcomes, the packing fills the
+    // view's ICB lists, and `shadow_bindless_pipeline` executes them. Cascades,
+    // spot slices and the far view each have their own ICBs; the far view has
+    // its own pipeline for its Depth16Unorm map.
     pub shadow_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub shadow_bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub far_shadow_bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub shadow_views: ShadowViewIcb,
     pub spot_views: ShadowViewIcb,
     pub far_view: ShadowViewIcb,
-    // Per-planar-slot mirror cull ICBs. The planar reflection pass re-runs the
-    // early cull kernel with each plane's reflected-camera frustum into its own
-    // ICB, so geometry visible only in the reflection (outside the main frustum)
-    // is captured. One slot per distinct planar plane (<= MAX_PLANAR_PLANES); each
-    // holds an ICB + its argument buffer, grown in lockstep with the main ICB by
-    // `ensure_mirror_icb_capacity`. Empty when the world has no planar set or
-    // no scene content. The status buffer is shared scratch: the mirror cull is single-pass, so its
-    // per-object status is written but never read.
+    // One mirror cull ICB per planar plane, culled against the reflected
+    // frustum so geometry visible only in the mirror is captured. Grown by
+    // `ensure_mirror_icb_capacity`. The single-pass cull's status is scratch.
     pub mirror_slots: Vec<CullSlot>,
     pub mirror_status: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Command capacity of every `mirror_slots` ICB; 0 until first built.
@@ -250,11 +231,8 @@ impl BucketRegions<'_> {
     }
 }
 
-// One single-stream cull's output, a planar slot's mirror or a shadow view's:
-// an ICB the packing writes the kept draws into, plus the argument buffer
-// wiring that ICB into the scatter. Built by `ensure_mirror_icb_capacity` and
-// `ensure_shadow_icb_capacity`, consumed by the cull (writes) and the face or
-// shadow render (executes).
+// One single-stream cull's output (a planar slot's or a shadow view's): an ICB
+// the packing writes and the argument buffer wiring it into the scatter.
 pub(crate) struct CullSlot {
     pub icb: Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
     pub arg_buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
@@ -280,18 +258,11 @@ const CULL_GROUP_COUNTS_BUFFER_INDEX: usize = cull::GROUP_COUNTS.index;
 const CULL_RANGES_BUFFER_INDEX: usize = cull::STREAM_COUNTS.index;
 const CULL_COMPACT_PARAMS_INDEX: usize = cull::SCAN_PARAMS.index;
 
-// The four texture-pool indices the Metal bindless fragment shader
-// (`fragment_main_bindless`, main_bindless.hlsl) reads for one surface. Albedo,
-// normal, and every optional map share ONE handle-indexed pool (`tex_pool`,
-// [real textures..][flat-normal fallback]), which the shader indexes directly
-// (`tex_pool[obj.normal_index]`), so each index is the texture's own handle --
-// no albedo-count bias. A normal-less draw's `normal` is the flat-normal
-// fallback slot (`normal_pool_index`, at `texture_count`). Every index is
-// clamped to the `BINDLESS_TEXTURE_COUNT` cap (the slots the host writes, so an
-// over-cap index would read past them). Shared by the per-frame static fill
-// (`build_record_buffers`) and the init-time instanced records
-// (`metal_instance_records`) so a folded instance addresses the pool identically
-// to a static object.
+// The four texture-pool indices the bindless fragment shader reads for one
+// surface. Every map shares one handle-indexed pool, so each index is the
+// texture's own handle; a normal-less draw uses the flat-normal slot. Each is
+// clamped to `BINDLESS_TEXTURE_COUNT`. Shared by static, instanced and skinned
+// records.
 pub(super) struct FlatPoolIndices {
     pub albedo: u32,
     pub normal: u32,
@@ -330,17 +301,10 @@ pub(super) fn metal_flat_pool_indices(
     }
 }
 
-// Build the GPU-driven bindless instanced records: one `GpuObjectData` per
-// cluster instance, in cluster-then-instance order, addressing the bindless pool
-// with the SAME convention as `build_record_buffers`' static fill (via
-// `metal_flat_pool_indices`). Bounds are the cluster's mesh-local AABB
-// transformed by each instance's model, so the cull kernel frustum/distance/
-// Hi-Z-tests each instance independently. Built once at init (instances are
-// placed at world load and never move) and appended to the per-frame object
-// buffer after the static records. Kept separate from the shared core
-// `instance_object_records` (which the DX/VK folds use) because Metal resolves
-// all four texture indices through `metal_flat_pool_indices` and clamps them to
-// its fixed-size MSL pool; the addressing itself now matches DX/VK.
+// One bindless record per cluster instance, in cluster-then-instance order,
+// built once at init with bounds from the cluster AABB under each instance's
+// model. Separate from the core `instance_object_records` because Metal
+// resolves and clamps texture indices through `metal_flat_pool_indices`.
 pub(super) fn metal_instance_records(
     clusters: &[render_types::InstancedCluster],
     texture_count: usize,
@@ -362,14 +326,8 @@ pub(super) fn metal_instance_records(
     records
 }
 
-// Build one GPU-driven bindless record for a skinned object. Reuses
-// the core `pack_skinned_record` for the padded bind-pose AABB + model +
-// material, then overwrites the texture indices with Metal's flat-pool
-// convention: the core helper (like `pack_object_record`) leaves the emissive /
-// ORM indices raw for DX/VK's in-shader bias, but Metal's bindless shader
-// indexes the flat pool directly, so they must be pre-biased + capped via
-// `metal_flat_pool_indices` -- the same convention the static + instanced
-// records use.
+// One bindless record for a skinned object: the core `pack_skinned_record`
+// with its texture indices replaced by Metal's flat-pool convention.
 pub(super) fn metal_skinned_record(
     obj: &render_types::SkinnedDrawObject,
     texture_count: usize,
@@ -500,12 +458,8 @@ struct CullDispatchOptions<'a> {
 }
 
 impl MtlContext {
-    // Build the current-pose joint-palette buffers for the skinned passes, one
-    // per skinned object, from the per-object ring at `ring_slot`. Returns an
-    // empty vec when there are no skinned meshes. The ring reuses persistent
-    // shared buffers across frames (the frames-in-flight fence guarantees the
-    // slot is no longer GPU-read before it is overwritten) instead of minting
-    // a fresh buffer per object per frame.
+    // This frame's joint-palette buffers, one per skinned object, from the
+    // persistent ring at `ring_slot`. Empty without skinned meshes.
     pub(super) fn build_joint_buffers(
         &mut self,
         ring_slot: usize,
@@ -532,15 +486,10 @@ impl MtlContext {
         )
     }
 
-    // Pack this frame's cull records into ring slot `ring_slot` of the object
-    // and draw-args rings, indexed by the id the draw call passes as
-    // `[[base_instance]]`: one per static `DrawObject`, then one per folded
-    // instance, then one per folded skinned object. The static draws are packed
-    // every frame (models, visibility, residency and the LOD pick change), across
-    // the job pool once that pays; the instance records never change, so a slot
-    // gets them only when its copy is stale, and then only their LOD slices
-    // follow the camera; the skinned tail follows its animated poses. `None`
-    // when the world has nothing to draw.
+    // Pack this frame's cull records into ring slot `ring_slot`, indexed by
+    // `[[base_instance]]`: static objects (every frame, across the job pool once
+    // that pays), instances (only into stale slots, with LOD slices following
+    // the camera), then skinned objects. `None` with nothing to draw.
     pub(super) fn build_record_buffers(
         &mut self,
         ring_slot: usize,
@@ -599,11 +548,8 @@ impl MtlContext {
             &|obj| metal_object_record(obj, texture_count),
         );
 
-        // The instance tail, in the cluster-then-instance order of
-        // `instanced.records`, so cull index `draw.objects.len() + k` reads
-        // matching records. It moves when the static list grows, so a slot's
-        // copy is keyed by where it starts. Clusters that declare alternates get
-        // their instances' active slice patched over the base slice every frame.
+        // The instance tail, in `instanced.records` order. It moves when the
+        // static list grows, so a slot's copy is keyed by where it starts.
         let n_instances = n_instances.min(tail_records.len());
         let (instance_records, skinned_records) = tail_records.split_at_mut(n_instances);
         let (instance_args, skinned_args) = tail_args.split_at_mut(n_instances);
@@ -631,12 +577,8 @@ impl MtlContext {
             }
         }
 
-        // One record per skinned object: the compute-deformed geometry draws as
-        // rigid geometry through the same cull, its AABB and model following the
-        // animated pose. Its args are the active-LOD slice into the skinned index
-        // buffer with base_vertex 0 (the deformed buffer mirrors global skinned
-        // indexing); the cull kernel routes records at/after
-        // `skinned_record_base()` through that buffer.
+        // One record per skinned object, drawn rigidly from the deformed buffer
+        // through the skinned index buffer with base_vertex 0.
         let skinned_base = n_static + n_instances;
         // The runtime draws past the build-time ones, which every bucket past
         // the default can take, and the record set the default executes.
@@ -674,15 +616,9 @@ impl MtlContext {
         }))
     }
 
-    // Encode the GPU-driven cull compute pass: one thread per
-    // `DrawObject` frustum/distance-tests the object, and the packing encodes
-    // the kept ones' indexed draws into one list per stream of the ICBs. The
-    // bindless main pass then executes each list with one
-    // `executeCommandsInBuffer` over its GPU-written range. A no-op when the
-    // cull pipeline / ICB are not set up (non-bindless contexts) or there is no
+    // Encode the GPU-driven cull: test each record and pack the kept indexed
+    // draws into one ICB list per stream. A no-op without a cull pipeline or
     // geometry.
-    // pub(in crate::metal) so the render-graph executor in
-    // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_cull(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -728,14 +664,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Encode an early cull for one planar reflection slot: the same kernel as
-    // the main cull, but tested against the reflected-camera `frustum` (so
-    // geometry visible only in the mirror, outside the main frustum, is captured)
-    // and written into that slot's dedicated mirror ICB. Hi-Z occlusion is forced
-    // off because the pyramid lives in the main camera's screen space, not the
-    // mirror's. A no-op when the slot or the shared mirror status is absent
-    // (non-bindless, or `ensure_mirror_icb_capacity` has not run). The planar face
-    // render then executes the slot's ICB.
+    // Encode an early cull for planar slot `slot` against the reflected
+    // `frustum`, into that slot's mirror ICB. Hi-Z is off since the pyramid is
+    // in the main camera's screen space.
     pub(in crate::metal) fn encode_mirror_cull(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -832,13 +763,9 @@ impl MtlContext {
         }
     }
 
-    // Shared body of every early cull dispatch (main + per-planar mirror): one
-    // thread per `DrawObject` frustum/distance(/Hi-Z)-tests the record, then the
-    // packing encodes the kept ones into their streams' lists. The caller
-    // supplies the target ICBs + their argument buffer + a per-object status scratch,
-    // whether to consult the Hi-Z pyramid (`use_hiz`), an optional pass-timing id,
-    // and an encoder label. A no-op when the cull pipeline is absent (non-bindless)
-    // or there is no geometry.
+    // The shared body of every early cull: test each record, then pack the kept
+    // ones into their streams' lists. A no-op without a cull pipeline or
+    // geometry.
     fn encode_cull_into(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -884,12 +811,8 @@ impl MtlContext {
         }
 
         let planes = frustum.packed_planes();
-        // Hi-Z occlusion metadata + binding. `hiz_enabled` is gated on `use_hiz`
-        // (off for the mirror cull, whose pyramid would be the wrong screen
-        // space), the per-context `hiz_valid` flag (false on the first frame and
-        // right after a resize), and on whether a `HiZResources` exists. The
-        // texture is bound unconditionally when present so the kernel's
-        // `texture(0)` always resolves; the `hiz_enabled` flag gates the sample.
+        // Hi-Z is enabled only with `use_hiz`, a valid pyramid and the resource.
+        // The texture binds whenever it exists so `texture(0)` resolves.
         let (hiz_tex, hiz_size, hiz_mip_count, hiz_enabled) = match self.cull.hiz.as_ref() {
             Some(h) => (
                 Some(h.texture.as_ref()),
@@ -937,12 +860,8 @@ impl MtlContext {
         // kernel reads it back. The main cull's status is read again by the late pass
         // under two-pass occlusion; the mirror cull's shared scratch is not.
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
-        // The skinned index buffer: the encode kernel bakes it into
-        // the indirect command for records at/after `skinned_base`. Bound
-        // unconditionally (Metal requires a buffer the kernel references to be
-        // bound even under a never-taken branch); the static index buffer is a
-        // harmless placeholder when no skinned mesh is folded (skinned_base ==
-        // object_count then, so the skinned branch never fires).
+        // Bound unconditionally since Metal requires referenced buffers; the
+        // static index buffer stands in without skinned geometry.
         enc.set_buffer(
             self.skinned_index_or_placeholder(),
             0,
@@ -1049,15 +968,10 @@ impl MtlContext {
         );
     }
 
-    // Encode the late GPU cull for two-pass occlusion. Runs after the Hi-Z
-    // pyramid has been rebuilt mid-frame from early depth (`encode_hiz_build`
-    // dispatched as the `HizEarly` graph pass). One thread per `DrawObject`
-    // re-tests the objects the early pass marked `HIZ_CANDIDATE` against the fresh
-    // pyramid, projecting through *this* frame's view-projection
-    // (`cull_cur_view_proj`), and marks the visible ones `REDRAW`; the encode
-    // dispatch then writes exactly those into `icbs_late`, which `MainLate` issues. A
-    // no-op when the late pipeline / ICB are not set up (two-pass off, or
-    // non-bindless).
+    // Encode the late cull for two-pass occlusion, after `HizEarly` rebuilt the
+    // pyramid from early depth: re-test the `HIZ_CANDIDATE` records through this
+    // frame's view-projection and pack the visible ones into `icbs_late` for
+    // `MainLate`.
     pub(in crate::metal) fn encode_cull_late(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -1176,23 +1090,11 @@ impl MtlContext {
         Ok(0)
     }
 
-    // Encode the GPU-driven shadow culls: for the cascades and then the spot
-    // slices, one shadow decision dispatch per re-rendered view (gated by
-    // `shadow.render_mask` / `spot_shadow.render_mask`), each frustum-testing
-    // every record against that view's LIGHT frustum, then packing the kept
-    // ones into the view's ICB lists. Hi-Z + distance are off (frustum only). A
-    // no-op when the shadow-bindless path is inactive or there is no geometry.
-    //
-    // Runs as a compute prologue in the SAME command buffer as the main `Cull`
-    // pass (dispatched right after `encode_cull` from the graph executor's Cull
-    // arm), so the ICB writes land in a command buffer committed before the
-    // `Shadow` and `SpotShadow` render passes' command buffers -- the exact
-    // cross-command-buffer FIFO ordering the main cull -> main ICB already
-    // relies on, pinned by both passes' graph edge after Cull. The views share
-    // the encoder's serial dispatches, so each view's packing reads its own
-    // cull's status before the next view's overwrites it. No explicit barrier
-    // (Metal has none); residency is declared with `useResource`.
-    // pub(in crate::metal) so the graph executor can dispatch it.
+    // Encode the shadow culls for each re-rendered cascade and spot slice:
+    // frustum-test every record against the light frustum and pack the kept ones
+    // into the view's ICB lists. Runs in the Cull pass's command buffer, which
+    // commits before the shadow passes, and the views' serial dispatches keep
+    // each packing ahead of the next view's overwrite.
     pub(in crate::metal) fn encode_shadow_culls(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -1391,21 +1293,10 @@ impl MtlContext {
         sig.finish()
     }
 
-    // Build the per-frame `BindlessTextures` argument buffer for the bindless
-    // static pass: the fixed members at their ids, then the albedo + normal-map
-    // pool (every one of the `BINDLESS_TEXTURE_COUNT` slots filled: overflow and
-    // trailing empty slots fall back to the white albedo texture). The bindless
-    // fragment shader can only reach textures through this argument buffer
-    // because discrete texture bindings make it incompatible with indirect
-    // command buffers.
-    //
-    // The buffer is a ring slot, one per frame in flight, so the GPU never
-    // reads a slot the CPU is rewriting. Its contents move only on a texture
-    // stream/evict, a probe bake, an env-map swap or a transient-pool repack,
-    // and a signature gate per slot skips the write entirely on the frames
-    // between: a change is rewritten once into each slot and then stops. `sig`
-    // is this frame's `bindless_texture_signature`. `None` for non-bindless
-    // contexts. The committed command buffer keeps the buffer alive.
+    // Build this frame's `BindlessTextures` argument buffer ring slot: the fixed
+    // members, then every pool slot (empties fall back to white). A per-slot
+    // signature gate skips the write until a texture, probe, env-map or
+    // transient-pool change. `None` without bindless.
     pub(super) fn build_bindless_texture_args(
         &mut self,
         ring_slot: usize,
@@ -1484,12 +1375,8 @@ impl MtlContext {
         self.arg_buffers.bindless_residency = set;
     }
 
-    // Declare every texture the bindless pass samples resident for the
-    // indirect command buffer. The textures are referenced through the
-    // `BindlessTextures` argument buffer rather than bound on the encoder, so
-    // the indirect execution cannot see them unless they are explicitly used.
-    // One batched call over the set `refresh_bindless_residency` cached: the
-    // driver records the same residency either way.
+    // Declare the argument buffer's textures resident for the ICB, which
+    // cannot see them otherwise, in one batched call.
     pub(super) fn use_bindless_textures(
         &self,
         encoder: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -1536,11 +1423,8 @@ fn group_wide(
     Ok(pipeline)
 }
 
-// Build the GPU-driven cull pipelines. The decision kernels run one thread
-// per `DrawObject` and record each record's outcome in the status buffer; the
-// encode kernel turns a status into an indexed draw in the indirect command
-// buffer or resets the slot. The render pass then issues the whole buffer with
-// one `executeCommandsInBuffer`, so the CPU never walks the draw list.
+// Build the cull pipelines: decision kernels record each record's outcome, and
+// the encode kernel turns it into an ICB draw or resets the slot.
 pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
@@ -1582,11 +1466,8 @@ pub(super) fn build_cull_pipeline(
     })
 }
 
-// Build the GPU-driven cascaded-shadow decision pipeline (a separate build
-// keeps the call site shadow-gated rather than always building it on the
-// bindless path). Its outcomes are packed by the shared scan and scatter; the
-// render-side depth-only shadow pipeline is built separately in
-// `init/pipelines.rs::build_shadow_bindless_pipeline`.
+// Build the shadow decision pipeline, kept separate so the call site can gate
+// it on shadows.
 pub(super) fn build_shadow_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,

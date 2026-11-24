@@ -19,12 +19,8 @@ use concinnity_engine::render::rt_accel::geom;
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;
 
-// Read a DEVICE_LOCAL buffer's full contents back to CPU memory as a typed
-// `Vec<T>`. Allocates a HOST_VISIBLE staging buffer, runs a one-shot
-// `cmd_copy_buffer` from `src` into it (`wait_idle` already gated the source
-// side; the one-shot's internal fence wait gates the destination), maps,
-// and `copy_nonoverlapping`s into the Vec. `T`'s stride must match the
-// buffer's stride exactly.
+// Read a device-local buffer back as `Vec<T>` through a staging copy; `T`'s
+// stride must match. The caller already waited idle.
 fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> RenderResult<Vec<T>> {
     if bytes == 0 {
         return Ok(Vec::new());

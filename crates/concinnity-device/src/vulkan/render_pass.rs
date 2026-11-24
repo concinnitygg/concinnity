@@ -62,12 +62,7 @@ pub(super) fn create_main_render_pass(
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(color_final_layout),
-        // [1] depth: STORE because the projected-decal and volumetric-fog
-        // passes sample this attachment after the main pass ends. Without
-        // STORE the contents are spec-undefined post-pass: tilers may
-        // discard them and the depth-read in fog returns garbage values
-        // that bias toward the `depth >= 1.0` "no scene hit" branch,
-        // producing per-pixel bright sparkles after bloom.
+        // [1] depth: STORE, since decals and fog sample it after the main pass.
         vk::AttachmentDescription::default()
             .format(vk::Format::D32_SFLOAT)
             .samples(msaa)
@@ -123,22 +118,10 @@ pub(super) fn create_main_render_pass(
         .map_err(|e| super::error::map_vk_result(e, "main render pass"))
 }
 
-// Main-pass render pass for two-pass occlusion culling. Two variants share
-// this builder, selected by `load`:
-//
-//   * `load = false` (the early pass, `Main`): same as `create_main_render_pass` but
-//     the MSAA color is STORE'd (not DONT_CARE) so the late pass can load
-//     the samples back and composite onto them. Color ends
-//     COLOR_ATTACHMENT_OPTIMAL so `MainLate` loads it directly.
-//   * `load = true` (the late pass, `MainLate`): loads (does not clear) the early pass
-//     color + depth, redraws the disoccluded statics, and resolves the
-//     combined scene into `hdr_resolve` for the post stack.
-//
-// Both are render-pass-compatible with the existing main framebuffers (same
-// attachment count / formats / sample counts), so no extra framebuffers are
-// needed. `Main` (the early pass) still resolves into `hdr_resolve`; that resolve is
-// overwritten by `MainLate`'s and nothing reads it in between (HizEarly / CullLate
-// are compute), so the combined result is what the post stack sees.
+// Main render pass for two-pass occlusion. The early pass (`load = false`)
+// stores the MSAA color for the late pass; the late pass (`load = true`) loads
+// color and depth, draws the disoccluded objects, and resolves into
+// `hdr_resolve`. Both are compatible with the main framebuffers.
 pub(super) fn create_main_render_pass_two_pass(
     device: &VkDevice,
     format: vk::Format,
@@ -147,11 +130,8 @@ pub(super) fn create_main_render_pass_two_pass(
 ) -> RenderResult<OwnedRenderPass> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
-    // The early pass leaves the color in COLOR_ATTACHMENT_OPTIMAL for the late pass to
-    // load. The late pass ends shader-readable when single-sampled (the color image
-    // is itself the resolve target the post stack samples); when multisampled
-    // the resolve attachment carries that role and the MSAA color stays
-    // transient in COLOR_ATTACHMENT_OPTIMAL.
+    // The early pass leaves color as an attachment for the late load. The late pass
+    // ends shader-readable single-sampled; multisampled, the resolve carries that.
     let color_final_layout = if multisampled || !load {
         vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
     } else {

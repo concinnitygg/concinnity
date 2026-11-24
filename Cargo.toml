@@ -1,6 +1,6 @@
 [workspace.package]
 version = "0.20.0"
-description = "Asset-driven world engine"
+description = "An agent-friendly graphics application SDK"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
@@ -52,7 +52,8 @@ minidump-writer = "0.13"
 mint = "0.5"
 # 8.2.1 shares windows-sys 0.61 with ctrlc, rfd and tempfile.
 notify = { version = "8.2.1", default-features = false }
-objc2 = "0.6.4"
+# The debug-build encoding checks allocate on every message sent.
+objc2 = { version = "0.6.4", features = ["disable-encoding-assertions"] }
 objc2-app-kit = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"

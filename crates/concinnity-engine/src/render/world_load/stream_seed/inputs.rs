@@ -26,12 +26,9 @@ pub struct MeshStreamData {
     pub payloads: Vec<DecodedMesh>,
 }
 
-// Per-texture-slot draw positions for the streaming scorer, which ranks each
-// texture by the camera's distance to the nearest draw that samples it. Albedo
-// and normal maps share one pool, so a draw contributes its position to both the
-// slot it samples as albedo and the one it samples as a normal map
-// (`NO_NORMAL_MAP_SLOT` = no normal map, scored by neither). `texture_count`
-// sizes the outer vec so every pool slot has an entry.
+// Per-texture-slot draw positions for the streaming scorer, which ranks a
+// texture by the nearest draw sampling it. A draw counts toward both its
+// albedo and its normal-map slot. One entry per pool slot.
 pub(super) fn texture_stream_centers(
     draw_objects: &[render_types::DrawObject],
     texture_count: usize,
@@ -52,12 +49,8 @@ pub(super) fn texture_stream_centers(
 }
 
 // Per-streamed-mesh data captured before `draw_objects` moves into the backend.
-// Only static, frustum-cullable draws stream; rooms and dynamic props
-// (sentinel AABB) stay resident so structural geometry never pops in. Each
-// payload copies the draw's region of the shared vertex/index buffers, scored by
-// its AABB center; indices are stored mesh-relative and narrowed to u16 (each
-// per-mesh region fits in u16 by the build-time splitter). Draws whose
-// build-time offsets fall out of range are skipped defensively.
+// Only static, cullable draws stream. Each payload copies the draw's geometry
+// with u16 mesh-relative indices; out-of-range draws are skipped.
 pub(super) fn mesh_stream_data(
     draw_objects: &[render_types::DrawObject],
     all_vertices: &[Vertex],

@@ -5,6 +5,7 @@
 //! the tables have grown to the graph.
 
 use alloc::vec::Vec;
+use concinnity_core::fnv::Fnv1a;
 
 use super::{CompiledGraph, CompiledResource};
 
@@ -55,6 +56,16 @@ impl<T, H> BarrierTable<T, H> {
     /// Whether each resource is driven, in resource order.
     pub fn driven(&self) -> impl Iterator<Item = bool> + '_ {
         self.targets.iter().map(Option::is_some)
+    }
+
+    /// A key that changes with the set of driven resources, for remembering a
+    /// check that depends on it.
+    pub fn driven_key(&self) -> u64 {
+        let mut hash = Fnv1a::new();
+        for driven in self.driven() {
+            hash.write(&[u8::from(driven)]);
+        }
+        hash.finish()
     }
 
     /// Every driven resource's index and target.
@@ -129,6 +140,20 @@ mod tests {
             ..FrameGraphInputs::all_off()
         };
         build_frame_graph(&inputs).unwrap()
+    }
+
+    #[test]
+    fn the_driven_key_follows_the_driven_set() {
+        let graph = graph();
+        let mut table: BarrierTable<(), ()> = BarrierTable::default();
+        let mut key_driving = |label: &'static str| {
+            table.refill(&graph, |res, _| (res.label == label).then_some(()));
+            table.driven_key()
+        };
+        let shadow = key_driving("shadow_map");
+        assert_eq!(shadow, key_driving("shadow_map"));
+        assert_ne!(shadow, key_driving("ao_output"));
+        assert_ne!(shadow, key_driving("none"));
     }
 
     #[test]

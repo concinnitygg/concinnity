@@ -48,13 +48,7 @@ pub(crate) struct FogState {
 }
 
 impl MtlContext {
-    // Encode the volumetric-fog pass. Caller has already ended the main HDR
-    // pass (and the decal pass, if any), so `targets.hdr.depth` (MSAA) holds
-    // the scene depth and `targets.hdr.hdr_resolve` holds the resolved
-    // scene + decals color. The pass alpha-blends a single lit ray-march
-    // over `hdr_resolve`.
-    // pub(in crate::metal) so the render-graph executor in
-    // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
+    // Encode the fog pass: alpha-blend the froxel volume over `hdr_resolve`.
     pub(in crate::metal) fn encode_fog(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -91,13 +85,8 @@ impl MtlContext {
 
         enc.set_fragment_value(params, draw::FOG.index);
         enc.set_fragment_value(froxel_params, draw::FROXEL.index);
-        // Read the single-sample `depth_resolve` (post-
-        // Main depth + any raymarched surface depth) so fog
-        // attenuates raymarched surfaces by their true distance. It is
-        // fetched by pixel coordinate and never sampled, so it takes no
-        // sampler slot; the volume is trilinearly filtered and takes
-        // sampler(0). `composite.sampler` is the linear clamp-to-edge state the
-        // shader used to declare inline as a constexpr sampler.
+        // `depth_resolve`, fetched by pixel so fog sees raymarched depth; the
+        // volume samples through sampler(0).
         enc.set_fragment_texture(
             self.targets.hdr.depth_resolve.as_ref(),
             draw::SCENE_DEPTH.index,
@@ -114,12 +103,9 @@ impl MtlContext {
         Ok(1)
     }
 
-    // Encode the volumetric-fog froxel-volume compute pass. One thread per
-    // (x, y) tile of the 3D volume; the kernel walks the Z slices from front
-    // to back, accumulating per-slab scatter + transmittance with a CSM
-    // shadow tap per slice. Writes `(scattered_rgb, 1 - transmittance)` into
-    // the slice of `fog_froxel_volume`. Caller must dispatch this before
-    // `encode_fog`, which samples the same volume.
+    // Encode the froxel volume: one thread per tile walking the Z slices front
+    // to back, writing `(scattered, 1 - transmittance)`. Runs before
+    // `encode_fog`.
     pub(in crate::metal) fn encode_fog_froxel(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -168,12 +154,8 @@ impl MtlContext {
     }
 }
 
-// Build the volumetric-fog pipeline: a fullscreen triangle that samples the
-// scene depth, maps each pixel into the froxel volume the compute kernel
-// filled, and composites the result over the resolved HDR target with a
-// standard `over` alpha blend. Takes the shared `fullscreen_vertex`, which is
-// what settles the triangle winding the hand-written Metal vertex wound the
-// other way from every other backend.
+// The fog pipeline: a fullscreen triangle over the shared `fullscreen_vertex`
+// that composites the froxel volume over the scene.
 pub(super) fn build_fog_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,

@@ -1,14 +1,7 @@
-// The reflection-probe set as DirectX binds it: one cube-map array holding every
-// probe's prefiltered radiance, a cube per probe, behind a single SRV slot, and a
-// per-frame upload ring of parallax records bound as a root SRV beside the
-// count's root CBV. Every pass that reads probes -- the bindless main pass, SSR,
-// the RT resolve and the transparent pass -- binds those three.
-//
-// Between bakes every subresource rests readable by every shader stage, which
-// the RT reflection kernels need as much as the draws. A bake moves
-// only its own cube's subresources to UNORDERED_ACCESS and back, so the frames
-// sampling the cubes installed before it are never reading a subresource in a
-// write state.
+// The reflection-probe set: a cube-map array of every probe's prefiltered
+// radiance behind one SRV, plus a per-frame ring of parallax records and a
+// count CBV. Between bakes every subresource rests readable by all stages; a
+// bake moves only its own cube's subresources to UNORDERED_ACCESS and back.
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::RenderBackend;

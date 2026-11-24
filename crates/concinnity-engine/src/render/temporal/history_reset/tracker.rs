@@ -815,11 +815,8 @@ mod tests {
         assert!(!tracker.observe(after.view(), ran(dt)).any());
     }
 
-    // Drawn at 240 Hz over a 60 Hz simulation, a camera that stopped from 300
-    // m/s forgets its speed over simulated time, not over the frames that
-    // happened to run a tick: 1.5 s later, a 15 m respawn on a long frame is
-    // a jump. Decayed by render time alone it would keep enough of its speed
-    // to pass.
+    // At 240 Hz over a 60 Hz simulation, a stopped camera's speed decays over
+    // simulated time, so a later 15 m respawn still reads as a jump.
     #[test]
     fn a_stop_decays_by_simulated_time_at_a_high_frame_rate() {
         let dt = 1.0 / 240.0;

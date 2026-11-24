@@ -553,12 +553,9 @@ impl StreamingState {
         }
     }
 
-    // Generate and upload the chunks entering the camera's view window and
-    // remove those that have left it. Chunk geometry is placed relative to a
-    // render origin that follows the camera's chunk, and the view and camera
-    // handed to the backend are rebased onto the same origin, so an unbounded
-    // world renders from small coordinates. Both stay absolute when no
-    // VoxelWorld streams.
+    // Stream chunks into and out of the view window, relative to a render
+    // origin that follows the camera so unbounded worlds render from small
+    // coordinates.
     fn drive_chunks(
         &mut self,
         queues: &mut RenderQueues,

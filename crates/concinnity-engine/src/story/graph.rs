@@ -40,11 +40,8 @@ impl StorySystem {
             .collect()
     }
 
-    // Move play to a node: its first page, or straight to its choice menu
-    // when it has no pages. A node with neither falls through in document
-    // order; running past the last node ends the story. Gates on the arrived
-    // page (or menu) redirect first; the hop budget stops a gate cycle from
-    // spinning forever.
+    // Move play to a node's first page or its choice menu, falling through
+    // empty nodes in order. Gates redirect first; a hop budget stops cycles.
     pub(super) fn enter_node(&mut self, index: usize, ctx: &mut PipelineContext<'_>) {
         let mut index = index;
         let mut hops = 0;

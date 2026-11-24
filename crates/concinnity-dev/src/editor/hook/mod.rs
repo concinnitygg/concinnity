@@ -13,7 +13,7 @@
 //! floating panel (`form_panel.rs`). A row the build generates has no world.jsonl
 //! line of its own: its form is seeded from what the expansion produced, and only
 //! confirming appends the line -- which then overrides the expansion. The search
-//! field and the form's name heading are real `TextInput` assets edited by the
+//! field and the form's name heading are real `TextField` assets edited by the
 //! engine's text-input system; the hook reads them back. All three panels
 //! (Assets, edit form, Preview) are floating: holding their title bars drags them
 //! (the hook owns each origin, clamped so a panel can never leave the screen).
@@ -37,30 +37,23 @@ use concinnity_cook::authoring::world::{entry_type, entry_type_name};
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{
-    CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
-    WorldLines,
+    CursorShape, DesiredCursor, FlyCam, HiddenAssets, MenuOverride, ViewOverrides, WorldLines,
 };
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
 use concinnity_runtime::live_edit::PendingBackend;
 
 use super::asset_handle::AssetHandle;
-use super::entry_list::{EntryId, EntryList};
+use super::entry_list::{EntryId, EntryList, Origin};
 use super::history::History;
-use super::panels::asset_list::ListRow;
-use super::panels::asset_tree::TreeRow;
 use super::panels::console::ConsoleSink;
-use super::panels::form::FormField;
 use super::panels::health::HealthState;
-use super::panels::lighting;
-use super::panels::registry::{self, PanelKey, PerPanel};
+use super::panels::registry::{PanelKey, PerPanel};
 use super::selection::Selection;
-use super::viewport::{cursor, framing, gizmo, resize, snap};
-use super::{
-    behavior, hud, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
-};
+use super::ui::BuiltUi;
+use super::viewport::{cursor, framing, gizmo, snap};
+use super::{live, notify, outlines, overrides, session_store, sim, view_menu, worlds};
 use crate::debug::hot_reload::WorldPathHandle;
-use crate::editor::text_area::clipboard::InternalClipboard;
 use crate::frame_hook::FrameHook;
 use edit::assets_state::AssetsState;
 use edit::behavior_state::BehaviorState;
@@ -79,19 +72,7 @@ use edit::templates_state::TemplatesState;
 use edit::variables_state::VariablesState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
-use std::path::Path;
-
-// Draw layer for the top bar: far above the floating panels' layers (which are a
-// small 1..=6 rank), so the bar always sits on top even under a dragged panel.
-const TOP_BAR_LAYER: i32 = 1_000;
-
-// An active title-bar drag: the grabbed panel and the cursor's offset from its
-// origin at the press, so the panel follows without snapping to the cursor.
-#[derive(Debug, Clone, Copy)]
-struct Drag {
-    key: PanelKey,
-    grab: [f32; 2],
-}
+use std::path::{Path, PathBuf};
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -102,6 +83,11 @@ pub(crate) struct EditorHook {
     world_path: String,
     // The same path, shared with the hot-reload driver that watches it.
     world_path_handle: WorldPathHandle,
+    // The root every `Include` path is read and written against.
+    content_root: PathBuf,
+    // The file the entries were read from when it is not `world_path`: a world
+    // the start screen previews without opening it.
+    entries_from: Option<String>,
     // The authored entry list (names live here, unlike the compiled blob), each
     // entry beside the session key the editor addresses it by. Edits mutate
     // this; SAVE serializes it back to `world_path`.
@@ -131,12 +117,9 @@ pub(crate) struct EditorHook {
     // holds state no authored diff describes (a simulation that ran, a story
     // source re-read from disk), so the live-apply path must not claim it.
     rebuild_required: bool,
-    // The entry list the live preview world was built from, and the template
-    // baselines that build's expansion merged authored patches over. An edit is
-    // applied to the running world by diffing against these; a rebuild re-seeds
-    // both. The baselines are seeded on demand (the first edit that could be
-    // applied live expands the list once to find them), and an edit cannot be
-    // applied live until they are.
+    // The entries the live preview was built from and the template baselines
+    // its expansion used; edits apply live by diffing against these. Baselines
+    // are seeded on the first edit that could apply live.
     world_entries: EntryList,
     world_shadows: Option<live::ShadowBaselines>,
     templates: TemplatesState,
@@ -147,8 +130,6 @@ pub(crate) struct EditorHook {
     story: StoryState,
     // The Shaders list and the Shader source panel it opens.
     shaders: ShadersState,
-    // What a text area copies to when the window reaches no system clipboard.
-    text_clipboard: InternalClipboard,
     // The session's monotonic clock, for timing presses into double-clicks.
     clock: std::time::Instant,
     import: ImportState,
@@ -156,12 +137,13 @@ pub(crate) struct EditorHook {
     // The shared log sink, and whether a worker is mid-build (the /cook guard).
     console_sink: ConsoleSink,
     console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // The toast queue (`editor/notify.rs`): result sites push, the per-frame
-    // drive (`hook/drive/notify.rs`) draws the stack. The latch skips the
-    // overlay's hide pass while nothing is live, so an idle queue costs one
-    // lock check a frame.
+    // The toast inbox (`editor/notify.rs`): result sites push, and the
+    // per-frame drive (`hook/drive/notify.rs`) feeds it to the toast stack.
     notifier: notify::Notifier,
-    toasts_hidden: bool,
+    toasts: notify::ToastFeed,
+    // Scratch: the toasts a frame sends.
+    toast_out: Vec<concinnity_engine::components::Toast>,
+    marks: drive::marks::MarksScratch,
     behavior: BehaviorState,
     // The Map panel: the world's places and the moves between them
     // (`editor/map/`). It reads the entry list and writes nothing, so its
@@ -172,15 +154,14 @@ pub(crate) struct EditorHook {
     trace_seen: u64,
     live_vars: Vec<(String, String, String)>,
     live_locals: Vec<(String, String, String)>,
+    // Bumped each time `live_vars` or `live_locals` is written.
+    live_revision: u64,
     // Ctrl state sampled from this frame's input, for the panel presses that
     // resolve without direct input access (a Ctrl+click on a chart card
     // toggles its breakpoint).
     ctrl_held: bool,
-    // Editor-session hide / lock sets, by handle, like the selection (an id
-    // drifts across preview rebuilds, and a label follows its entry). Hidden
-    // assets skip rendering (via the published `HiddenAssets` resource);
-    // locked ones are skipped by viewport picking. Neither touches the
-    // authored entries.
+    // Editor-session hide and lock sets by handle. Hidden assets skip rendering
+    // and locked ones skip picking; neither touches the authored entries.
     hidden_assets: std::collections::BTreeSet<AssetHandle>,
     locked_assets: std::collections::BTreeSet<AssetHandle>,
     // An active isolate (`hook/hide.rs`): the assets kept visible, hiding
@@ -200,9 +181,10 @@ pub(crate) struct EditorHook {
     content: ContentState,
     // The right-click "Create here" menu (`hook/drive/create_menu.rs`), if open.
     create_menu: Option<drive::create_menu::CreateMenu>,
-    // The confirmation dialog (`hook/drive/modal.rs`), if open. Screen-modal:
-    // while open every press and wheel is swallowed before any other routing,
-    // and only one of its buttons closes it.
+    create_items: Option<drive::create_menu::CreateItems>,
+    // The confirmation dialog (`hook/drive/modal.rs`), if open. A modal panel:
+    // while open it takes every press and the wheel, and only one of its
+    // buttons closes it.
     modal: Option<crate::editor::modal::Dialog>,
     worlds: WorldsState,
     // Whether the session's world has never been named: `+` starts one, the
@@ -251,12 +233,9 @@ pub(crate) struct EditorHook {
     // Template baselines for every template-derived asset, derived from the
     // working entries. Invalidated by every edit, rebuilt on demand.
     template_index: Option<overrides::TemplateIndex>,
-    // The viewport selection set (`editor/selection.rs`), held as
-    // `AssetHandle`s and re-resolved against the entry list every frame
-    // (`hook/handles.rs`): a live-preview rebuild begins a fresh build, so a
-    // stored AssetId would drift onto another asset, and a name is content the
-    // user renames. `pick_last` is the transient repeat-click cycle;
-    // `marquee` an in-flight box select.
+    // The viewport selection, held as handles re-resolved every frame since
+    // ids drift across rebuilds and names are renamed. `pick_last` cycles
+    // repeat clicks; `marquee` is a box select in flight.
     selection: Selection,
     pick_last: Option<pick::PickLast>,
     marquee: Option<drag::marquee::MarqueeDrag>,
@@ -290,42 +269,41 @@ pub(crate) struct EditorHook {
     // content-derived default. Only ever grows a panel past that default (see
     // `effective_size`), and only the resizable panels are set.
     sizes: PerPanel<Option<[f32; 2]>>,
-    // The title-bar drag in progress, if any.
-    drag: Option<Drag>,
-    // The edge / corner resize in progress, if any.
-    resize: Option<resize::Resize>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
     // top + first to receive clicks). Dragging or clicking a panel moves it to the
-    // end. Its position drives the per-frame `HudLayers` publish so overlapping
-    // panels occlude cleanly instead of merging.
+    // end. Its position sets each built panel's rank, which the engine stacks
+    // and draws them by.
     panel_order: Vec<PanelKey>,
-    // The preview rebuild blocks the frame loop, so when the last one measured
-    // slow its card goes up ahead of the stall: `rebuild_op` holds the card,
-    // `rebuild_countdown` the frames left before the rebuild runs (the card
-    // must be drawn and presented first), and `last_rebuild_secs` the honest
-    // measure that gates the whole affordance.
+    // Where the hook last stacked each built panel, so a higher rank the
+    // engine gave one on a press brings it forward in `panel_order` too.
+    built_ranks: PerPanel<u32>,
+    // The built panels that lent the world something to take back.
+    lent: PerPanel<bool>,
+    // The built panels' events read so far.
+    ui_events: concinnity_engine::ecs::EventCursor,
+    // An editor element this frame's routing resolved took the press, so the
+    // engine's UI must not act on it as well.
+    editor_took_press: bool,
+    // A preview rebuild blocks the frame loop, so once one measured slow a card
+    // goes up first: `rebuild_countdown` lets it present before the stall.
     rebuild_op: Option<notify::OpHandle>,
     rebuild_countdown: u8,
     last_rebuild_secs: f32,
 }
 
-// Owned per-tick data backing a `PanelView` (computed from the cooked tree + the
-// live search field, then borrowed for both hit-testing and layout).
-struct PanelData {
-    rows: Vec<TreeRow>,
-    // The hide / lock sets and the open row menu, projected onto the names the
-    // tree rows are drawn under.
-    hidden: std::collections::BTreeSet<String>,
-    locked: std::collections::BTreeSet<String>,
-    row_menu: Option<String>,
-    picker_options: Option<Vec<crate::editor::panels::assets_panel::PickerOption>>,
-    form_title: String,
-    form_overrides: Option<FormOverridesData>,
-    form_extras: Vec<crate::editor::panels::form_extras::ExtraRow>,
-    form_blocked: Option<String>,
+// The add / edit form's derived data: its heading, override state, extra
+// rows, and why it cannot confirm.
+#[derive(Debug)]
+struct FormData {
+    title: String,
+    overrides: Option<FormOverridesData>,
+    extras: Vec<crate::editor::panels::form_extras::ExtraRow>,
+    blocked: Option<String>,
 }
 
-// Owned per-tick override state backing a `form_panel::OverridesView`.
+// The open form's override state: each field's origin, how many differ, and
+// any open menu's options.
+#[derive(Debug)]
 struct FormOverridesData {
     marks: Vec<overrides::FieldOrigin>,
     count: usize,
@@ -333,44 +311,11 @@ struct FormOverridesData {
     entity_menu: Option<Vec<String>>,
 }
 
-// Owned per-tick data backing a `TemplateView` (the open template's title,
-// description, and grouped asset rows).
-#[derive(Default)]
-struct TemplateDetailData {
-    title: String,
-    description: String,
-    rows: Vec<ListRow>,
-}
-
-// Owned per-tick data backing a `LightingView` (the row list and the
-// per-binding fields derived from the current entries).
-struct LightingData {
-    rows: Vec<lighting::Row>,
-    fields: Vec<Option<FormField>>,
-}
-
 // The panels open at launch: the Preview panel alone.
 fn initial_open() -> PerPanel<bool> {
     let mut open = PerPanel::splat(false);
     open[PanelKey::Preview] = true;
     open
-}
-
-// Move a scroll offset one row toward the wheel direction, clamped to `max`.
-fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
-    if delta > 0.0 {
-        (cur + 1).min(max)
-    } else {
-        cur.saturating_sub(1)
-    }
-}
-
-// The physical control slot showing logical form field `j` under scroll offset
-// `scroll`, or `None` when the field is outside the visible window of `window`
-// rows. The panel's control pool is slot-indexed, so seeding / reading a field
-// goes through its slot.
-fn visible_slot(j: usize, scroll: usize, window: usize) -> Option<usize> {
-    (j >= scroll && j < scroll + window).then(|| j - scroll)
 }
 
 // The first line of a validation error, clipped to fit the panel's status line.
@@ -413,6 +358,7 @@ mod behavior_asset;
 mod behavior_keys;
 mod bookmarks;
 mod browse;
+mod built_panels;
 mod camera_pose;
 mod cook_worker;
 mod drop_floor;
@@ -439,6 +385,15 @@ mod worlds_start;
 mod tests;
 
 impl EditorHook {
+    // The world file the entries were read from and the root a build of them
+    // resolves under.
+    pub(super) fn world_origin(&self) -> Origin<'_> {
+        Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        }
+    }
+
     pub(crate) fn new(world_path: String, entries: impl Into<EntryList>) -> Self {
         let bookmarks = session_store::default_path()
             .and_then(|path| {
@@ -454,6 +409,8 @@ impl EditorHook {
         Self {
             world_path_handle: WorldPathHandle::new(world_path.as_str()),
             world_path,
+            content_root: crate::project::root_or_cwd(),
+            entries_from: None,
             history: History::default(),
             baseline: entries.clone(),
             saved: entries.clone(),
@@ -473,20 +430,22 @@ impl EditorHook {
             shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
-            text_clipboard: InternalClipboard::default(),
             clock: std::time::Instant::now(),
             import: ImportState::default(),
             console: ConsoleState::default(),
             console_sink: ConsoleSink::default(),
             console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             notifier: notify::Notifier::default(),
-            toasts_hidden: true,
+            toasts: notify::ToastFeed::default(),
+            toast_out: Vec::new(),
+            marks: drive::marks::MarksScratch::default(),
             behavior: BehaviorState::default(),
             map: MapState::default(),
             variables: VariablesState::default(),
             trace_seen: 0,
             live_vars: Vec::new(),
             live_locals: Vec::new(),
+            live_revision: 0,
             ctrl_held: false,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
@@ -497,6 +456,7 @@ impl EditorHook {
             assets: AssetsState::default(),
             content: ContentState::default(),
             create_menu: None,
+            create_items: None,
             modal: None,
             worlds: WorldsState::default(),
             untitled: false,
@@ -531,12 +491,14 @@ impl EditorHook {
             open: initial_open(),
             positions: PerPanel::splat(None),
             sizes: PerPanel::splat(None),
-            drag: None,
-            resize: None,
-            // Back-to-front, matching the injected draw order (registry order:
-            // the Template detail panel frontmost, over the Templates list it
-            // spawns from).
+            // Back-to-front in registry order: the Template detail panel in
+            // front of the Templates list it spawns from, the Worlds panel
+            // frontmost.
             panel_order: PanelKey::ALL.to_vec(),
+            built_ranks: PerPanel::splat(0),
+            lent: PerPanel::splat(false),
+            ui_events: concinnity_engine::ecs::EventCursor::default(),
+            editor_took_press: false,
             rebuild_op: None,
             rebuild_countdown: 0,
             last_rebuild_secs: 0.0,
@@ -552,13 +514,9 @@ impl EditorHook {
         self
     }
 
-    // Open on the start screen: a session started without a world named on the
-    // command line picks one there before it edits anything (see `run_editor`).
-    // `picked` is the project's most recent world, preselected so the user
-    // lands on their last project rather than on a void -- but it is not
-    // compiled yet. The window comes up on the listing alone and the pick is
-    // previewed from there, behind the loading cover, so a world that takes
-    // seconds to compile does not hold the window closed for them.
+    // Open on the start screen with `picked`, the project's most recent world,
+    // preselected but not yet compiled; it previews behind the loading cover so
+    // the window is not held closed.
     pub(crate) fn with_start_screen(mut self, picked: Option<String>) -> Self {
         self.start_mode = true;
         self.open[PanelKey::Worlds] = true;
@@ -579,29 +537,6 @@ impl EditorHook {
         self.world_path_handle.clone()
     }
 
-    // Whether any editor text control holds keyboard focus this frame: the
-    // Assets panel's search field (or the type picker typing into it), an open
-    // edit form (its name / arg inputs always own focus while it shows), or a
-    // focused Lighting / Story / Import / Console field. Undo/redo shortcuts
-    // stand down while typing.
-    // Read the palette's filter off its field. Mirrored onto the hook because
-    // the data a press and a draw resolve against is built without world access.
-    fn sample_behavior_filter(&mut self, world: &World) {
-        let typed = if self.behavior.picking {
-            widget::field_text(world, behavior::panel::FILTER_INPUT)
-        } else {
-            String::new()
-        };
-        if typed != self.behavior.filter {
-            // A narrowed palette is a different list, so the highlight starts
-            // again at its best answer rather than keeping a place that may no
-            // longer be in it.
-            self.behavior.pick = 0;
-            self.behavior.pick_scroll = 0;
-            self.behavior.filter = typed;
-        }
-    }
-
     // The frontmost open floating panel, if any: the keyboard target for
     // per-frame editing keys and the arbiter for shortcuts a panel claims.
     fn frontmost_open_panel(&self) -> Option<PanelKey> {
@@ -612,6 +547,8 @@ impl EditorHook {
             .find(|&k| self.panel_shown(k))
     }
 
+    // Whether any editor text field holds keyboard focus; undo and redo stand
+    // down while typing.
     fn text_focus_active(&self) -> bool {
         self.non_console_text_focus() || self.console.focus
     }
@@ -645,18 +582,19 @@ impl FrameHook for EditorHook {
     }
 
     fn tick(&mut self, world: &mut World) {
+        // What the built panels were lent last frame comes back first, so
+        // everything this frame works on the hook's own editors.
+        self.reclaim_built(world);
         // Before anything this frame reads the panel state: a choice made in
         // the macOS menu bar landed between frames and is applied here, so the
         // rest of the frame sees one settled state.
         self.drive_app_menu(world);
         // Bring the Assets tree up to date before anything reads it, so this
-        // frame's hit test and draw agree on the rows.
+        // frame's events and rows agree.
         self.refresh_tree_if_needed();
         // The Shader panels take in reload outcomes, on-disk changes, and
         // edits to the declared Shaders before anything draws them.
         self.drive_shader_source();
-        self.shaders
-            .retry_missing(self.clock.elapsed().as_secs_f64());
         if self.open[PanelKey::Shaders] {
             self.shader_rows();
         }
@@ -668,11 +606,6 @@ impl FrameHook for EditorHook {
         // Seed Transforms onto the billboard-backed entities before any of
         // this frame's picking or gizmo work resolves them.
         self.seed_billboard_transforms(world);
-        // Sampled before anything routes, so this frame's hit tests and draw
-        // narrow the palette by the same query.
-        self.sample_behavior_filter(world);
-        self.sample_palette_query(world);
-        self.sample_shape_rows(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
@@ -725,18 +658,19 @@ impl FrameHook for EditorHook {
             if input.hud_toggle && !self.start_mode {
                 self.hud_visible = !self.hud_visible;
             }
+            self.observe_built_panels(world);
+            self.observe_display_menu(world);
+            self.observe_create_menu(world);
+            self.observe_dialog(world);
+            self.read_ui_events(world);
             let vp = input.viewport;
-            if self.hud_visible && vp[0] > 0.0 {
-                // The start screen owns the whole window while it is up: its
-                // panel is the only thing to route to, and the editor's
-                // shortcuts, menus, and overlays stand down until a world is
-                // open (`hook/worlds_start.rs`).
-                if self.start_mode {
-                    self.drive_start_input(input, vp, world);
-                } else {
-                    self.drive_session_input(input, vp, world);
-                }
+            // The start screen owns the whole window while it is up: its panel
+            // drives itself, and the editor's shortcuts, menus, and overlays
+            // stand down until a world is open (`hook/worlds_start.rs`).
+            if self.hud_visible && vp[0] > 0.0 && !self.start_mode {
+                self.drive_session_input(input, vp, world);
             }
+            self.withhold_taken_press(world);
         }
 
         // The pick the screen opened on, once the screen itself has been drawn:
@@ -747,11 +681,8 @@ impl FrameHook for EditorHook {
         // pose written here frames the world the sidebar is now previewing.
         self.drive_cinematic(world);
 
-        // Drive the world's cursor / freeze state from the transport: Stopped /
-        // Paused (`Some(true)`) free the cursor and freeze the world; Playing
-        // (`Some(false)`) runs it -- as does the one frame a queued Step takes.
-        // The fly flag layers on top: navigation input + cursor capture stay
-        // live while the frozen world is flown through.
+        // Drive the world's cursor and freeze state from the transport; the fly
+        // flag keeps navigation live through a frozen world.
         self.drive_sim(world);
         // Exchange execution-trace state with the behavior system: publish the
         // request while a live-debug panel is open, ingest what last frame's
@@ -776,21 +707,15 @@ impl FrameHook for EditorHook {
         self.published_view = view;
         world.insert_resource(view);
 
-        // Re-anchor + recolor the top bar, then lay out (or hide) the panels.
-        hud::apply_layout(world, self.hud_state());
         let vp = input.as_ref().map_or([0.0, 0.0], |i| i.viewport);
         let mouse = input
             .as_ref()
             .map_or([0.0, 0.0], |i| [i.mouse_x, i.mouse_y]);
-        // The panels lay out only once the HUD is shown and a real viewport exists
-        // (frame 0 keeps the injected-hidden placeholders).
+        // The panels show only once the HUD is up and a real viewport exists
+        // (frame 0 has none).
         let shown = self.hud_visible && vp[0] > 0.0;
-        // Publish the world-space editor lines (origin axes + extent outlines)
-        // for the renderer's line pass, refilling last frame's buffer.
-        // Republished every frame (the renderer expands whatever it finds), and
-        // empty while everything is toggled off, the HUD is hidden, or the
-        // Lines show flag is cleared (which would mask the pass anyway; the
-        // empty buffer also skips the CPU generation and ribbon expansion).
+        // Publish the editor's world-space lines for the line pass, empty while
+        // they are toggled off or the HUD is hidden.
         let mut lines = world
             .remove_resource::<WorldLines>()
             .map(|l| l.0)
@@ -807,89 +732,41 @@ impl FrameHook for EditorHook {
         // instead, so the sprite hides and no stray arrow lingers over the frozen
         // pointer. Its shape becomes a resize cursor over a resizable panel edge.
         let owns_cursor = vp[0] > 0.0 && !self.sim.playing() && !self.fly;
-        cursor::set_visible(world, owns_cursor);
-        let shape = if !owns_cursor || !shown {
-            CursorShape::Default
-        } else if let Some(r) = &self.resize {
-            // Keep the resize cursor for the whole drag, even if the pointer
-            // drifts off the edge as the panel grows.
-            resize::cursor_shape(r.edges)
+        if let Some(id) = world.resource::<BuiltUi>().and_then(|b| b.cursor) {
+            cursor::set_visible(world, id, owns_cursor);
+        }
+        let shape = if owns_cursor && shown {
+            self.hover_cursor(world, mouse)
         } else {
-            self.hover_cursor(vp, mouse)
+            CursorShape::Default
         };
         world.insert_resource(DesiredCursor(shape));
-        // Publish the panels' draw layers (focus stack) so the renderer occludes
-        // overlaps by focus this frame. Empty while the HUD is hidden, so the
-        // renderer skips the overlay sort entirely.
-        if shown {
-            self.publish_layers(world);
-        } else {
-            world.insert_resource(HudLayers::default());
-        }
         // Lay out every open panel (hiding keeps its state, so toggling back
         // restores the same view). Compound gates live on each panel's
         // `is_open` -- e.g. the edit form shows only while the assets UI is on.
-        for p in registry::all() {
-            if shown && self.panel_shown(p.key()) {
-                let o = self.origin(p.key(), vp);
-                p.draw(self, world, o, mouse);
-            } else {
-                p.hide(world);
-            }
-        }
-        // The billboards sit at the bottom of the editor overlays; the
-        // selection rings ride the picked assets' projected bounds above
-        // them, under the panels (their ids take the default draw layer);
-        // the gizmo and the marquee rect draw over both.
-        // The viewport overlays belong to a session editing a world: the start
-        // screen shows the previewed world plainly, with nothing over it but
-        // the panel, its dialog, and its toasts.
-        let overlays = shown && !self.start_mode;
-        // The start screen's shot fade sits under all of them, covering the
-        // previewed world alone; the loading cover stands over the same area
-        // instead while the world behind it is being compiled.
-        self.drive_cinematic_draw(world, vp, shown);
-        self.drive_loading_draw(world, shown);
+        // Scan the code the text panels show for color before they draw it.
+        self.sync_built_panels(world, shown, vp);
+        self.drive_viewport_marks(world, vp, shown);
         if shown && self.start_mode {
             self.start_drawn = self.start_drawn.saturating_add(1);
         }
-        self.drive_billboards(world, vp, overlays && self.show_billboards);
-        self.drive_highlight(world, vp, overlays);
-        self.drive_gizmo_draw(world, vp, overlays);
-        self.drive_marquee_draw(world, overlays);
-        self.drive_create_menu_draw(world, overlays, mouse);
-        self.drive_display_menu_draw(world, vp, overlays, mouse);
-        self.drive_toasts(world, vp, shown, mouse);
-        self.drive_modal_draw(world, vp, shown, mouse);
+        let overlays = shown && !self.start_mode;
+        self.drive_create_menu(world, overlays);
+        self.drive_display_menu(world, vp, overlays);
+        self.drive_toasts(world, shown);
     }
 
-    // Bring the live preview world back in line with the in-memory entries, so
-    // any authored change (add / edit / delete / template apply) shows
-    // immediately without touching disk (SAVE owns persistence). Run once per
-    // frame by the run loop right after `tick`, whenever an edit flagged
-    // `rebuild_preview`.
-    //
-    // An edit that only changed component data is written straight into the
-    // running world (`try_live_apply`), which is what most editing is: the
-    // renderer draws that data every frame, so it is already the shortest path
-    // from the edit to the picture. Everything else recompiles and swaps a
-    // fresh world under the running backend, below.
-    //
-    // The recompiled world is built FIRST, in a throwaway runtime; only once that
-    // succeeds is the backend transplanted out of the live world. So a rebuild
-    // failure leaves the live world -- and its window -- fully intact; the next
-    // edit retries. The backend is never dropped on an error path.
+    // Bring the live preview in line with the in-memory entries without
+    // touching disk, after any `tick` that flagged `rebuild_preview`. Data-only
+    // edits write straight into the running world (`try_live_apply`); anything
+    // else recompiles in a throwaway runtime first, and only on success is the
+    // backend transplanted, so a failed rebuild leaves the live world intact.
     fn apply_world_swap(&mut self, runtime: &mut Runtime) {
         if !self.refresh_preview(runtime.world_mut()) {
             return;
         }
-        // Whatever the user waits behind needs a drawn-and-presented frame
-        // before the stall, so the rebuild waits out a countdown (tick draws on
-        // the frames between). A session announces itself with a card once a
-        // rebuild has measured slow; the start screen sets its own countdown
-        // when it stages a preview, since the loading cover is already up and
-        // no card belongs over it. Fast session rebuilds (the common case) show
-        // nothing and run immediately.
+        // Count down so a waiting card presents before the stall. The start
+        // screen sets its own countdown; fast rebuilds run at once.
         if !self.start_mode
             && self.last_rebuild_secs > SLOW_REBUILD_SECS
             && self.rebuild_op.is_none()
@@ -935,13 +812,9 @@ impl EditorHook {
         true
     }
 
-    // Write an edit that only changed component data into the running world,
-    // instead of rebuilding it. `true` when the whole edit landed; `false`
-    // leaves the world untouched for the rebuild to handle.
-    //
-    // The diff is taken against the entries the running world was built from,
-    // not the pre-edit list, so a burst of edits that each declined still
-    // applies as one once one of them can.
+    // Write a data-only edit into the running world. `false` leaves it for the
+    // rebuild. The diff is against the entries the world was built from, so
+    // declined edits still land together once one can.
     fn try_live_apply(&mut self, world: &mut World) -> bool {
         if self.rebuild_required {
             return false;
@@ -962,16 +835,14 @@ impl EditorHook {
         true
     }
 
-    // The template baselines for the running world, expanding its entry list
-    // once to find them if the session has not needed them yet. Every edit that
-    // could move a baseline rebuilds, and a rebuild re-seeds these, so the one
-    // expansion holds for the rest of the session. `false` when the list does
-    // not expand, which sends the edit to the rebuild that will report why.
+    // The template baselines for the running world, expanded once on first
+    // need. `false` when the list does not expand, sending the edit to a
+    // rebuild that reports why.
     fn seed_world_shadows(&mut self) -> bool {
         if self.world_shadows.is_some() {
             return true;
         }
-        let Ok(loaded) = Self::cook_entries(&self.world_entries) else {
+        let Ok(loaded) = Self::cook_entries(&self.world_entries, self.world_origin()) else {
             return false;
         };
         self.world_shadows = Some(
@@ -1007,11 +878,7 @@ impl EditorHook {
         self.world_shadows = Some(shadows);
         let mut staged = Runtime::new();
         staged.load_world(world);
-        // Carry the editor's typed text (an open form's name + fields, the combo
-        // filter) across the fresh HUD injection so it is not blanked.
-        let fields = Self::field_snapshot(runtime.world());
-        super::inject::editor_hud(staged.world_mut());
-        Self::restore_fields(staged.world_mut(), &fields);
+        super::install::editor_ui(staged.world_mut());
         staged
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));
@@ -1023,6 +890,7 @@ impl EditorHook {
             .world_mut()
             .insert_resource(PendingBackend::new(backend));
         let new_world = std::mem::replace(staged.world_mut(), World::new());
+        self.reclaim_built(runtime.world_mut());
         runtime.load_world(new_world);
         if let Err(e) = runtime.start() {
             tracing::error!("editor: live preview start failed: {e:?}");

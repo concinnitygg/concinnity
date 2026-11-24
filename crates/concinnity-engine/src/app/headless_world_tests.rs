@@ -1,9 +1,5 @@
-// A world of authored content, run headless: no window, no host, no clock.
-//
-// The systems in `run_tests` are synthetic, written to exercise the driver.
-// These run the real thing -- a `Behavior` compiled and evaluated by the
-// system the engine's own table gates in -- so what they prove is that the loop, the
-// table, and a simulation system fit together into a world that does something.
+// A world of authored content run headless, proving the loop, the system table
+// and a real simulation system fit together.
 
 use alloc::boxed::Box;
 use alloc::string::ToString;
@@ -196,16 +192,9 @@ fn height(app: &App, entity: Entity) -> f32 {
         .position[1]
 }
 
-// The headless CI run, and the whole claim the headless tier makes: a world of
-// authored content with no host behind it runs its simulation, and once it has
-// settled a tick of it costs no allocation.
-//
-// Three things are asserted, and the third is the one `run_for` makes on its
-// own: the bodies fell and came to rest on the floor, the behavior fired once
-// per tick throughout, and the driver's steady-state allocation invariant held
-// across a full window past the warmup (see `alloc_guard`). The counters that
-// invariant reads are live in this binary, which is what makes it an assertion
-// rather than a formality.
+// The headless CI run: the bodies settle on the floor, the behavior fires once
+// per tick, and the driver's steady-state allocation invariant holds past the
+// warmup.
 #[cfg(debug_assertions)]
 #[test]
 fn a_simulating_world_settles_and_runs_an_allocation_free_tick() {

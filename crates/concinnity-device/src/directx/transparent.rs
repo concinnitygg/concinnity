@@ -41,6 +41,7 @@ use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::gfx::render_types::RtParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -232,15 +233,9 @@ pub(in crate::directx) struct TracedGlassPsos {
     pub reflection_textured: ID3D12PipelineState,
 }
 
-// The see-through glass MESH producer. Ray-traced only: what makes the mesh
-// see-through rather than the opaque reflective glass of the main pass is a real
-// per-pixel reflection ray, so there is no probe-path pipeline and the whole
-// producer is inert while RT is off (those meshes then render opaque).
-//
-// It holds no records. A mesh draws from the shared scene vertex / index buffers
-// at its `DrawObject`'s offsets, and both those offsets and its params change per
-// frame, so `collect_mesh_draws` rebuilds the list every frame and writes each
-// mesh's params into this frame's slice of the ring.
+// The see-through glass mesh producer, ray-traced only and inert while RT is
+// off. Its meshes draw from the shared scene buffers with per-frame offsets and
+// params, so `collect_mesh_draws` rebuilds the list every frame.
 pub(in crate::directx) struct GlassMeshProducer {
     flat_rt_pso: ID3D12PipelineState,
     // `Some` only when the bindless pool exists, matching the other producers.
@@ -332,12 +327,9 @@ impl GlassMeshProducer {
     }
 }
 
-// Owned by `DxContext` when the world declared any `GlassPanel`, `WaterSurface`
-// or see-through material. Holds both root signatures, the per-frame view +
-// RtParams CBV rings, the scene snapshot the fragments refract, and each live
-// producer. The
-// depth SRV is the main-pass depth slot shared with the decal pass; the
-// scene-copy SRV is the transparent pass's own heap slot.
+// The transparent pass, when the world declares panes, water or see-through
+// material: both root signatures, the view and RtParams rings, the scene
+// snapshot, and each live producer.
 pub(in crate::directx) struct TransparentResources {
     root_sig: ID3D12RootSignature,
     producers: TransparentProducers<ID3D12PipelineState, RecordBuffers>,
@@ -359,12 +351,8 @@ pub(in crate::directx) struct TransparentResources {
     // occlusion test.
     depth_srv_gpu: SrvSlot,
 
-    // Ray-traced reflection state, present only when the GPU supports DXR AND
-    // every RT pipeline compiled. One root signature shared by both producers'
-    // flat-tint + textured-bindless PSOs, chosen per frame in
-    // `encode_transparent` while RT is live; otherwise the base `pso`s run the
-    // probe/planar path. The RtParams ring feeds the trace and is empty (never
-    // read) when the RT pipelines are absent.
+    // RT state, present only with DXR and every RT pipeline compiled: one root
+    // signature for both producers' flat and textured PSOs, chosen per frame.
     rt_root_sig: Option<ID3D12RootSignature>,
     rt_params_ubo_resources: Vec<PooledBuffer>,
     rt_params_ubo_ptrs: Vec<*mut u8>,
@@ -377,11 +365,85 @@ pub(in crate::directx) struct TransparentResources {
     reflection_windows: GlassReflectionWindows,
     reflection: Option<GlassReflectionLayers>,
     reflection_divisor: u32,
+
+    // The null table of four the air's root table holds in a world without an
+    // atmosphere, where the view's air flag is off and nothing reads it.
+    air_stand_in: AirStandIn,
 }
 
-// The mapped ring pointers are POD raw pointers; the upload buffers stay alive
-// through the `Vec<PooledBuffer>` fields and the pointers are written on the
-// render thread only. Mirrors `RaymarchResources`.
+// A zeroed atmosphere block, and four null views in the air table's shapes:
+// three 2D tables and a volume.
+struct AirStandIn {
+    block: PooledBuffer,
+    _run: PostSrvRun,
+    table: SrvSlot,
+}
+
+impl AirStandIn {
+    fn new(
+        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
+        post: &PostDescriptors,
+    ) -> RenderResult<Self> {
+        let size = align256(size_of::<AtmosphereParams>() as u64);
+        let block = alloc.alloc_buffer(
+            size,
+            D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+        )?;
+        let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+        // local that receives the mapping.
+        unsafe { block.Map(0, None, Some(&raw mut ptr)) }
+            .map_err(|e| map_hresult(e.code(), "map air stand-in block"))?;
+        // SAFETY: the mapping covers the buffer's `size` bytes, which nothing else writes.
+        unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), 0, usize::saturating_from(size)) };
+        let run = post.allocate_srv_run(4)?;
+        let table = run
+            .gpu(0)
+            .ok_or_else(|| RenderError::Other("air stand-in past its descriptor run".into()))?;
+        let view = |dimension, anonymous| D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            ViewDimension: dimension,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: anonymous,
+        };
+        let flat = view(
+            D3D12_SRV_DIMENSION_TEXTURE2D,
+            D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_SRV {
+                    MipLevels: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        let volume = view(
+            D3D12_SRV_DIMENSION_TEXTURE3D,
+            D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture3D: D3D12_TEX3D_SRV {
+                    MipLevels: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        for (i, desc) in [flat, flat, flat, volume].iter().enumerate() {
+            let Some(cpu) = run.cpu(i) else {
+                continue;
+            };
+            // SAFETY: the view descriptor is live for the call, a null resource makes a null
+            // view, and the destination handle addresses a slot of the run this context reserved.
+            unsafe { device.CreateShaderResourceView(None, Some(std::ptr::from_ref(desc)), cpu) };
+        }
+        Ok(Self {
+            block,
+            _run: run,
+            table,
+        })
+    }
+}
+
+// The mapped ring pointers stay alive with their buffers and are written on
+// the render thread only.
 // SAFETY: sharing `&TransparentResources` hands out the pointer values but no way to dereference
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}
@@ -434,9 +496,14 @@ const OCEAN_ROOT_RT: u32 = 22;
 // Root parameter index of the clouds' shadow map (t18).
 const CLOUD_SHADOW_ROOT_BASE: u32 = 14;
 const CLOUD_SHADOW_ROOT_RT: u32 = 23;
-// Root parameter index of the far shadow map (t19), last in both signatures.
+// Root parameter index of the far shadow map (t19).
 const FAR_SHADOW_ROOT_BASE: u32 = 15;
 const FAR_SHADOW_ROOT_RT: u32 = 24;
+// Root parameter index of the atmosphere's block (b2), followed in both
+// signatures by its table of four (t23..t26: transmittance, multiple
+// scattering, the unread sky view and the aerial volume), last in both.
+const AIR_ROOT_BASE: u32 = 16;
+const AIR_ROOT_RT: u32 = 25;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
@@ -462,17 +529,21 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [13] ocean arrays + a sea's wake
         .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [14]
         .srv_table(t::FAR_SHADOW_MAP, 1, Pixel) // [15]
+        .cbv(t::ATMOSPHERE, Pixel) // [16]
+        .srv_table(t::TRANSMITTANCE, 4, Pixel) // [17] the air's tables
         .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel)
         .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
         .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
         .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All)
+        .static_sampler(SamplerState::LinearClamp, t::AIR_SAMPLER, Pixel)
         .input_layout();
-    debug_assert_eq!(sig.len() - 9, PLANAR_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 8, PROBE_RECORDS_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 5, BODY_LIGHT_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 3, OCEAN_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 2, CLOUD_SHADOW_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 1, FAR_SHADOW_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 11, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 10, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 7, BODY_LIGHT_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 5, OCEAN_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 4, CLOUD_SHADOW_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 3, FAR_SHADOW_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 2, AIR_ROOT_BASE);
     sig.build(device, "transparent root sig")
 }
 
@@ -606,20 +677,24 @@ fn create_transparent_rt_root_signature(
         .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [22] ocean arrays + a sea's wake
         .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [23]
         .srv_table(t::FAR_SHADOW_MAP, 1, Pixel) // [24]
+        .cbv(t::ATMOSPHERE, Pixel) // [25]
+        .srv_table(t::TRANSMITTANCE, 4, Pixel) // [26] the air's tables
         .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel) // scene / depth
         .static_sampler(SamplerState::LinearWrap, t::POOL_SAMPLER, Pixel) // hit albedo / normal map
         // The prefilter and probe cubes.
         .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
         .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
         .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All) // ocean arrays
+        .static_sampler(SamplerState::LinearClamp, t::AIR_SAMPLER, Pixel) // the air's tables
         .input_layout();
-    debug_assert_eq!(sig.len() - 10, PLANAR_ROOT_RT);
-    debug_assert_eq!(sig.len() - 9, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(sig.len() - 8, PROBE_RECORDS_ROOT_RT);
-    debug_assert_eq!(sig.len() - 5, BODY_LIGHT_ROOT_RT);
-    debug_assert_eq!(sig.len() - 3, OCEAN_ROOT_RT);
-    debug_assert_eq!(sig.len() - 2, CLOUD_SHADOW_ROOT_RT);
-    debug_assert_eq!(sig.len() - 1, FAR_SHADOW_ROOT_RT);
+    debug_assert_eq!(sig.len() - 12, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 11, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 10, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 7, BODY_LIGHT_ROOT_RT);
+    debug_assert_eq!(sig.len() - 5, OCEAN_ROOT_RT);
+    debug_assert_eq!(sig.len() - 4, CLOUD_SHADOW_ROOT_RT);
+    debug_assert_eq!(sig.len() - 3, FAR_SHADOW_ROOT_RT);
+    debug_assert_eq!(sig.len() - 2, AIR_ROOT_RT);
     sig.build(device, "transparent rt root sig")
 }
 
@@ -986,6 +1061,7 @@ impl TransparentResources {
             reflection_windows: GlassReflectionWindows::new(post)?,
             reflection: None,
             reflection_divisor,
+            air_stand_in: AirStandIn::new(device, alloc, post)?,
         };
         me.rebuild_reflection_layers(device, post, width, height)?;
         Ok(me)
@@ -1125,18 +1201,14 @@ impl TransparentResources {
             .map(drop)
     }
 
-    // True when any record of the pane or water producer is currently visible.
-    // The mesh producer is not covered here: its visibility is per-frame state
-    // that lives in `draw.objects`, so `DxContext::transparent_enabled` asks it
-    // separately. Together they drive `FrameGraphInputs::transparent_enabled`.
-    // True when a visible water surface holds a planar slot, so the mirror
-    // re-render has a consumer this frame even while the trace is live. Water
-    // takes the mirror over its own trace (see `water.hlsl`), so this is what
-    // `planar_pass_needed` reads; glass is deliberately not counted.
+    // True when a visible water surface holds a planar slot, so the mirror still
+    // has a consumer while the trace is live; glass does not count.
     pub(in crate::directx) fn water_planar_slot_live(&self) -> bool {
         self.producers.water_planar_slot_live()
     }
 
+    // True when any pane or water record is visible. Mesh visibility is asked
+    // separately by `DxContext::transparent_enabled`.
     pub(in crate::directx) fn any_visible(&self) -> bool {
         self.producers.any_visible()
     }
@@ -1171,12 +1243,8 @@ impl TransparentResources {
 }
 
 impl DxContext {
-    // Build this frame's see-through mesh draw list and write each mesh's params
-    // into its slot of the producer's ring. Only called while RT is live.
-    //
-    // Each mesh resolves its own LOD slice by camera distance exactly as the
-    // opaque passes do, so a mesh rerouted here rasterizes the same triangles it
-    // would have rasterized opaque.
+    // Build this frame's see-through mesh draws and write their params; each picks
+    // its LOD as the opaque passes do.
     fn collect_mesh_draws(
         &self,
         transparent: &TransparentResources,
@@ -1226,13 +1294,8 @@ impl DxContext {
         }
     }
 
-    // Encode the transparent pass: snapshot the scene for refraction, then draw
-    // every visible glass pane and water surface back-to-front into the post-SSR
-    // scene target with SRC_ALPHA blending. No-op when the world has no
-    // transparent content or nothing is visible.
-    // The water body's light table: the heap's leading global SRVs, the cascaded
-    // shadow map (slot 0) and the irradiance cube (slot 1), which the main pass
-    // and the raymarched surfaces read from the same slots.
+    // The water body's light table: the cascaded shadow map and irradiance cube at
+    // the heap's leading global slots.
     fn body_light_srvs_gpu(&self) -> SrvSlot {
         SrvSlot::at(
             &self.descriptors.srv_heap,
@@ -1241,6 +1304,8 @@ impl DxContext {
         )
     }
 
+    // Encode the transparent pass: snapshot the scene for refraction, then draw
+    // every visible pane and surface back-to-front into the post-SSR scene.
     pub(in crate::directx) fn encode_transparent(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1256,13 +1321,8 @@ impl DxContext {
         };
         let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
 
-        // Per-pixel RT reflection is selected over the probe/planar path when RT is
-        // live (the scene TLAS is built) AND every live producer's RT pipelines
-        // compiled at init -- single-sourced via `rt_transparent_active`, the same
-        // predicate graph_exec uses to skip the planar mirror re-render (so the two
-        // always agree). The textured variant additionally needs the bindless
-        // albedo/normal pool the GPU-cull path populates; without it, the flat-tint
-        // trace runs.
+        // Trace per pixel when `rt_transparent_active`, the same predicate the graph
+        // uses to skip planar mirrors. The textured variant also needs the bindless pool.
         let rt_live = self.rt_transparent_active();
         let textured =
             rt_live && self.cull.main_bindless_pso.is_some() && transparent.rt_textured_ready();
@@ -1387,11 +1447,8 @@ impl DxContext {
         // SAFETY: the list is recording, and the SRV heap is owned by `self.descriptors`.
         unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
 
-        // Reflection sources frame-constant across every record (like Metal's
-        // encode_transparent): the sky prefilter cube (t2), the probe cube array
-        // (t20), the per-frame ProbeSet CBV (b4) and records (t21), and the main
-        // camera's cluster grid binning them (b6, t22). count == 0 keeps the sky
-        // fallback.
+        // Frame-constant reflection sources: prefilter cube (t2), probe array (t20),
+        // ProbeSet (b4) and records (t21), and the cluster grid (b6, t22).
         let prefilter_srv = self.prefilter_cube_srv_gpu();
         let probes = self.probe_bindings(frame_idx);
 
@@ -1417,6 +1474,7 @@ impl DxContext {
                     FAR_SHADOW_ROOT_BASE,
                 )
             };
+        let air_root = if rt_live { AIR_ROOT_RT } else { AIR_ROOT_BASE };
         let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
         // The two producers share their root signature, so it binds once and only
         // the pipeline changes across the draw loop.
@@ -1462,6 +1520,18 @@ impl DxContext {
         // SAFETY: the SRV heap is set above, and the far shadow map's SRV (null without one) is a
         // static slot in it.
         unsafe { cmd.set_graphics_srv_table(far_root, self.shadow.far_srv_gpu) };
+        // The air in front of what the producers draw. Without an atmosphere the
+        // view's air flag is off, so a zeroed block and a null table stand in.
+        let stand_in = &transparent.air_stand_in;
+        let (air_gva, air_table) = self
+            .transparent_air(frame_idx)
+            .unwrap_or_else(|| (com::gpu_va(&stand_in.block), stand_in.table));
+        // SAFETY: the list is recording, and the atmosphere's constant buffer for this frame (or
+        // the zeroed stand-in block) is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(air_root, air_gva) };
+        // SAFETY: the SRV heap is set above, and the atmosphere's four table SRVs (or the run of
+        // four null views) are contiguous slots in it.
+        unsafe { cmd.set_graphics_srv_table(air_root + 1, air_table) };
         // The oceans' arrays, which exist wherever water does.
         if let Some(ocean) = &self.water_sim {
             // SAFETY: the SRV heap is set above, and the ocean's array table is live.
@@ -1497,10 +1567,8 @@ impl DxContext {
             }
         }
 
-        // A valid stand-in for every draw that has no mirror plane of its own --
-        // the see-through meshes below and any slotless record. The shaders gate
-        // on `planar > 0.5`, so none of them sample it; binding it keeps the
-        // table set for every PSO that runs under this signature.
+        // The scene snapshot stands in at the planar table for every draw without a
+        // mirror; the shaders never sample it then.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.set_graphics_srv_table(planar_root, transparent.scene_copy_srv_gpu) };
@@ -1647,12 +1715,8 @@ impl DxContext {
         }
     }
 
-    // Bind one draw-order entry's geometry and params and draw it under the set
-    // PSO. A mesh draws its `DrawObject`'s slice of the shared scene buffers; a
-    // pane or water surface draws its record's own pair, `indices` of it or all
-    // of it, plus its planar resolve table (t3): its mirror render when it has a
-    // planar slot, else the scene snapshot as a valid stand-in (the shaders gate
-    // on `planar > 0.5`).
+    // Bind and draw one draw-order entry: a mesh's slice of the scene buffers, or a
+    // record's own buffers plus its planar table (t3), or the snapshot stand-in.
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,

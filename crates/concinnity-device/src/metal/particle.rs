@@ -110,16 +110,9 @@ impl MtlContext {
         Some(frame)
     }
 
-    // Encode the `ParticlesSim` node: age + integrate + respawn every live
-    // emitter's pool in place. One dispatch per emitter; cheap enough to not
-    // bother packing them, and their resources are disjoint. A no-op when no
-    // emitter has ever existed in this session or every slot is tombstoned.
-    //
-    // Records into its own command buffer, one per graph node. The pools it
-    // writes are read only by the draw, and Metal's implicit hazard tracking
-    // plus the executor's FIFO commit order is what makes the write visible
-    // there. `frame` is the state `prepare_particle_pass` advanced on
-    // `&mut self`; this method takes `&self` so it can record on a worker.
+    // Encode `ParticlesSim`: integrate each live emitter's pool in place, one
+    // dispatch per emitter. Takes `&self` so it records on a worker; queue order
+    // makes the writes visible to the draw.
     pub(in crate::metal) fn encode_particles_sim(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -163,11 +156,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Encode the `ParticlesDraw` node, or with `late`, the pre-TAA scene, the
-    // `ParticlesLateDraw` one: one alpha-blended camera-facing quad per live
-    // particle of the emitters that draw at that stage, blend-written into
-    // `hdr_resolve` or the scene `late` names. The vertex stage reads the pool
-    // `encode_particles_sim` wrote. Returns the draw-call count.
+    // Encode `ParticlesDraw`, or with `late` `ParticlesLateDraw`: one
+    // alpha-blended quad per live particle of the emitters drawing at that
+    // stage. Returns the draw calls.
     pub(in crate::metal) fn encode_particles_draw(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -337,11 +328,8 @@ pub(super) fn build_particle_pipelines(
     })
 }
 
-// The render pipeline of the `vert` and `frag` pair. No vertex descriptor:
-// the vertex shader reads from the particle pool storage buffer directly via
-// `[[vertex_id]]` + `[[instance_id]]`. Each entry compiles to its own
-// metallib, so the two stages come from separate libraries and pair by
-// semantic.
+// The `vert` and `frag` pipeline, with no vertex descriptor since the vertex
+// shader reads the pool directly.
 fn render_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     vert: &super::builtin_shaders::ShaderProgram,

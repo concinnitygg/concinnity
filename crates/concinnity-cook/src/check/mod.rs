@@ -12,6 +12,7 @@ pub(crate) mod animation_graph;
 pub(crate) mod asset_refs;
 pub(crate) mod audio;
 pub mod behavior;
+mod bindings;
 pub(crate) mod cloud;
 pub(crate) mod cross_reference;
 pub(crate) mod cubemap_texture;
@@ -158,6 +159,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<Diagnost
         errors.extend(ref_errors);
     }
 
+    bindings::check_bindings(assets, &declared_vars, &mut errors);
     shape::check_shape(assets, &mut errors);
     screenshot::check_unique_files(assets, &mut errors);
     water_surface::check_sea_swell(assets, &mut errors);

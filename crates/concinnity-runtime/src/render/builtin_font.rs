@@ -3,7 +3,7 @@
 //
 // Two callers need a face with no compiled world data behind it: the startup
 // error screen, which runs when loading that data is exactly what failed, and
-// the renderer's fallback for any TextLabel or TextInput naming no Font, which
+// the renderer's fallback for any TextLabel or TextField naming no Font, which
 // is the engine's one answer to that whichever way the world was assembled.
 
 use concinnity_engine::ecs::FontHandle;

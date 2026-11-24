@@ -192,11 +192,9 @@ pub(super) fn view_samples_desc() -> BufferDesc {
 }
 
 pub(super) fn cull_status_desc() -> BufferDesc {
-    // One u32 per draw object: early cull writes drawn / hi-z-candidate /
-    // culled, CullLate reads it. Both phases bind it the same read-write way, so it
-    // never transitions to a read state and its ordering comes from an execution
-    // barrier; `UNORDERED` is what says so. The executor owns the allocation
-    // (sized to the live draw-object count).
+    // One u32 per draw object, written by early cull and read by CullLate.
+    // Both bind it read-write, so it is `UNORDERED` and orders by execution
+    // barrier.
     BufferDesc {
         size_bytes: None,
         usage: BufferUsage::STORAGE.union(BufferUsage::UNORDERED),
@@ -204,15 +202,9 @@ pub(super) fn cull_status_desc() -> BufferDesc {
 }
 
 pub(super) fn particle_pool_desc() -> BufferDesc {
-    // One `GpuParticle` slot per particle, per emitter. `STORAGE` alone, so the
-    // class is `StorageBuffer`: the sim reads and writes the pool through a
-    // storage / unordered-access binding, but the draw reads it as a plain
-    // shader resource in its vertex stage, so the resource really does leave the
-    // unordered-access state between the two nodes. `UnorderedBuffer` is for the
-    // buffer both sides bind the same read-write way (`cull_status`), which
-    // never transitions and orders through a UAV barrier instead; that would
-    // leave DirectX's vertex-stage SRV read unsynchronized. The executor owns
-    // the allocation (one buffer per live emitter, sized to its pool).
+    // One particle slot per particle, per emitter. Plain `STORAGE`, since the
+    // draw reads it as a shader resource and it must really transition between
+    // the sim and the draw.
     BufferDesc {
         size_bytes: None,
         usage: BufferUsage::STORAGE,
@@ -260,12 +252,8 @@ pub(super) fn gbuffer_normal_depth_desc(inputs: &FrameGraphInputs) -> TextureDes
 }
 
 pub(super) fn gbuffer_roughness_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    // RGBA8 perceptual roughness (r) + head-on specular reflectance (gba), read
-    // by the reflection resolves for their gloss, blur radius and Fresnel.
-    // Clears to roughness 1.0 (fully rough), so a pixel the pre-pass never
-    // rasterizes reflects nothing -- the one graph target whose cleared
-    // background carries meaning, and the reason `TextureDesc` models a clear
-    // value at all.
+    // Roughness (r) and specular reflectance (gba) for the reflection resolves.
+    // Clears to roughness 1.0 so unrasterized pixels reflect nothing.
     render_res_2d(
         inputs,
         PixelFormat::Rgba8Unorm,
@@ -321,14 +309,8 @@ pub(super) fn velocity_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 }
 
 pub(crate) fn bloom_top_desc() -> TextureDesc {
-    // bloom_top is the bloom chain's half-resolution top octave; the prefilter
-    // pass writes into it and the upsample chain accumulates back into it for
-    // Composite to sample.
-    //
-    // Half the *drawable* extent, not half the render resolution: every backend
-    // builds its bloom chain from the output extent, so under temporal
-    // upscaling (where render resolution is smaller) an `hdr_width >> 1` desc
-    // names a texture no backend creates.
+    // The bloom chain's top octave at half the drawable extent, since every
+    // backend builds bloom at output resolution.
     TextureDesc::texture_2d(
         TextureSize::DrawableScaled(0.5),
         TextureSize::DrawableScaled(0.5),

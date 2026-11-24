@@ -172,7 +172,8 @@ impl EditorHook {
         if shader.file(ShaderStage::Vertex).is_some() {
             return;
         }
-        let (path, declared) = new_shader_file(&shader::edit::vertex_stem(&shader.name));
+        let root = self.entries.root_of(idx, self.world_origin());
+        let (path, declared) = new_shader_file(&shader::edit::vertex_stem(&shader.name), &root);
         // A read-only entry refuses the edit below, so it gets no file either.
         if !self.entries.is_read_only(idx)
             && !self.write_starter(&path, shader::templates::VERTEX[0].text)
@@ -222,11 +223,11 @@ impl EditorHook {
 }
 
 // Where a new Shader file `stem` goes under the project's assets, numbered
-// past files already there, and how a world line declares it.
-pub(in crate::editor::hook) fn new_shader_file(stem: &str) -> (PathBuf, String) {
+// past files already there, and how a world line declares it: from `root`, the
+// root of the file the Shader is in.
+pub(in crate::editor::hook) fn new_shader_file(stem: &str, root: &Path) -> (PathBuf, String) {
     let dir = crate::project::assets_dir().unwrap_or_else(|| PathBuf::from("assets"));
     let path = shader::source::starter_path(&dir, stem, Path::exists);
-    let root = std::env::current_dir().unwrap_or_default();
-    let declared = shader::source::declared_form(&path, &root);
+    let declared = concinnity_host::store::source::relative_from(root, &path);
     (path, declared)
 }

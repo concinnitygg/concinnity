@@ -70,22 +70,15 @@ impl MtlContext {
     pub(in crate::metal) fn encode_shadow_pass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        // The per-frame `GpuObjectData` buffer the bindless shadow VS reads each
-        // cascade's model matrix from (by the `[[base_instance]]` record id the
-        // shadow cull baked). `Some` exactly when the cull ran this frame; a
-        // world with nothing in the cull records leaves it `None` and every
-        // cascade is a bare depth clear.
+        // The per-frame object buffer the shadow VS reads models from; `None`
+        // leaves every cascade a bare clear.
         object_buffer: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
         // This frame's skinned deformed-vertex buffer (skinned fold). Bound as
         // the vertex buffer for the skinned tail of each cascade's indirect
         // draw. `Some` only when the skinned fold is active.
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        // When `Some`, raymarched SDF casters draw into each cascade after the
-        // rasterized + skinned draws (and before the Main pass samples the
-        // shadow map). Built by the graph executor: same matrix / time / camera
-        // the main raymarch pass will use later this frame, so the shadow cast
-        // and the live surface agree. `None` when no volume opts into
-        // `cast_shadows`.
+        // When `Some`, SDF casters draw into each cascade after the rasterized
+        // ones, with the view the raymarch pass uses later.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
         // This frame's grass, whose casting blades draw into each cascade it
         // casts into after that cascade's rasterized casters.
@@ -173,11 +166,8 @@ impl MtlContext {
             }
         }
 
-        // Raymarched SDF shadow casters: depth-only draws into the same
-        // per-cascade slices, run after the rasterized + skinned casters so
-        // both layers compete via the slice's depth write test (the caster nearest
-        // the light wins per texel). No-op when no volume opts into `cast_shadows` or the
-        // executor passed no view.
+        // SDF casters after the rasterized ones; the nearer caster wins by
+        // depth test.
         if let Some(view) = raymarch_view {
             total_draws += self.encode_sdf_shadow_casters(cmd_buf, view)?;
         }
@@ -185,16 +175,9 @@ impl MtlContext {
         Ok(total_draws)
     }
 
-    // GPU-driven shadow draws for one view: execute the lists the view's cull
-    // packed into its ICB, by the ranges its scan wrote. Mirrors the main
-    // pass's two-stream split (`execute_bindless_static_icb`): one indirect
-    // draw for the kept static + instance records (static VB bound at 1, static
-    // u32 IB resident), then one for the kept folded skinned tail (deformed VB
-    // rebound at 1, skinned IB resident). The depth-only bindless shadow VS
-    // reads each record's model from the object buffer at vbuf 9 by
-    // `[[base_instance]]` and projects through
-    // `view.uniforms.light_vps[view.vp_index]`. Returns the indirect-draw count
-    // (0, 1 or 2).
+    // One shadow view's draws: the kept static + instance list, then the
+    // skinned tail over the deformed VB, projecting through
+    // `light_vps[view.vp_index]`. Returns the draws issued.
     pub(in crate::metal) fn draw_shadow_view(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,

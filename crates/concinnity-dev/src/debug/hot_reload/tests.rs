@@ -18,7 +18,7 @@ use concinnity_engine::render::{
 use concinnity_engine::simulation::animation::skeleton;
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::decode::*;
@@ -31,7 +31,7 @@ fn empty_map_round_trips() {
     let m = TextureSourceMap::new();
     assert!(m.is_empty());
     assert_eq!(m.len(), 0);
-    assert!(m.watch_dirs().is_empty());
+    assert!(m.watch_dirs(Path::new("")).is_empty());
 }
 
 #[test]
@@ -41,19 +41,19 @@ fn pushes_and_collects_unique_parent_dirs() {
     m.push_texture("assets/b.png".to_string(), 0, 1);
     m.push_texture("textures/nm.png".to_string(), 0, 1);
     assert_eq!(m.entries.len(), 3);
-    let dirs = m.watch_dirs();
+    let dirs = m.watch_dirs(Path::new(""));
     assert_eq!(dirs.len(), 2);
     assert!(dirs.iter().any(|p| p.ends_with("assets")));
     assert!(dirs.iter().any(|p| p.ends_with("textures")));
 }
 
 #[test]
-fn bare_filenames_skip_watch_dir() {
-    // A source with no parent directory has nowhere to watch; the watcher
-    // would otherwise try to subscribe to "" which notify rejects.
+fn a_file_at_the_root_watches_the_root() {
+    // A source named with no folder is a file at the root, so the root is
+    // watched; spelled as nothing, it is ".", which notify accepts.
     let mut m = TextureSourceMap::new();
     m.push_texture("standalone.png".to_string(), 0, 0);
-    assert!(m.watch_dirs().is_empty());
+    assert_eq!(m.watch_dirs(Path::new("")), [PathBuf::from(".")]);
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn hdr_extension_matches_case_insensitively() {
 
 #[test]
 fn unrelated_extension_is_not_an_asset_event() {
-    // `.jsonl` (the world file) is now a recognized asset event; pick an
+    // `.jsonl` (the file) is now a recognized asset event; pick an
     // extension nothing in the engine cares about as the negative case.
     let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(PathBuf::from("/tmp/world.txt"));
@@ -162,17 +162,15 @@ fn mesh_source_map_collects_unique_parent_dirs() {
         lod_distances: Vec::new(),
         draw_indices: vec![DrawIndex(3)],
     });
-    let dirs = m.watch_dirs();
+    let dirs = m.watch_dirs(Path::new(""));
     assert_eq!(dirs.len(), 2);
     assert!(dirs.iter().any(|p| p.ends_with("assets/models")));
     assert!(dirs.iter().any(|p| p.ends_with("assets/hdri")));
 }
 
 #[test]
-fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
-    // A bare filename has no parent directory; the watcher would otherwise
-    // try to subscribe to "" which notify rejects. The `reload-assets`
-    // debug tool call still works for these.
+fn mesh_source_map_watches_the_root_for_a_file_there() {
+    // A file named with no folder sits in the root.
     let mut m = MeshSourceMap::new();
     m.entries.push(MeshSourceEntry {
         source: "standalone.glb".to_string(),
@@ -181,7 +179,7 @@ fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
         lod_distances: Vec::new(),
         draw_indices: vec![DrawIndex(0)],
     });
-    assert!(m.watch_dirs().is_empty());
+    assert_eq!(m.watch_dirs(Path::new("/p")), [PathBuf::from("/p")]);
 }
 
 #[test]
@@ -229,7 +227,7 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
         index_count: 150,
         joint_count: 5,
     });
-    let dirs = m.watch_dirs();
+    let dirs = m.watch_dirs(Path::new(""));
     assert_eq!(dirs.len(), 1);
     assert!(dirs[0].ends_with("assets/models"));
 }
@@ -263,7 +261,7 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
 #[test]
 fn state_with_only_world_jsonl_still_spawns_a_watcher() {
     // World-only worlds (no Texture/LUT/EnvMap/Mesh/Skinned) still want
-    // their world.jsonl watched so Prop transform edits propagate.
+    // their .jsonl watched so Prop transform edits propagate.
     let world_path = concinnity_host::scratch::path("world_only.jsonl");
     let state = AssetHotReloadState::from_sources(
         HotReloadSources::default(),
@@ -507,7 +505,7 @@ fn procedural_mesh_reload_result_default_is_all_zero() {
 #[test]
 fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     // ProceduralMesh entries on their own (no textures, no LUTs, no meshes)
-    // need to keep the watcher alive: their trigger is the world.jsonl reload
+    // need to keep the watcher alive: their trigger is the .jsonl file reload
     // signal the watcher raises. Without a world_jsonl_path
     // there is nothing to subscribe to, so we declare one here.
     let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl");
@@ -623,7 +621,7 @@ fn creates_and_removes_route_like_modifies() {
 #[test]
 fn state_with_only_shaders_still_spawns_a_watcher() {
     // A world whose only reloadable sources are Shader files (no textures, no
-    // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
+    // meshes, no LUTs, no IBL, no .jsonl) still wants the watcher alive
     // so a shader save triggers the recompile.
     use concinnity_engine::render::world_load::source_maps::{
         ShaderFile, ShaderSourceEntry, ShaderSourceMap,
@@ -934,12 +932,12 @@ impl backend::EmitterPass for RecordingBackend {}
 impl backend::WorldReload for RecordingBackend {}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
-fn write_tiny_png(path: &std::path::Path) {
+fn write_tiny_png(path: &Path) {
     std::fs::write(path, concinnity_testing::fixtures::png::one_pixel()).unwrap();
 }
 
 // Write a 2x2x2 identity-ish Adobe Cube LUT (8 data lines).
-fn write_tiny_cube(path: &std::path::Path) {
+fn write_tiny_cube(path: &Path) {
     let text = "LUT_3D_SIZE 2\n\
                 0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
     std::fs::write(path, text).unwrap();
@@ -1682,7 +1680,7 @@ fn poll_pending_assets_survives_a_skinned_in_place_rejection() {
 
 // reload_volumetric_fog
 
-fn write_world_line(dir: &std::path::Path, line: &str) -> PathBuf {
+fn write_world_line(dir: &Path, line: &str) -> PathBuf {
     let path = dir.join("world.jsonl");
     std::fs::write(&path, format!("{line}\n")).unwrap();
     path
@@ -1814,11 +1812,7 @@ fn box_world_line(name: &str, half: f32) -> String {
 fn reload_procedural_meshes_with_an_empty_map_short_circuits() {
     let mut map = ProceduralMeshSourceMap::new();
     let mut backend = RecordingBackend::default();
-    let r = reload_procedural_meshes(
-        std::path::Path::new("does_not_matter.jsonl"),
-        &mut map,
-        &mut backend,
-    );
+    let r = reload_procedural_meshes(Path::new("does_not_matter.jsonl"), &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
 }
 
@@ -2105,7 +2099,9 @@ fn spawn_watcher_subscribes_to_an_existing_source_directory() {
 
 #[test]
 fn story_source_dirs_collects_unique_parents_from_story_imports() {
-    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::test_support::lock();
+    let dir = concinnity_testing::TempTree::new();
+    crate::project::open(concinnity_host::store::paths::StateTree::at(dir.path()));
     let world = dir.path().join("world.jsonl");
     let lines = [
         r#"["StoryImport",{"$id":"s1","source":"stories/tale.md"}]"#,
@@ -2117,9 +2113,11 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
     ];
     std::fs::write(&world, lines.join("\n")).unwrap();
     let dirs = story_source_dirs(&world);
-    assert_eq!(dirs.len(), 2);
-    assert!(dirs.contains(&PathBuf::from(".")));
-    assert!(dirs.contains(&PathBuf::from("stories")));
+    crate::test_support::isolate_state_dir();
+    assert_eq!(
+        dirs.into_iter().collect::<Vec<_>>(),
+        [dir.path().to_path_buf(), dir.path().join("stories")]
+    );
 }
 
 #[test]
@@ -2222,7 +2220,7 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
 
 // Drive one `run_frame` over a fresh RecordingBackend with no fog pushed,
 // returning the effects, the backend (so callers can assert which dispatches
-// fired), and the fog the world.jsonl pass may have updated.
+// fired), and the fog the .jsonl file pass may have updated.
 fn drive_run_frame(
     state: &mut AssetHotReloadState,
 ) -> (
@@ -2314,7 +2312,7 @@ fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
         AssetHotReloadState::unwatched(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_world();
     let (_effects, backend, last_fog) = drive_run_frame(&mut state);
-    // The world.jsonl pass applied the enabled fog exactly once and recorded it
+    // The .jsonl pass applied the enabled fog exactly once and recorded it
     // into the caller's dedupe bookkeeping.
     assert_eq!(backend.fog_updates, 1);
     assert!(last_fog.is_some());

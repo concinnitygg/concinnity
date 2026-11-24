@@ -241,11 +241,8 @@ fn create_framebuffers(
 }
 
 impl ParticleResources {
-    // Build the particle compute + render pipelines, the per-frame view
-    // UBO ring, the shared sampler, the descriptor pool, and the per-frame
-    // framebuffers. Called from `VkContext::new` only when the world
-    // declared at least one `ParticleEmitter`. The encoder is a no-op
-    // when this is `None`.
+    // Build the particle pipelines, view UBO ring, sampler, descriptor pool and
+    // framebuffers, when the world declares an emitter.
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
         frames: usize,
@@ -387,7 +384,9 @@ impl ParticleResources {
         targets: ParticlePassTargets<'_>,
     ) -> RenderResult<()> {
         for (i, &set) in self.view_sets.iter().enumerate() {
-            write_depth_binding(device, set, frame_view(targets.depth_views, i));
+            SetWrites::new(set)
+                .sampled_image(1, frame_view(targets.depth_views, i))
+                .apply(device);
         }
         self.framebuffers.clear();
         self.late_framebuffers.clear();
@@ -573,11 +572,8 @@ fn create_render_pass(
     format: vk::Format,
     mask: Option<ReactiveWrite>,
 ) -> RenderResult<OwnedRenderPass> {
-    // The resolved HDR scene, and the reactive mask when the writers carry it.
-    // The fog pass left the scene in SHADER_READ_ONLY_OPTIMAL; we want it in
-    // COLOR_ATTACHMENT during the subpass and SHADER_READ_ONLY_OPTIMAL again
-    // on exit so SSR / TAA / bloom / composite can sample it. Mirrors the
-    // decal / fog render passes.
+    // The resolved HDR scene (and the reactive mask), rendered as an attachment and
+    // returned to SHADER_READ_ONLY for the post passes.
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -666,11 +662,8 @@ fn emitter_set_bindings() -> [Binding; 3] {
     ]
 }
 
-// Push-constant range covering the full `ParticleParams` block.
-// Visible to vertex (size_start/end, color_start/end) + fragment (none:
-// vertex emits the color; fragment reads it via varyings) + compute
-// (every field). The vertex stage actually only reads the gradient + size
-// fields, but binding the full struct keeps the host upload single-shot.
+// Push-constant range covering the full `ParticleParams` block, so the upload
+// is one push.
 const PARTICLE_PUSH_BYTES: u32 = saturating_u32(size_of::<ParticleParams>());
 // 128 bytes is the `maxPushConstantsSize` every Vulkan device offers.
 const _: () = assert!(PARTICLE_PUSH_BYTES <= 128);
@@ -734,13 +727,6 @@ fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<Owne
 // are fewer depth images than frame slots.
 fn frame_view(views: &[vk::ImageView], i: usize) -> vk::ImageView {
     views[i.min(views.len().saturating_sub(1))]
-}
-
-// The main depth, which the fragment reads by texel.
-fn write_depth_binding(device: &VkDevice, set: vk::DescriptorSet, depth_view: vk::ImageView) {
-    SetWrites::new(set)
-        .sampled_image(1, depth_view)
-        .apply(device);
 }
 
 fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
@@ -834,17 +820,9 @@ impl VkContext {
         Some(frame)
     }
 
-    // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
-    // live emitter's pool. A no-op when no pipeline has been built (no emitter
-    // has ever existed in this session) or when every slot is tombstoned.
-    // `frame` is the state `prepare_particle_pass` computed on `&mut self`; this
-    // method takes `&self` (no spawn-state mutation) so it can run on a
-    // parallel-recording worker.
-    //
-    // Both hazards on the pool are the graph's: the compute -> vertex one against
-    // the draw, from the `particle_pool` read the draw declares in the VERTEX
-    // stage, and the one against the previous frame's dispatch and draw, from the
-    // pool's carried resting state.
+    // Encode `ParticlesSim` over each live emitter's pool, from the state
+    // `prepare_particle_pass` computed. Takes `&self` so it can record on a worker;
+    // the pool's hazards are the graph's.
     pub(in crate::vulkan) fn encode_particles_sim(
         &self,
         rec: &Recorder<'_>,
@@ -893,11 +871,8 @@ impl VkContext {
         }
     }
 
-    // Encode the `ParticlesDraw` node: one alpha-blended camera-facing quad per
-    // live particle of every visible emitter, into this frame's `hdr_resolve`.
-    // The vertex stage reads the pool `encode_particles_sim` wrote; the graph
-    // derives that compute -> vertex transition from the declared read, so
-    // nothing here transitions the pool.
+    // Encode `ParticlesDraw`: one alpha-blended quad per live particle into
+    // `hdr_resolve`. The graph transitions the pool.
     pub(in crate::vulkan) fn encode_particles_draw(
         &self,
         rec: &Recorder<'_>,
@@ -925,25 +900,14 @@ impl VkContext {
             return false;
         }
 
-        // Begin the render pass into this frame's framebuffer (which
-        // binds the resolved HDR target as color attachment 0). The
-        // render pass declares the round-trip
-        // SHADER_READ_ONLY_OPTIMAL → COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
-        // via its subpass dependencies, so no explicit image barrier is
-        // needed here.
+        // The render pass's dependencies cover the scene's layout round trip.
         let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
         let framebuffers = if late {
             &resources.late_framebuffers
         } else {
             &resources.framebuffers
         };
-        // Negative-height viewport flips clip-space Y to match the main +
-        // shadow + decal passes (the engine's `camera_projection()` produces +Y-up
-        // clip coords, OpenGL-style; the Vulkan framebuffer has +Y down, so
-        // the flip happens in the viewport). The fog pass dodges this with
-        // a positive-height viewport because it emits NDC-space verts
-        // directly; we MVP-transform world geometry, so we need the same
-        // convention as the main pass.
+        // Negative-height viewport, matching the main pass's +Y-up clip space.
         let viewport = vk::Viewport {
             x: 0.0,
             y: extent.height as f32,
@@ -1040,16 +1004,9 @@ impl VkContext {
         Ok(())
     }
 
-    // Re-point every emitter's albedo binding (set 1, binding 1) that samples
-    // texture-pool `slot` at the just-swapped `self.scene.textures[slot]` view. The
-    // emitter albedo lives in the shared texture pool, so a streamed or
-    // hot-reloaded albedo swap recreates the view and leaves a dangling
-    // descriptor unless every emitter sampling that slot is re-pointed. Called
-    // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
-    // Whether any live emitter's render set samples texture-pool `slot`. The
-    // streaming fast path checks this: emitter sets are single-copy and bound
-    // whenever the particle pass runs, so a swap of a slot they sample must
-    // drain the device before rewriting.
+    // Whether any live emitter samples texture-pool `slot`. Emitter sets are
+    // single-copy and always bound, so a swap of such a slot must drain the device
+    // before rewriting.
     pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
         let last = self.scene.textures.len().saturating_sub(1);
         self.particle
@@ -1058,6 +1015,8 @@ impl VkContext {
             .any(|state| state.texture_slot.min(last) == slot)
     }
 
+    // Re-point every emitter's albedo binding that samples pool `slot` at the
+    // swapped-in view, or it dangles.
     pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
         if self.particle.resources.is_none() {
             return;
@@ -1069,15 +1028,6 @@ impl VkContext {
                 write_render_albedo_binding(&self.hw.device, state.render_set, view);
             }
         }
-    }
-
-    // Free every per-emitter pool/counter buffer. Called from
-    // `Drop for VkContext` after `device_wait_idle`. Sibling of
-    // `ParticleResources::destroy`, which handles the shared pipelines.
-    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
-        // The pooled per-emitter buffers retire through the allocator as the
-        // states drop.
-        self.particle.gpu.clear();
     }
 }
 

@@ -1,69 +1,40 @@
-//! The Health panel's layout: one meter per resource, each a track scaled to
-//! capacity with two nested fills over it -- the dim one is what the process
-//! uses, the bright one inside it is what the engine's own accounting explains.
-//! Under them, one line per tag something reports holding. The model (and what
-//! those numbers mean) is `health.rs`; this module only places elements.
+//! The Health panel: one meter per resource, each a track scaled to capacity
+//! with two nested fills over it -- the dim one is what the process uses, the
+//! bright one inside it is what the engine's own accounting explains. Under
+//! them, one line per tag something reports holding. The model (and what those
+//! numbers mean) is `health.rs`; this module builds the panel and shows a
+//! snapshot in it, only when a new one is taken.
 //!
 //! The panel grows with the breakdown: a world that streams nothing has no rows
-//! and no space reserved for them, so it never shows an empty region. Every
-//! caller that needs the footprint (the drag clamp, the hit test) takes the
-//! snapshot and asks for the size that goes with it.
-//!
-//! Read-only: the panel has no controls beyond its close button, so a body press
-//! is swallowed rather than resolved to an action.
+//! and no space reserved for them, so it never shows an empty region.
 
-use concinnity_engine::components::TextAlign;
-use concinnity_engine::ecs::World;
+use std::sync::LazyLock;
+
+use concinnity_engine::components::{
+    LayoutChild, LayoutDirection, LayoutSize, Sprite, TextAlign, TextLabel,
+};
 use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{Ref, World};
 
-use super::health::{self, HealthSnapshot, Meter, TagRow};
+use super::health::{self, HealthSnapshot};
 use super::registry::PanelKey;
-use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::build::{BODY_PAD, fill};
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
 // One meter per resource: RAM, VRAM, CPU.
 const ROWS: usize = 3;
 
-// The panel surface, then each row's track, its used fill, and the tracked fill
-// nested on top. Every tag can report in either realm, so every line it could
-// take has a slot injected up front; unused ones stay hidden.
-hud_ids! {
-    base: panel_base(PanelKey::Health);
-    sprites: [PANEL_BG, CLOSE_BG, [ROWS] { track, used_fill, tracked_fill }];
-    labels: [
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        CHURN_LABEL,
-        HOT_CLASS_LABEL,
-        DRIFT_LABEL,
-        [ROWS] { caption_label, value_label, parts_label },
-        [health::MAX_TAG_ROWS] { tag_name_label, tag_realm_label, tag_value_label },
-    ];
-}
-
 const PANEL_W: f32 = 340.0;
-// Caption + value line, the bar, then the dim line naming the three numbers.
-const ROW_H: f32 = 52.0;
+// The bar spans the body.
+const BAR_W: f32 = PANEL_W - 2.0 * BODY_PAD;
 const BAR_H: f32 = 10.0;
-const PAD_X: f32 = 12.0;
-const CHURN_H: f32 = 20.0;
+// A meter's caption line, its bar, and the dim line naming its numbers.
+const LINE_H: f32 = 20.0;
+const METER_H: f32 = LINE_H + BAR_H + LINE_H;
 const TAG_ROW_H: f32 = 18.0;
-const BOTTOM_PAD: f32 = 6.0;
-
-// Approximate body-font advance. Only the test that holds the breakdown's three
-// columns clear of each other needs it; the layout itself places by edge.
-#[cfg(test)]
-const CHAR_W: f32 = 8.5;
-// Left edge of the dim realm column: just past the longest tag name, leaving
-// the whole right side of the row to the value. `the_breakdown_columns_cannot_
-// overlap` holds both gaps.
-const REALM_X: f32 = PAD_X + 78.0;
-
-// Vertical anchors inside a row.
-const CAPTION_CY: f32 = 12.0;
-const BAR_TOP: f32 = 22.0;
-const PARTS_CY: f32 = 42.0;
+// The width of a breakdown line's tag name, clear of its realm.
+const TAG_NAME_W: f32 = 78.0;
 
 // The recessed track, and the two fills over it. The bright tracked fill draws
 // last so it reads as sitting inside the dim used fill.
@@ -81,17 +52,44 @@ const OVER_BUDGET_LABEL: [f32; 3] = [0.90, 0.52, 0.48];
 // than rounding away to an empty track.
 const MIN_FILL_W: f32 = 2.0;
 
+// The state the panel shows: the snapshot it shows, each meter's numbers, the
+// churn, drift, and size-class lines, and each breakdown line's three texts.
+const SHOWN: [&str; 2] = ["editor.health.shown.hi", "editor.health.shown.lo"];
+const VALUES: [&str; ROWS] = [
+    "editor.health.value.0",
+    "editor.health.value.1",
+    "editor.health.value.2",
+];
+const CHURN: &str = "editor.health.churn";
+const DRIFT: &str = "editor.health.drift";
+const HOT_CLASS: &str = "editor.health.hot_class";
+static TAGS: LazyLock<Vec<[String; 3]>> = LazyLock::new(|| {
+    (0..health::MAX_TAG_ROWS)
+        .map(|i| ["name", "realm", "value"].map(|part| format!("editor.health.tag.{i}.{part}")))
+        .collect()
+});
+
+// Where each changing element sits in the panel's slots: every meter's used
+// and tracked fill, then every breakdown line's value.
+const fn used_slot(i: usize) -> usize {
+    2 * i
+}
+const fn tracked_slot(i: usize) -> usize {
+    2 * i + 1
+}
+const fn tag_value_slot(i: usize) -> usize {
+    2 * ROWS + i
+}
+
 // The panel's footprint for what `snap` has to show: the meters and the churn
-// line always, plus a line per reported tag and the size-class line when the
-// allocator measured one.
+// line always, plus a line per reported tag and the size-class and drift lines
+// when there are any.
 pub(crate) fn size(snap: &HealthSnapshot) -> [f32; 2] {
     let lines = health::tag_rows(snap).len()
         + usize::from(health::drift_text(snap).is_some())
         + usize::from(health::hot_class_text(snap).is_some());
-    [
-        PANEL_W,
-        widget::TITLE_H + ROWS as f32 * ROW_H + CHURN_H + lines as f32 * TAG_ROW_H + BOTTOM_PAD,
-    ]
+    let content = ROWS as f32 * METER_H + LINE_H + lines as f32 * TAG_ROW_H;
+    [PANEL_W, panel_height(content)]
 }
 
 // Top-right, clear of the Assets panel's left anchor and below the top bar.
@@ -102,553 +100,156 @@ pub(crate) fn default_origin(vp: [f32; 2]) -> [f32; 2] {
     ]
 }
 
-pub(crate) fn panel_rect(o: [f32; 2], snap: &HealthSnapshot) -> [f32; 4] {
-    widget::outer_rect(o, size(snap))
+// A sprite in a bar: the track fills it, a fill takes its own width.
+fn bar_sprite(ui: &mut UiBuilder<'_>, tint: [f32; 4], width: f32) -> Option<AssetId> {
+    ui.sprite(Sprite {
+        width,
+        height: BAR_H,
+        tint,
+        corner_radius: BAR_H * 0.5,
+        ..Default::default()
+    })
 }
 
-fn row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    [
-        o[0],
-        o[1] + widget::TITLE_H + i as f32 * ROW_H,
-        PANEL_W,
-        ROW_H,
-    ]
-}
-
-fn bar_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    let r = row_rect(o, i);
-    [r[0] + PAD_X, r[1] + BAR_TOP, PANEL_W - 2.0 * PAD_X, BAR_H]
-}
-
-// A body press anywhere on the panel is swallowed so it cannot reach the world
-// behind it. `None` misses the panel entirely and falls through.
-pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], snap: &HealthSnapshot) -> bool {
-    point_in(mx, my, panel_rect(o, snap))
-}
-
-// Position + show the panel at origin `o`.
-pub(crate) fn place(world: &mut World, snap: &HealthSnapshot, o: [f32; 2], mouse: [f32; 2]) {
-    widget::place_panel(world, PANEL_BG, panel_rect(o, snap));
-    let title = widget::title_rect(o, PANEL_W);
-    widget::place_heading(world, TITLE_LABEL, title, "Health");
-    let close_hover = point_in(mouse[0], mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-
-    for (i, meter) in health::meters(snap).iter().enumerate() {
-        place_row(world, o, i, meter);
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let mut body = Vec::new();
+    let mut slots = Vec::new();
+    let meters = health::meters(&HealthSnapshot::default());
+    for (i, meter) in meters.iter().enumerate() {
+        let caption = ui.label(meter.caption, theme::LABEL)?;
+        let value = ui.bound_label(VALUES[i], theme::LABEL, TextAlign::Right)?;
+        body.push(ui.row(vec![caption, value], LINE_H)?);
+        let track = bar_sprite(ui, TRACK_TINT, 0.0)?;
+        let used = bar_sprite(ui, USED_TINT, 0.0)?;
+        let tracked = bar_sprite(ui, TRACKED_TINT, 0.0)?;
+        slots.extend([used, tracked]);
+        let bar = ui.stack(
+            LayoutDirection::Stack,
+            vec![fill(track), bar_fill(used), bar_fill(tracked)],
+            0.0,
+            0.0,
+        )?;
+        body.push(LayoutChild {
+            item: Some(Ref::new(bar)),
+            width: LayoutSize::Fill(1.0),
+            height: LayoutSize::Fixed(BAR_H),
+        });
+        let parts = ui.label(meter.parts, theme::LABEL_DIM)?;
+        body.push(ui.row(vec![parts], LINE_H)?);
     }
-
-    let mut y = o[1] + widget::TITLE_H + ROWS as f32 * ROW_H;
-    match health::churn_text(snap) {
-        Some(text) => {
-            place_text(
-                world,
-                CHURN_LABEL,
-                [o[0] + PAD_X, y + CHURN_H * 0.5],
-                TextAlign::Left,
-                theme::LABEL_DIM,
-                &text,
-            );
-        }
-        None => widget::set_label_visible(world, CHURN_LABEL, false),
+    for name in [CHURN, DRIFT, HOT_CLASS] {
+        let text = ui.bound_label(name, theme::LABEL_DIM, TextAlign::Left)?;
+        let height = if name == CHURN { LINE_H } else { TAG_ROW_H };
+        body.push(ui.row(vec![text], height)?);
     }
-    y += CHURN_H;
-
-    match health::drift_text(snap) {
-        Some(text) => {
-            place_text(
-                world,
-                DRIFT_LABEL,
-                [o[0] + PAD_X, y + TAG_ROW_H * 0.5],
-                TextAlign::Left,
-                theme::LABEL_DIM,
-                &text,
-            );
-            y += TAG_ROW_H;
-        }
-        None => widget::set_label_visible(world, DRIFT_LABEL, false),
+    for [name, realm, value] in TAGS.iter() {
+        let name = ui.bound_label(name, theme::LABEL, TextAlign::Left)?;
+        let name = LayoutChild {
+            width: LayoutSize::Fixed(TAG_NAME_W),
+            ..name
+        };
+        let realm = ui.bound_label(realm, theme::LABEL_DIM, TextAlign::Left)?;
+        let value = ui.bound_label(value, theme::LABEL, TextAlign::Right)?;
+        slots.push(value.item?.id());
+        body.push(ui.row(vec![name, realm, value], TAG_ROW_H)?);
     }
-
-    match health::hot_class_text(snap) {
-        Some(text) => {
-            place_text(
-                world,
-                HOT_CLASS_LABEL,
-                [o[0] + PAD_X, y + TAG_ROW_H * 0.5],
-                TextAlign::Left,
-                theme::LABEL_DIM,
-                &text,
-            );
-            y += TAG_ROW_H;
-        }
-        None => widget::set_label_visible(world, HOT_CLASS_LABEL, false),
-    }
-
-    let rows = health::tag_rows(snap);
-    for (i, row) in rows.iter().enumerate() {
-        place_tag_row(world, o, y + i as f32 * TAG_ROW_H, i, row);
-    }
-    for i in rows.len()..health::MAX_TAG_ROWS {
-        for id in [tag_name_label(i), tag_realm_label(i), tag_value_label(i)] {
-            widget::set_label_visible(world, id, false);
-        }
-    }
-}
-
-// One breakdown line: what holds the memory, which realm it is in, and how much
-// -- against its budget when it has one. A tag past its budget reads in the
-// same warning color a meter near capacity does.
-fn place_tag_row(world: &mut World, o: [f32; 2], y: f32, i: usize, row: &TagRow) {
-    let cy = y + TAG_ROW_H * 0.5;
-    place_text(
-        world,
-        tag_name_label(i),
-        [o[0] + PAD_X, cy],
-        TextAlign::Left,
-        theme::LABEL,
-        row.name,
-    );
-    place_text(
-        world,
-        tag_realm_label(i),
-        [o[0] + REALM_X, cy],
-        TextAlign::Left,
-        theme::LABEL_DIM,
-        row.realm,
-    );
-    let color = if row.over_budget {
-        OVER_BUDGET_LABEL
-    } else {
-        theme::LABEL
+    let spec = PanelSpec {
+        key: PanelKey::Health,
+        title: "Health",
+        title_state: None,
+        size: size(&HealthSnapshot::default()),
+        min_size: None,
     };
-    place_text(
-        world,
-        tag_value_label(i),
-        [o[0] + PANEL_W - PAD_X, cy],
-        TextAlign::Right,
-        color,
-        &row.value,
-    );
+    let mut panel = ui.panel(&spec, body)?;
+    panel.slots = slots;
+    Some(panel)
 }
 
-fn place_row(world: &mut World, o: [f32; 2], i: usize, meter: &Meter) {
-    let r = row_rect(o, i);
-    place_text(
-        world,
-        caption_label(i),
-        [r[0] + PAD_X, r[1] + CAPTION_CY],
-        TextAlign::Left,
-        theme::LABEL,
-        meter.caption,
-    );
-    place_text(
-        world,
-        value_label(i),
-        [r[0] + PANEL_W - PAD_X, r[1] + CAPTION_CY],
-        TextAlign::Right,
-        theme::LABEL,
-        &meter.value_text(),
-    );
-    place_text(
-        world,
-        parts_label(i),
-        [r[0] + PAD_X, r[1] + PARTS_CY],
-        TextAlign::Left,
-        theme::LABEL_DIM,
-        meter.parts,
-    );
-
-    let bar = bar_rect(o, i);
-    widget::place_rounded(world, track(i), bar, TRACK_TINT, BAR_H * 0.5, true);
-    let used = meter.used_frac();
-    let used_tint = if used >= WARN_FRAC {
-        USED_WARN_TINT
-    } else {
-        USED_TINT
-    };
-    place_fill(world, used_fill(i), bar, used, used_tint);
-    place_fill(
-        world,
-        tracked_fill(i),
-        bar,
-        meter.tracked_frac(),
-        TRACKED_TINT,
-    );
+// A bar fill, as wide as the width it is given.
+fn bar_fill(id: AssetId) -> LayoutChild {
+    LayoutChild {
+        item: Some(Ref::new(id)),
+        width: LayoutSize::Fit,
+        height: LayoutSize::Fixed(BAR_H),
+    }
 }
 
-// A proportional fill from the left of `bar`. An unknown or empty quantity hides
-// the sprite rather than drawing a zero-width pill.
-fn place_fill(world: &mut World, id: AssetId, bar: [f32; 4], frac: f32, tint: [f32; 4]) {
-    if frac <= 0.0 {
-        widget::set_sprite_visible(world, id, false);
+// Show snapshot number `samples`, unless it is the one shown already.
+pub(crate) fn sync(snap: &HealthSnapshot, samples: u64, world: &mut World, built: &BuiltPanel) {
+    if state::is_shown(world, SHOWN, samples) {
         return;
     }
-    let w = (bar[2] * frac).max(MIN_FILL_W);
-    // Keep the pill from rounding wider than it is, which would bulge a thin fill.
-    let radius = (BAR_H * 0.5).min(w * 0.5);
-    widget::place_rounded(world, id, [bar[0], bar[1], w, BAR_H], tint, radius, true);
+    for (i, meter) in health::meters(snap).iter().enumerate() {
+        state::set_text(world, VALUES[i], format_args!("{}", meter.value_text()));
+        let used = meter.used_frac();
+        let used_tint = if used >= WARN_FRAC {
+            USED_WARN_TINT
+        } else {
+            USED_TINT
+        };
+        set_fill(world, built.slots.get(used_slot(i)), used, used_tint);
+        let tracked = meter.tracked_frac();
+        set_fill(
+            world,
+            built.slots.get(tracked_slot(i)),
+            tracked,
+            TRACKED_TINT,
+        );
+    }
+    let text = |t: Option<String>| t.unwrap_or_default();
+    state::set_text(
+        world,
+        CHURN,
+        format_args!("{}", text(health::churn_text(snap))),
+    );
+    state::set_text(
+        world,
+        DRIFT,
+        format_args!("{}", text(health::drift_text(snap))),
+    );
+    let hot = text(health::hot_class_text(snap));
+    state::set_text(world, HOT_CLASS, format_args!("{hot}"));
+    let rows = health::tag_rows(snap);
+    for (i, [name, realm, value]) in TAGS.iter().enumerate() {
+        let row = rows.get(i);
+        state::set_text(world, name, format_args!("{}", row.map_or("", |r| r.name)));
+        state::set_text(
+            world,
+            realm,
+            format_args!("{}", row.map_or("", |r| r.realm)),
+        );
+        state::set_text(
+            world,
+            value,
+            format_args!("{}", row.map_or("", |r| &r.value)),
+        );
+        let color = if row.is_some_and(|r| r.over_budget) {
+            OVER_BUDGET_LABEL
+        } else {
+            theme::LABEL
+        };
+        if let Some(&id) = built.slots.get(tag_value_slot(i))
+            && let Some(label) = world.get_mut_by_id::<TextLabel>(id)
+        {
+            label.color = color;
+        }
+    }
+    state::with_state(world, |s| state::mark_shown(s, SHOWN, samples));
 }
 
-// Place a label centered vertically on `at` ([x, center_y]).
-fn place_text(
-    world: &mut World,
-    id: AssetId,
-    at: [f32; 2],
-    align: TextAlign,
-    color: [f32; 3],
-    text: &str,
-) {
-    if let Some(l) = widget::label_mut(world, id) {
-        l.x = at[0];
-        l.y = at[1] - theme::TEXT_HALF;
-        l.align = align;
-        l.color = color;
-        l.visible = true;
-        l.content = text.to_string();
-    }
+// A proportional fill from the left of its bar. An unknown or empty quantity
+// hides the sprite rather than drawing a zero-width pill.
+fn set_fill(world: &mut World, id: Option<&AssetId>, frac: f32, tint: [f32; 4]) {
+    let Some(sprite) = id.and_then(|&id| world.get_mut_by_id::<Sprite>(id)) else {
+        return;
+    };
+    sprite.visible = frac > 0.0;
+    let w = (BAR_W * frac).max(MIN_FILL_W);
+    sprite.width = w;
+    // Keep the pill from rounding wider than it is, which would bulge a thin fill.
+    sprite.corner_radius = (BAR_H * 0.5).min(w * 0.5);
+    sprite.tint = tint;
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{label, sprite};
-    use concinnity_core::math::SaturatingFrom;
-    use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
-    use concinnity_engine::budget::drift::{DriftVerdict, MemoryDrift};
-    use std::num::NonZeroU64;
-
-    const GB: u64 = 1024 * 1024 * 1024;
-
-    fn injected_world() -> World {
-        ids().test_world()
-    }
-
-    fn snapshot() -> HealthSnapshot {
-        HealthSnapshot {
-            heap: Some(MemStats {
-                live_bytes: GB,
-                peak_bytes: 2 * GB,
-                alloc_count: 100,
-                free_count: 90,
-            }),
-            rss: Some(4 * GB),
-            total_ram: Some(32 * GB),
-            pool_bytes: Some(GB),
-            vram_bytes: Some(2 * GB),
-            vram_budget: Some(8 * GB),
-            systems_cores: Some(0.5),
-            process_cores: Some(2.0),
-            total_cores: Some(10),
-            ..Default::default()
-        }
-    }
-
-    // A snapshot whose ledger two pools and an arena have reported into.
-    fn tagged_snapshot() -> HealthSnapshot {
-        let ledger = Ledger::new();
-        ledger.set(MemTag::Textures, Realm::Device, 2 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
-        ledger.set(MemTag::Meshes, Realm::Device, GB / 2);
-        ledger.set(MemTag::Scratch, Realm::Host, 1024);
-        HealthSnapshot {
-            tags: ledger.snapshot(),
-            ..snapshot()
-        }
-    }
-
-    #[test]
-    fn place_shows_the_heading_and_every_row() {
-        let mut world = injected_world();
-        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
-        assert_eq!(label(&world, TITLE_LABEL).content, "Health");
-        for (i, caption) in ["RAM", "VRAM", "CPU"].iter().enumerate() {
-            assert_eq!(&label(&world, caption_label(i)).content, caption);
-            assert!(label(&world, value_label(i)).visible);
-            assert!(sprite(&world, track(i)).visible);
-        }
-    }
-
-    // The fills are proportional to the track, and the tracked fill nests inside
-    // the used fill when the engine's accounting explains part of the usage.
-    #[test]
-    fn fills_are_proportional_and_nested() {
-        let mut world = injected_world();
-        let o = [0.0, 0.0];
-        place(&mut world, &snapshot(), o, [0.0, 0.0]);
-
-        let bar = bar_rect(o, 0);
-        let used = sprite(&world, used_fill(0));
-        let tracked = sprite(&world, tracked_fill(0));
-        // RSS 4 of 32 GB, heap 1 of 32 GB.
-        assert!((used.width - bar[2] * 4.0 / 32.0).abs() < 0.01);
-        assert!((tracked.width - bar[2] / 32.0).abs() < 0.01);
-        assert!(
-            tracked.width < used.width,
-            "tracked should nest inside used"
-        );
-        assert_eq!(used.x, bar[0], "both fills start at the track's left edge");
-        assert_eq!(tracked.x, bar[0]);
-    }
-
-    // An unknown quantity draws nothing at all, so an empty track reads as "no
-    // data" rather than "zero bytes".
-    #[test]
-    fn unknown_quantities_hide_their_fills() {
-        let mut world = injected_world();
-        place(
-            &mut world,
-            &HealthSnapshot::default(),
-            [0.0, 0.0],
-            [0.0, 0.0],
-        );
-        for i in 0..ROWS {
-            assert!(!sprite(&world, used_fill(i)).visible);
-            assert!(!sprite(&world, tracked_fill(i)).visible);
-            assert!(sprite(&world, track(i)).visible, "the track still shows");
-        }
-    }
-
-    #[test]
-    fn a_row_near_capacity_turns_the_used_fill_red() {
-        let mut world = injected_world();
-        let mut snap = snapshot();
-        snap.rss = Some(31 * GB);
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        assert_eq!(sprite(&world, used_fill(0)).tint, USED_WARN_TINT);
-
-        snap.rss = Some(4 * GB);
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        assert_eq!(sprite(&world, used_fill(0)).tint, USED_TINT);
-    }
-
-    // A tiny-but-real value stays visible instead of rounding to an empty track.
-    #[test]
-    fn a_tiny_fill_stays_visible() {
-        let mut world = injected_world();
-        let snap = HealthSnapshot {
-            rss: Some(1024),
-            total_ram: Some(32 * GB),
-            ..Default::default()
-        };
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        let used = sprite(&world, used_fill(0));
-        assert!(used.visible);
-        assert!(used.width >= MIN_FILL_W);
-        // The pill must not round wider than the fill itself.
-        assert!(used.corner_radius <= used.width * 0.5);
-    }
-
-    // Without the tracking allocator there is no heap line to draw.
-    #[test]
-    fn the_churn_line_hides_without_heap_stats() {
-        let mut world = injected_world();
-        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
-        assert!(label(&world, CHURN_LABEL).visible);
-
-        let mut snap = snapshot();
-        snap.heap = None;
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        assert!(!label(&world, CHURN_LABEL).visible);
-    }
-
-    #[test]
-    fn hit_test_swallows_panel_presses_and_lets_misses_through() {
-        let o = [100.0, 50.0];
-        let snap = snapshot();
-        assert!(hit_test(
-            o[0] + 10.0,
-            o[1] + widget::TITLE_H + 10.0,
-            o,
-            &snap
-        ));
-        assert!(!hit_test(o[0] - 5.0, o[1], o, &snap));
-        assert!(!hit_test(o[0] + PANEL_W + 1.0, o[1] + 10.0, o, &snap));
-    }
-
-    // Every row sits inside the panel footprint the drag clamp is given.
-    #[test]
-    fn rows_fit_within_the_panel_footprint() {
-        let o = [0.0, 0.0];
-        let snap = snapshot();
-        let panel = panel_rect(o, &snap);
-        for i in 0..ROWS {
-            let bar = bar_rect(o, i);
-            assert!(bar[1] + bar[3] <= panel[1] + panel[3]);
-            assert!(bar[0] + bar[2] <= panel[0] + panel[2]);
-        }
-    }
-
-    // One line per reported tag, naming what holds the memory and where.
-    #[test]
-    fn the_breakdown_draws_a_line_per_reported_tag() {
-        let mut world = injected_world();
-        place(&mut world, &tagged_snapshot(), [0.0, 0.0], [0.0, 0.0]);
-
-        let names = ["Scratch", "Textures", "Meshes"];
-        let realms = ["RAM", "VRAM", "VRAM"];
-        for (i, (name, realm)) in names.iter().zip(realms).enumerate() {
-            assert_eq!(&label(&world, tag_name_label(i)).content, name);
-            assert_eq!(label(&world, tag_realm_label(i)).content, realm);
-            assert!(label(&world, tag_value_label(i)).visible);
-        }
-        assert_eq!(label(&world, tag_value_label(1)).content, "2.0 GB / 4.0 GB");
-    }
-
-    // Rows are stacked, not overdrawn, and every one sits inside the footprint
-    // the drag clamp is given.
-    #[test]
-    fn the_breakdown_stacks_inside_the_panel_footprint() {
-        let mut world = injected_world();
-        let o = [0.0, 0.0];
-        let snap = tagged_snapshot();
-        place(&mut world, &snap, o, [0.0, 0.0]);
-
-        let panel = panel_rect(o, &snap);
-        let mut last_y = f32::MIN;
-        for i in 0..health::tag_rows(&snap).len() {
-            let y = label(&world, tag_name_label(i)).y;
-            assert!(y > last_y, "row {i} does not follow the one above it");
-            assert!(y + TAG_ROW_H <= panel[1] + panel[3]);
-            last_y = y;
-        }
-    }
-
-    // The drift line runs the full panel width with nothing to wrap onto, so
-    // its widest plausible rendering has to fit: both terms in three-digit
-    // gigabytes over a window measured in days. Anything wider than the machine
-    // has RAM for is not a case worth reserving room for.
-    #[test]
-    fn the_widest_drift_line_fits_the_panel() {
-        let snap = HealthSnapshot {
-            drift: Some(MemoryDrift {
-                heap_growth_bytes: -999 * i64::saturating_from(GB),
-                outside_heap_growth_bytes: 999 * i64::saturating_from(GB),
-                window_secs: 999 * 24 * 3600,
-                verdict: DriftVerdict::Both,
-            }),
-            ..snapshot()
-        };
-        let text = health::drift_text(&snap).expect("the snapshot carries drift");
-        let width = text.chars().count() as f32 * CHAR_W;
-        assert!(
-            width <= PANEL_W - 2.0 * PAD_X,
-            "drift line {width}px wide runs past the panel: {text:?}"
-        );
-    }
-
-    // The line only takes a slot when there is a baseline to report, so a
-    // session that has not settled shows no empty row.
-    #[test]
-    fn the_drift_line_takes_a_row_only_once_it_reports() {
-        let without = size(&snapshot());
-        let mut snap = snapshot();
-        snap.drift = Some(MemoryDrift {
-            heap_growth_bytes: 0,
-            outside_heap_growth_bytes: 0,
-            window_secs: 60,
-            verdict: DriftVerdict::Settled,
-        });
-        assert_eq!(size(&snap)[1], without[1] + TAG_ROW_H);
-
-        let mut world = injected_world();
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        assert!(label(&world, DRIFT_LABEL).visible);
-        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
-        assert!(!label(&world, DRIFT_LABEL).visible);
-    }
-
-    // A world nothing reports into draws no breakdown at all, and the panel is
-    // shorter by exactly the rows it does not draw.
-    #[test]
-    fn an_unreported_ledger_draws_no_rows_and_shortens_the_panel() {
-        let mut world = injected_world();
-        place(&mut world, &tagged_snapshot(), [0.0, 0.0], [0.0, 0.0]);
-        assert!(label(&world, tag_name_label(0)).visible);
-
-        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
-        for i in 0..health::MAX_TAG_ROWS {
-            assert!(!label(&world, tag_name_label(i)).visible);
-            assert!(!label(&world, tag_realm_label(i)).visible);
-            assert!(!label(&world, tag_value_label(i)).visible);
-        }
-        assert_eq!(
-            size(&snapshot())[1] + 3.0 * TAG_ROW_H,
-            size(&tagged_snapshot())[1]
-        );
-    }
-
-    // The three columns must clear each other at their widest: the longest tag
-    // name in the vocabulary, the longest realm, and a value carrying two
-    // fully-rendered byte figures. Text that collided would be unreadable and
-    // no test that only checks placement would notice.
-    #[test]
-    fn the_breakdown_columns_cannot_overlap() {
-        let longest_name = MemTag::ALL
-            .into_iter()
-            .map(|t| t.name().chars().count())
-            .max()
-            .expect("the vocabulary is not empty");
-        let name_end = PAD_X + longest_name as f32 * CHAR_W;
-        assert!(
-            name_end <= REALM_X,
-            "tag names {longest_name} chars wide run into the realm column"
-        );
-
-        let longest_realm = Realm::ALL
-            .into_iter()
-            .map(|r| r.name().chars().count())
-            .max()
-            .expect("there are two realms");
-        let realm_end = REALM_X + longest_realm as f32 * CHAR_W;
-        // Both figures at their longest rendering, budget included.
-        let widest_value = "1023.9 GB / 1023.9 GB";
-        let value_start = PANEL_W - PAD_X - widest_value.len() as f32 * CHAR_W;
-        assert!(
-            realm_end <= value_start,
-            "a full-width value would run into the realm column"
-        );
-    }
-
-    // A tag past its budget reads in the warning color, like a meter near
-    // capacity.
-    #[test]
-    fn a_row_past_its_budget_is_colored_as_a_warning() {
-        let ledger = Ledger::new();
-        ledger.set(MemTag::Textures, Realm::Device, 8 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
-        let snap = HealthSnapshot {
-            tags: ledger.snapshot(),
-            ..snapshot()
-        };
-
-        let mut world = injected_world();
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        assert_eq!(label(&world, tag_value_label(0)).color, OVER_BUDGET_LABEL);
-        assert_eq!(label(&world, tag_name_label(0)).color, theme::LABEL);
-    }
-
-    // The size-class line is a development instrument: no line at all in a
-    // build without it, and the breakdown moves up to fill the space.
-    #[test]
-    fn the_hot_class_line_appears_only_when_the_allocator_measured_one() {
-        let mut world = injected_world();
-        let snap = tagged_snapshot();
-        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
-        assert!(!label(&world, HOT_CLASS_LABEL).visible);
-        let without = label(&world, tag_name_label(0)).y;
-
-        let measured = HealthSnapshot {
-            hot_class: Some(concinnity_core::memory::SizeClass {
-                min_bytes: 64,
-                max_bytes: 127,
-                allocs: 10,
-                live_blocks: 4,
-            }),
-            ..snap
-        };
-        place(&mut world, &measured, [0.0, 0.0], [0.0, 0.0]);
-        assert!(label(&world, HOT_CLASS_LABEL).visible);
-        assert_eq!(label(&world, tag_name_label(0)).y - without, TAG_ROW_H);
-        assert_eq!(size(&measured)[1] - size(&snap)[1], TAG_ROW_H);
-    }
-}
+mod tests;

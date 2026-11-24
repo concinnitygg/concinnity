@@ -1,12 +1,12 @@
 //! The editor's view of the baked thumbnail set (entries of the build cache
 //! segment, `cache/1`, written by the cook's disk-build tail): reads the set's
 //! name -> key map, seeks to the PNG each key addresses, assigns every decoded
-//! image a reserved `TextureHandle`, and hands them to HUD injection as the
+//! image a reserved `TextureHandle`, and hands them to the editor's setup as the
 //! `OverlayImages` resource so the Content panel's cell sprites can sample
 //! them. Loads are cached and re-checked by the set's own revision, not by the
 //! segment file: the payload cache shares that file, so a build would bump it
 //! whether or not a thumbnail moved. The set actually resident in the atlas is
-//! the one captured at the last injection (the pool is built once per world
+//! the one captured at the last setup (the pool is built once per world
 //! rebuild), so panels bind through `injected()`, never the raw disk state.
 //!
 //! Best effort throughout: a build replaces the segment by rename while this
@@ -90,9 +90,9 @@ fn current() -> Arc<ThumbSet> {
 }
 
 // Capture the freshest set for a world (re)build and return its images for
-// the `OverlayImages` resource. Called by HUD injection, which runs right
+// the `OverlayImages` resource. Called by the editor's setup, which runs right
 // before the graphics init that builds the atlas pool.
-pub(crate) fn capture_for_injection() -> OverlayImages {
+pub(crate) fn capture_for_setup() -> OverlayImages {
     let set = current();
     let images = set.overlay_images();
     tracing::info!(
@@ -162,35 +162,9 @@ fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     Some((info.width, info.height, buf))
 }
 
-// Fit an image of `w` x `h` into `rect` preserving aspect, centered.
-pub(crate) fn fit_rect(rect: [f32; 4], w: u32, h: u32) -> [f32; 4] {
-    if w == 0 || h == 0 {
-        return rect;
-    }
-    let scale = (rect[2] / w as f32).min(rect[3] / h as f32);
-    let (fw, fh) = (w as f32 * scale, h as f32 * scale);
-    [
-        rect[0] + (rect[2] - fw) * 0.5,
-        rect[1] + (rect[3] - fh) * 0.5,
-        fw,
-        fh,
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fit_rect_letterboxes_and_centers() {
-        let cell = [10.0, 10.0, 80.0, 80.0];
-        assert_eq!(fit_rect(cell, 128, 128), cell);
-        let wide = fit_rect(cell, 128, 64);
-        assert_eq!(wide, [10.0, 30.0, 80.0, 40.0]);
-        let tall = fit_rect(cell, 64, 128);
-        assert_eq!(tall, [30.0, 10.0, 40.0, 80.0]);
-        assert_eq!(fit_rect(cell, 0, 5), cell, "degenerate dims fill the cell");
-    }
 
     fn png_of(w: u32, h: u32) -> Vec<u8> {
         let mut out = Vec::new();

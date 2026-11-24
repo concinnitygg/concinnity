@@ -1,11 +1,6 @@
-// How much a world's physics is allowed to cost, derived from what the world
-// actually contains. Cook counts the authored content and the runtime counts
-// the loaded components; both feed the same derivation, so the number the
-// simulation reserves is the number cook promised.
-//
-// The split between counts and budget is deliberate: counts are what a world
-// has, the budget is what the simulation reserves for it. Only the second is
-// worth shipping, and only the first is worth comparing across the two sides.
+// A world's physics budget derived from its counts: cook counts the authored
+// content and the runtime the loaded components through the same derivation.
+// Only the budget ships; the counts are what the two sides compare.
 
 /// Tallies of a world's authored physics content.
 ///

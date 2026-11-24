@@ -4,11 +4,10 @@
 //! VALIDATES the text with the real story parser and then writes the file (the
 //! one editor action that persists outside SAVE -- an in-memory preview of a
 //! file-backed source is impossible), then refreshes the live preview. The
-//! area takes the frame's key events and pointer while it holds focus and the
-//! panel is frontmost.
+//! hook keeps the source's editor and lends it to the panel's text area each
+//! frame, which takes the keys and pointer while it holds focus.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 
 use super::story_state::story_area;
@@ -17,9 +16,7 @@ use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 use crate::editor::panels::story_panel::{self, StoryAction, StoryView};
-use crate::editor::text_area::clipboard;
-use crate::editor::text_area::keys::Platform;
-use crate::editor::text_area::layout::{Geometry, Metrics};
+use crate::editor::ui::BuiltPanel;
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).
@@ -68,85 +65,36 @@ impl EditorHook {
             && self.panel_order.last() == Some(&PanelKey::Story)
     }
 
-    // The text area laid out in the panel as it stands, with the view it shows
-    // pushed into the area so its scrolling keeps the caret on screen.
-    fn story_geometry(&mut self) -> Geometry {
-        let vp = self.viewport;
-        let o = self.origin(PanelKey::Story, vp);
-        let s = self.effective_size(PanelKey::Story);
-        let g = story_panel::area_geometry(o, s, &self.story.area, Metrics::code());
-        self.story.area.set_view(g.view());
-        g
-    }
-
-    pub(in crate::editor::hook) fn scroll_story(&mut self, delta: f32) {
-        self.story_geometry();
-        self.story.area.wheel(delta, self.shift_held);
-    }
-
-    pub(in crate::editor::hook) fn make_story_view(&self, mouse: [f32; 2]) -> StoryView<'_> {
+    pub(in crate::editor::hook) fn story_view(&self) -> StoryView<'_> {
+        let create = self.story_import_index().is_none();
         StoryView {
-            area: &self.story.area,
             focus: self.story_typing(),
+            dirty: !create && self.story.area.is_dirty(),
             path: &self.story.path,
             status: self.story.status.as_deref(),
             markers: &self.story.markers,
-            create: self.story_import_index().is_none(),
-            mouse,
+            create,
         }
     }
 
-    // Route a resolved Story-panel click at `(mx, my)`.
-    pub(in crate::editor::hook) fn apply_story_action(
-        &mut self,
-        action: StoryAction,
-        mx: f32,
-        my: f32,
-    ) {
+    // Take in a press that focused the text area, or left it: its focus
+    // differs from what was last shown.
+    pub(in crate::editor::hook) fn observe_story(&mut self, world: &World, built: &BuiltPanel) {
+        let focused = story_panel::area_focused(world, built);
+        if focused != self.story_view().focus {
+            self.story.focus = focused;
+        }
+    }
+
+    pub(in crate::editor::hook) fn apply_story_action(&mut self, action: StoryAction) {
         match action {
-            StoryAction::Text => {
-                let g = self.story_geometry();
-                let now = self.clock.elapsed().as_secs_f64();
-                self.story.area.press_at(&g, mx, my, self.shift_held, now);
-                self.story.focus = true;
-            }
             StoryAction::Create => self.create_story(),
             StoryAction::Apply => self.apply_story(),
-            // A click on panel chrome blurs the text area.
-            StoryAction::Consume => self.story.focus = false,
         }
     }
 
-    // The per-frame input while the panel is frontmost: a held press keeps
-    // dragging, and while the area holds the keyboard every key event of the
-    // frame edits it, in order. The save shortcut applies.
-    pub(in crate::editor::hook) fn story_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if self.story_import_index().is_none() {
-            return;
-        }
-        let g = self.story_geometry();
-        let area = &mut self.story.area;
-        if area.pointer_busy() {
-            area.pointer(&g, input.mouse_x, input.mouse_y, input.left_button_down);
-        }
-        if !self.story_typing() || input.key_events.is_empty() {
-            return;
-        }
-        let clipboard = clipboard::system_or(world, &mut self.text_clipboard);
-        let response =
-            self.story
-                .area
-                .handle_events(&input.key_events, Platform::current(), clipboard);
-        if response.save {
-            self.apply_story();
-        }
-    }
-
-    // Validate the story with the real parser and, only when it parses, write
-    // the source file and refresh the live preview. The write persists to disk
-    // immediately (unlike entry edits, which SAVE persists): the cook can only
-    // read story sources from disk, so there is no in-memory-only preview for
-    // them. world.jsonl is untouched, so the SAVE flag is not set.
+    // Validate the story and, if it parses, write its source and refresh the
+    // preview. The cook reads stories from disk, so this saves at once.
     pub(in crate::editor::hook) fn apply_story(&mut self) {
         let Some(path) = self.story_source() else {
             return;

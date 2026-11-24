@@ -80,11 +80,8 @@ mod tests {
             .sum()
     }
 
-    // One wave, its amplitude at k and none at -k (both texels turn at the
-    // same rate, as every texel does with its mirror): the horizontal shift
-    // points toward the crest from both sides, and the Jacobian of the
-    // horizontal map is least at the crest, so crests are what sharpen and
-    // fold.
+    // One wave at k only: the horizontal shift points toward the crest from
+    // both sides and the Jacobian is least there, so crests sharpen.
     #[test]
     fn choppiness_gathers_points_into_the_crest() {
         let amplitude = 0.5;

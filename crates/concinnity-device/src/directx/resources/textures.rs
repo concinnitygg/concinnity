@@ -55,20 +55,14 @@ impl DxContext {
         self.rewrite_bound_texture_srvs(slot);
     }
 
-    // Whether replacing pool `slot` must drain the device first: true when an
-    // SRV that samples the slot may be dereferenced by pending command lists
-    // AND cannot wait for the per-frame propagation. The flat-pool copies
-    // propagate per frame, so only a world with nothing to GPU-drive (which
-    // draws nothing) answers yes.
+    // Whether replacing a pool slot must drain the device first: only when nothing
+    // is GPU-driven, since the flat-pool copies propagate per frame.
     fn streamed_slot_needs_drain(&self) -> bool {
         !(self.cull.main_bindless_pso.is_some() && self.state.draw.record_count() > 0)
     }
 
-    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
-    // right after frame slot `frame`'s fence wait: re-point this frame's
-    // flat-pool copy at any swapped slots (legal now -- the wait retired every
-    // list that dereferences this copy), then release retires whose covering
-    // fence has signaled (dropping the entry releases the COM references).
+    // After this slot's fence wait: re-point its flat-pool copy at swapped slots
+    // and release retires whose fence has signaled.
     pub(in crate::directx) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
         self.stream.frame += 1;
         if !self.stream.pool_rewrites.is_empty() {
@@ -89,34 +83,17 @@ impl DxContext {
 }
 
 impl TextureUploads for DxContext {
-    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
-    //
-    // Used by the asset-streaming subsystem to mark a slot whose texture is
-    // not yet resident; a later `update_texture_slot` brings the real texture
-    // back. The gray is distinct from the white no-texture fallback so a
-    // not-yet-streamed slot reads differently under inspection.
+    // Reset pool `slot` to a 1x1 mid-gray placeholder until it streams back,
+    // distinct from the white no-texture fallback.
     fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
         let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &gray)
     }
 
-    // Replace texture-pool `slot` with a freshly decoded texture.
-    //
-    // The asset-streaming subsystem calls this to bring a texture resident
-    // after init. Like Vulkan -- and unlike Metal, whose bind paths re-read
-    // the texture pool every frame -- the D3D12 per-object / per-cluster SRVs
-    // are baked into the descriptor heap at init, so a streamed swap must
-    // rewrite every heap slot that samples this pool index (as an albedo or a
-    // normal map). The streaming fast path never stalls the device: the
-    // upload is submitted without waiting (the in-order queue executes it
-    // before any later frame's lists), the build-time pairs are re-pointed
-    // immediately (undereferenced while the bindless pass drives every draw),
-    // the per-frame flat-pool copies re-point one per frame as their fences
-    // retire, and the old resource plus upload transients are parked on
-    // `stream.retires` until every consumer provably moved off them. When a
-    // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
-    // the swap instead drains the device and rewrites everything in place,
-    // matching the hot-reload paths below.
+    // Replace pool `slot` with a fresh texture without stalling: submit the upload,
+    // re-point the build-time SRV pairs now and each frame's flat-pool copy as its
+    // fence retires, and park the old resource until nothing uses it. A drain is
+    // needed only per `streamed_slot_needs_drain`.
     fn update_texture_slot(
         &mut self,
         slot: TextureSlot,
@@ -155,14 +132,8 @@ impl TextureUploads for DxContext {
         Ok(())
     }
 
-    // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    // Driven by asset hot-reload (`cn run -f` only) when the file-backed
-    // `ColorLut` source is saved. Reuses the SRV heap slot the composite pass
-    // already binds, so the new texture is picked up on the next `draw_frame`
-    // with no pipeline or descriptor-table change. `wait_idle` first
-    // guarantees no in-flight command list still references the old texture
-    // (or the now-stale SRV) before it is overwritten and dropped. Mirrors
-    // `MtlContext::update_color_lut`.
+    // Replace the color-grading LUT on hot reload in the SRV slot the composite
+    // already binds, after waiting idle.
     fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let srv_cpu = self.scene.color_lut.srv_cpu;
@@ -172,17 +143,8 @@ impl TextureUploads for DxContext {
         Ok(())
     }
 
-    // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn run -f` only). Re-uploads into the same
-    // SRV heap slots [1] (irradiance) + [2] (prefilter) the init path wrote,
-    // so every pipeline that references those slots keeps working without a
-    // descriptor-table rebind. The new payload may declare different mip /
-    // face sizes than the original; `EnvironmentMapTextures` is replaced
-    // wholesale and the next frame's `ViewUniforms` picks up the new
-    // `prefilter_mip_count` from `self.scene.env_map`. `wait_idle` first guarantees
-    // no in-flight command list still references the old cubes (or the
-    // now-stale SRVs) before they are overwritten and dropped. Mirrors
-    // `MtlContext::update_environment_map`.
+    // Swap the IBL cubes on hot reload into the same SRV slots [1] and [2], after
+    // waiting idle; the new mip count reaches the next frame's view uniforms.
     fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;

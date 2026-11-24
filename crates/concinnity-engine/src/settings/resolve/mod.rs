@@ -247,11 +247,9 @@ impl<'a> SettingsLayers<'a> {
     }
 }
 
-// No setting resolves on that the device cannot run: ray tracing on a device
-// without it, or beside XeSS where the two cannot share the device, and an
-// upscaler choice where there is none to make. An upscaler at native
-// resolution only anti-aliases, so where it would be XeSS it gives way to ray
-// tracing instead, and the engine's resolve runs TAA.
+// Clamp to what the device can run: no ray tracing without support or beside
+// XeSS, no upscaler choice without one. A native-resolution XeSS gives way to
+// ray tracing and TAA.
 fn clamp_to(graphics: &mut ResolvedGraphics, capabilities: DeviceCapabilities) {
     if !capabilities.selectable_upscaler {
         graphics.anti_aliasing.upscaler = UpscalerBackend::Auto;

@@ -4,11 +4,14 @@ use concinnity_core::math::SaturatingFrom;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::components::{AuthoredAction, Scene, Screen, ScreenCommand, StoryCommand};
+use crate::components::{
+    AuthoredAction, Binding, Scene, Screen, ScreenCommand, StoryCommand, UiEmit, ValueOp,
+};
 use crate::ecs::Ref;
 use crate::ecs::asset_fields::{AssetFields, FieldTable};
 use crate::ecs::asset_id::AssetId;
 use crate::settings::SettingKey;
+use alloc::string::String;
 
 /// What a [`HitRegion`](#hitregion) click or a [`KeyBinding`](#keybinding) press
 /// does, with its targets resolved to asset ids.
@@ -22,7 +25,7 @@ use crate::settings::SettingKey;
 /// let action: UiAction = serde_json::from_value(serde_json::json!({"toggle": 7})).unwrap();
 /// assert_eq!(action, UiAction::Screen(ScreenCommand::Toggle(AssetId(7))));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UiAction {
     /// Stop the application.
     Quit,
@@ -30,11 +33,18 @@ pub enum UiAction {
     Scene(AssetId),
     /// Apply a screen-stack transition. Never `Clear`, which only the engine sends.
     Screen(ScreenCommand),
-    /// Expand or collapse a settings-screen group by index.
-    GroupToggle(usize),
+    /// Change the value a binding names.
+    Value {
+        /// The value changed.
+        binding: Binding,
+        /// What is done to it.
+        op: ValueOp,
+    },
+    /// Tell the app's own systems, which read it as a `UiEvent`.
+    Emit(UiEmit),
     /// Drive the story system.
     Story(StoryCommand),
-    /// Operate a settings row.
+    /// Capture a rebind setting's key or button, or open a setting's dropdown.
     Setting {
         /// The setting the row edits.
         key: SettingKey,
@@ -47,15 +57,10 @@ pub enum UiAction {
     ToggleHud,
 }
 
-/// What a settings-row region does to its setting.
+/// What a settings-row region does to its setting, beyond the stepping and
+/// setting a [`Value`](UiAction::Value) action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingVerb {
-    /// Step the value one option forward.
-    Next,
-    /// Step the value one option back.
-    Prev,
-    /// Drag a slider along its track.
-    Drag,
     /// Capture the next key or button press as the binding.
     Rebind,
     /// Open a dropdown list of the options.
@@ -64,14 +69,11 @@ pub enum SettingVerb {
 
 impl SettingVerb {
     /// Every verb, in declaration order.
-    pub const ALL: [Self; 5] = [Self::Next, Self::Prev, Self::Drag, Self::Rebind, Self::Open];
+    pub const ALL: [Self; 2] = [Self::Rebind, Self::Open];
 
     /// The verb as a settings row's action writes it.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Next => "next",
-            Self::Prev => "prev",
-            Self::Drag => "drag",
             Self::Rebind => "rebind",
             Self::Open => "open",
         }
@@ -93,7 +95,8 @@ enum Encoded {
     ScreenPush(u32),
     ScreenToggle(u32),
     ScreenHide,
-    GroupToggle(u32),
+    Value(Binding, ValueOp),
+    Emit(UiEmit),
     Story { verb: u8, index: u32 },
     Setting { key: u8, verb: u8 },
     Screenshot(u32),
@@ -110,7 +113,8 @@ impl Encoded {
             UiAction::Screen(ScreenCommand::Toggle(id)) => Self::ScreenToggle(id.0),
             UiAction::Screen(ScreenCommand::Hide) => Self::ScreenHide,
             UiAction::Screen(ScreenCommand::Clear) => return None,
-            UiAction::GroupToggle(i) => Self::GroupToggle(u32::try_from(*i).ok()?),
+            UiAction::Value { binding, op } => Self::Value(binding.clone(), op.clone()),
+            UiAction::Emit(name) => Self::Emit(name.clone()),
             UiAction::Story(cmd) => Self::Story {
                 verb: u8::saturating_from(
                     StoryCommand::VERBS.iter().position(|v| *v == cmd.verb())?,
@@ -134,7 +138,8 @@ impl Encoded {
             Self::ScreenPush(id) => UiAction::Screen(ScreenCommand::Push(AssetId(id))),
             Self::ScreenToggle(id) => UiAction::Screen(ScreenCommand::Toggle(AssetId(id))),
             Self::ScreenHide => UiAction::Screen(ScreenCommand::Hide),
-            Self::GroupToggle(i) => UiAction::GroupToggle(i as usize),
+            Self::Value(binding, op) => UiAction::Value { binding, op },
+            Self::Emit(name) => UiAction::Emit(name),
             Self::Story { verb, index } => UiAction::Story(StoryCommand::from_verb(
                 StoryCommand::VERBS.get(verb as usize)?,
                 Some(index as usize),
@@ -163,7 +168,23 @@ impl From<Resolved> for UiAction {
             AuthoredAction::Toggle(screen) => Self::Screen(ScreenCommand::Toggle(screen.id())),
             AuthoredAction::Hide => Self::Screen(ScreenCommand::Hide),
             AuthoredAction::Story(cmd) => Self::Story(cmd),
-            AuthoredAction::GroupToggle(i) => Self::GroupToggle(i),
+            AuthoredAction::Set { binding, value } => Self::Value {
+                binding,
+                op: ValueOp::Set(value),
+            },
+            AuthoredAction::Flip(binding) => Self::Value {
+                binding,
+                op: ValueOp::Flip,
+            },
+            AuthoredAction::Add { binding, by } => Self::Value {
+                binding,
+                op: ValueOp::Add(by),
+            },
+            AuthoredAction::Step { binding, by } => Self::Value {
+                binding,
+                op: ValueOp::Step(by),
+            },
+            AuthoredAction::Emit(name) => Self::Emit(name),
             AuthoredAction::Setting { key, verb } => Self::Setting { key, verb },
             AuthoredAction::Screenshot(frames) => Self::Screenshot(frames),
             AuthoredAction::ToggleHud => Self::ToggleHud,
@@ -184,7 +205,19 @@ impl UiAction {
             Self::Screen(ScreenCommand::Hide) => AuthoredAction::Hide,
             Self::Screen(ScreenCommand::Clear) => return None,
             Self::Story(cmd) => AuthoredAction::Story(cmd.clone()),
-            Self::GroupToggle(i) => AuthoredAction::GroupToggle(*i),
+            Self::Value { binding, op } => {
+                let binding = binding.clone();
+                match op {
+                    ValueOp::Set(value) => AuthoredAction::Set {
+                        binding,
+                        value: value.clone(),
+                    },
+                    ValueOp::Flip => AuthoredAction::Flip(binding),
+                    ValueOp::Add(by) => AuthoredAction::Add { binding, by: *by },
+                    ValueOp::Step(by) => AuthoredAction::Step { binding, by: *by },
+                }
+            }
+            Self::Emit(name) => AuthoredAction::Emit(name.clone()),
             Self::Setting { key, verb } => AuthoredAction::Setting {
                 key: *key,
                 verb: *verb,
@@ -209,7 +242,7 @@ impl Serialize for SettingVerb {
 
 impl<'de> Deserialize<'de> for SettingVerb {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let verb = alloc::string::String::deserialize(d)?;
+        let verb = String::deserialize(d)?;
         Self::parse(&verb)
             .ok_or_else(|| de::Error::custom(format_args!("unknown setting verb {verb:?}")))
     }
@@ -245,6 +278,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::*;
+    use crate::components::UiValue;
 
     fn every_action() -> Vec<UiAction> {
         let mut all = vec![
@@ -254,7 +288,26 @@ mod tests {
             UiAction::Screen(ScreenCommand::Push(AssetId(5))),
             UiAction::Screen(ScreenCommand::Toggle(AssetId(6))),
             UiAction::Screen(ScreenCommand::Hide),
-            UiAction::GroupToggle(2),
+            UiAction::Value {
+                binding: Binding::State("grid".into()),
+                op: ValueOp::Flip,
+            },
+            UiAction::Value {
+                binding: Binding::Setting(SettingKey::Vsync),
+                op: ValueOp::Step(-1),
+            },
+            UiAction::Value {
+                binding: Binding::Var("score".into()),
+                op: ValueOp::Add(2.5),
+            },
+            UiAction::Value {
+                binding: Binding::State("name".into()),
+                op: ValueOp::Set(UiValue::Text("x".into())),
+            },
+            UiAction::Emit(UiEmit {
+                name: "save".into(),
+                value: None,
+            }),
             UiAction::Screenshot(8),
             UiAction::ToggleHud,
         ];
@@ -308,8 +361,8 @@ mod tests {
 
     #[test]
     fn an_encoded_tag_past_the_last_variant_is_rejected() {
-        assert!(postcard::from_bytes::<UiAction>(&[11]).is_err());
-        assert!(postcard::from_bytes::<UiAction>(&[7, 13, 0]).is_err());
+        assert!(postcard::from_bytes::<UiAction>(&[12]).is_err());
+        assert!(postcard::from_bytes::<UiAction>(&[8, 13, 0]).is_err());
     }
 
     #[test]
@@ -326,7 +379,13 @@ mod tests {
                 "{json}"
             );
         }
-        for action in [None, Some(UiAction::GroupToggle(4))] {
+        for action in [
+            None,
+            Some(UiAction::Emit(UiEmit {
+                name: "save".into(),
+                value: None,
+            })),
+        ] {
             let h = Holder { action };
             let bytes = postcard::to_allocvec(&h).unwrap();
             assert_eq!(postcard::from_bytes::<Holder>(&bytes).unwrap(), h);

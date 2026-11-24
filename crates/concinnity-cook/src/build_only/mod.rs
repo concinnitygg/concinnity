@@ -1,6 +1,6 @@
 /// The build-time world surface: the expansion passes, preset loading, and the
 /// build front-half orchestrator (prepare_world = load + expand + validate).
-/// The authored world model it works on -- world.jsonl I/O, `WorldJsonlAsset`,
+/// The authored world model it works on -- .jsonl I/O, `WorldJsonlAsset`,
 /// and structural validation (`load_world`) -- is `crate::authoring::world`.
 pub mod preset;
 
@@ -17,20 +17,13 @@ pub(crate) mod ground_look;
 pub mod include;
 
 pub(crate) mod light_rig;
-pub(crate) mod main_menu;
 pub(crate) mod material_palette;
 pub(crate) mod membership;
-pub(crate) mod menu_defaults;
-pub(crate) mod option_select;
-pub(crate) mod panel;
 pub(crate) mod prefab;
 pub(crate) mod room;
-pub(crate) mod row_setting;
 pub(crate) mod scene_import;
-pub(crate) mod slider;
 pub(crate) mod story;
 pub use story::validate_story_source;
-pub(crate) mod ui_spec;
 
 pub(crate) mod expand;
 mod provenance;
@@ -40,13 +33,13 @@ pub use shadow::merge_args;
 
 pub(crate) use expand::expand_world;
 pub use expand::{GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world_from_str};
-/// A world.jsonl that has been loaded, structurally validated, expanded, and
+/// A .jsonl file that has been loaded, structurally validated, expanded, and
 /// semantically checked: everything the compile stage needs, computed once.
 pub struct LoadedWorld {
     /// The same assets as typed entries, consumed by the build pipeline.
     pub assets: Vec<WorldJsonlAsset>,
     /// Assets added by the injection passes (companions, engine defaults),
-    /// recorded in world-lock.json so the user can see and override them.
+    /// recorded in cook-lock.json so the user can see and override them.
     pub injected: Vec<InjectedAsset>,
     /// Assets a macro expansion produced, paired with the authored asset that
     /// produced them, so listings can group them by source.
@@ -54,7 +47,7 @@ pub struct LoadedWorld {
     /// Generated assets the world declares a patch of; the merged result is in
     /// `assets` and each record carries the pre-merge generated args.
     pub shadowed: Vec<ShadowedAsset>,
-    /// The handles of the entries in the world file itself (pre-expansion),
+    /// The handles of the entries in the file itself (pre-expansion),
     /// for provenance listings: each `$id`, else the entry's label.
     pub authored: Vec<String>,
 }
@@ -65,10 +58,9 @@ pub struct LoadedWorld {
 /// compile stage needs, computed exactly once. Errors from every stage are
 /// collected, so the caller gets the full picture in a single pass.
 ///
-/// `source` is the world text, with the file it was read from when an
-/// `Include` in it should resolve beside that file. `assets_dir` is the asset
-/// search root the expansion passes resolve bare source filenames and preset
-/// names against; `None` leaves them unresolved.
+/// `source` is the world text, with the file it was read from and the root
+/// every path in it resolves against; presets are looked up by name under that
+/// root's `assets/`. With no root a relative path stays as written.
 ///
 /// # Errors
 ///
@@ -76,24 +68,20 @@ pub struct LoadedWorld {
 /// structurally, expand, or pass semantic validation.
 pub fn prepare_world<'a>(
     source: impl Into<WorldSource<'a>>,
-    assets_dir: Option<&std::path::Path>,
 ) -> Result<LoadedWorld, WorldValidationError> {
     // Ids the checks intern are throwaway; the compile assigns the build's own.
     let _check = concinnity_host::thread::asset_id::BuildScope::fresh();
-    prepare(source.into(), assets_dir).map_err(WorldValidationError::new)
+    prepare(source.into()).map_err(WorldValidationError::new)
 }
 
-fn prepare(
-    source: WorldSource<'_>,
-    assets_dir: Option<&std::path::Path>,
-) -> Result<LoadedWorld, Vec<Diagnostic>> {
+fn prepare(source: WorldSource<'_>) -> Result<LoadedWorld, Vec<Diagnostic>> {
     let mut expanded = load_world(source).map_err(diagnostics)?;
     let authored: Vec<String> = expanded
         .iter()
         .filter_map(crate::authoring::world::entry_id)
         .map(str::to_string)
         .collect();
-    let report = expand_world(&mut expanded, assets_dir).map_err(|e| vec![e])?;
+    let report = expand_world(&mut expanded, source.root).map_err(|e| vec![e])?;
     // The expansion is the work this half of the build produces cache entries
     // for, so its segment is written here rather than left to a compile that a
     // check-only run never reaches.
@@ -160,7 +148,7 @@ mod tests {
     #[test]
     fn prepare_world_expands_and_validates() {
         let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
-        let loaded = prepare_world(content, None).unwrap();
+        let loaded = prepare_world(content).unwrap();
         // A TextLabel pulls in its companions, so the prepared world holds
         // more than the single declared asset.
         assert!(loaded.assets.len() > 1);
@@ -180,7 +168,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let errs = prepare_world(content, None)
+        let errs = prepare_world(content)
             .err()
             .map(|e| {
                 e.diagnostics()
@@ -197,7 +185,7 @@ mod tests {
     #[test]
     fn an_expansion_failure_names_its_asset() {
         let content = r#"["Panel",{"$id":"hud","width":"wide"}]"#;
-        let Err(err) = prepare_world(content, None) else {
+        let Err(err) = prepare_world(content) else {
             panic!("mistyped args fail");
         };
         let [diagnostic] = err.diagnostics() else {
@@ -219,7 +207,7 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"["Prop",{"$id":"prop","mesh":"nope"}]"#;
-        let errs = prepare_world(content, None)
+        let errs = prepare_world(content)
             .err()
             .map(|e| {
                 e.diagnostics()
@@ -240,7 +228,7 @@ mod tests {
     fn prepare_world_expands_presets_from_the_root_it_is_given() {
         fn rig_root(intensity: f64) -> tempfile::TempDir {
             let dir = tempfile::tempdir().unwrap();
-            let rigs = dir.path().join("light_rigs");
+            let rigs = dir.path().join("assets").join("light_rigs");
             std::fs::create_dir_all(&rigs).unwrap();
             std::fs::write(
                 rigs.join("dusk.json"),
@@ -267,14 +255,14 @@ mod tests {
         let dim = rig_root(0.25);
 
         assert_eq!(
-            key_intensity(&prepare_world(content, Some(bright.path())).unwrap()),
+            key_intensity(&prepare_world(WorldSource::text(content, Some(bright.path()))).unwrap()),
             Some(3.5)
         );
         assert_eq!(
-            key_intensity(&prepare_world(content, Some(dim.path())).unwrap()),
+            key_intensity(&prepare_world(WorldSource::text(content, Some(dim.path()))).unwrap()),
             Some(0.25)
         );
         // No root: the preset is never found, so the rig expands to nothing.
-        assert_eq!(key_intensity(&prepare_world(content, None).unwrap()), None);
+        assert_eq!(key_intensity(&prepare_world(content).unwrap()), None);
     }
 }

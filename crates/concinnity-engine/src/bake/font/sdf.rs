@@ -1,8 +1,5 @@
-// Signed distance field conversion for rasterized glyph cells.
-//
-// Each atlas texel stores a normalized SDF value in [0, 1] where 0.5 = the glyph
-// outline. Values > 0.5 are inside; values < 0.5 are outside. The fragment
-// shader uses smoothstep + fwidth to reconstruct crisp, scale-independent alpha.
+// Signed distance fields for glyph cells: each texel stores [0, 1] with the
+// outline at 0.5, inside above it.
 
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, round, sqrt};

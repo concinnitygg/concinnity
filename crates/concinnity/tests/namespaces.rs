@@ -1,8 +1,8 @@
-//! The partition check for the two vocabulary namespaces, derived from the
+//! The partition check for the vocabulary namespaces, derived from the
 //! component registry: `components` is its `stored` group, `cook` its
-//! `build_only` and `resource` groups. A type added to the registry, or moved
-//! between its groups, fails here until the namespace it is reached through
-//! follows.
+//! `resource` group, and `cook` and `ui` together its `build_only` group. A
+//! type added to the registry, or moved between its groups, fails here until
+//! the namespace it is reached through follows.
 //!
 //! The groups come from two lists: the runtime's (`stored` and `resource`, in
 //! concinnity-engine) and the authoring-only one (`build_only`, in
@@ -41,16 +41,23 @@ macro_rules! assert_runtime_groups_are_partitioned {
 concinnity_engine::for_each_component!(assert_runtime_groups_are_partitioned);
 
 // The same, for the group the authoring registry owns. Gated whole: without
-// `cook` there is no `cook` namespace to reach these through, and no
+// `cook` there is no `cook` or `ui` namespace to reach these through, and no
 // concinnity-cook to read the list from.
 #[cfg(feature = "cook")]
 macro_rules! assert_the_build_only_group_is_reachable {
     (build_only: { $( $bvariant:ident => $bty:path { $($bmeta:tt)* } ),+ $(,)? } $(,)?) => {
         fn the_cook_expands<T: concinnity_cook::authoring::registry::BuildOnlyAsset>() {}
 
+        // The UI shorthands live in `ui`, every other expanded type in `cook`.
+        // The two share no name, so their union reaches each type exactly once.
+        mod expanded {
+            pub(super) use concinnity::cook::*;
+            pub(super) use concinnity::ui::*;
+        }
+
         #[test]
-        fn the_cook_namespace_holds_the_expanded_types() {
-            $( the_cook_expands::<concinnity::cook::$bvariant>(); )+
+        fn the_cook_and_ui_namespaces_hold_the_expanded_types() {
+            $( the_cook_expands::<expanded::$bvariant>(); )+
         }
     };
 }

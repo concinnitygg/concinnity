@@ -1,10 +1,5 @@
-// LabelPlacement for the error screen's message lines and the Quit button, plus the
-// button's hit rect.
-//
-// Everything is laid out in window pixels against the live drawable size, so
-// the screen re-centers when the window is resized. The labels are deliberately
-// not screen-owned: a `Screen` maps through the reference-canvas overlay
-// transform, and this path has no world to own one.
+// Placement for the error screen's lines and Quit button in window pixels, so
+// it re-centers on resize.
 
 use crate::components::{TextAlign, TextLabel};
 use crate::ecs::FontHandle;
@@ -126,6 +121,7 @@ pub fn build(
             align: TextAlign::Center,
             wrap_width: win_w * WRAP_FRACTION,
             max_lines: MESSAGE_MAX_LINES,
+            text_binding: None,
             visible: true,
             ..TextLabel::default()
         };

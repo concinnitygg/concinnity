@@ -73,7 +73,7 @@ impl Default for ImportOptions {
 pub(crate) fn entries_from_scene(
     source: &str,
     opts: &ImportOptions,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let ext = Path::new(source)
         .extension()
@@ -81,8 +81,11 @@ pub(crate) fn entries_from_scene(
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     match ext.as_str() {
-        "fbx" => entries_from_fbx(source, opts),
-        "glb" | "gltf" => entries_from_glb(source, opts, assets_dir),
+        "fbx" => entries_from_fbx(
+            &concinnity_host::store::source::resolve(source, root).to_string_lossy(),
+            opts,
+        ),
+        "glb" | "gltf" => entries_from_glb(source, opts, root),
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -353,10 +356,10 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
 fn entries_from_glb(
     path: &str,
     opts: &ImportOptions,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let doc = crate::import::gltf_source::GltfDoc::parse_file(&crate::import::glb::resolve_source(
-        path, assets_dir,
+        path, root,
     ))
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
@@ -492,7 +495,7 @@ fn entries_from_glb(
             // Oversized: parse geometry now solely to learn how many u16-safe
             // chunks the build will produce. Emit one Mesh per chunk by name;
             // each carries `chunk_index` so desugar can re-split the primitive
-            // and pick the right slice: no inline data baked into world.jsonl.
+            // and pick the right slice: no inline data baked into a .jsonl file.
             let (_, indices32) = crate::import::glb::read_primitive_geometry(
                 &doc,
                 path,

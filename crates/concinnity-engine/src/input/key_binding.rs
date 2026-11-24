@@ -8,7 +8,7 @@ use alloc::string::String;
 ///
 /// When the bound key is pressed, the action fires once per press (like a
 /// [`HitRegion`](#hitregion) click), whether or not the camera holds the cursor.
-/// While a [`TextInput`](#textinput) has keyboard focus, bindings are suspended
+/// While a [`TextField`](#textfield) has keyboard focus, bindings are suspended
 /// so typing cannot trigger actions; a [Screen](#screen)'s `toggle_key` stays
 /// live.
 ///

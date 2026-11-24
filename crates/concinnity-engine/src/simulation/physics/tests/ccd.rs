@@ -159,13 +159,8 @@ fn every_shape_arrives_on_the_slab_at_every_speed() {
     }
 }
 
-// And what the solver does with the impact afterwards: arriving on the slab
-// is worth nothing if the contact then throws the body off it. A rounded
-// shape carries its whole impulse through one contact point on its center
-// line, so it was never in any doubt. A box spreads the same impulse over the
-// four corners of a face, each with a lever arm under it, and holds only
-// because the manifold's points are solved as one system rather than one
-// after another.
+// After the sweep, the contact must not throw the body off the slab; a box
+// holds because its manifold solves as one system.
 #[test]
 fn every_shape_is_held_on_the_slab_at_every_speed() {
     for (shape, reach, name) in [
@@ -517,11 +512,7 @@ fn a_fast_platform_pushes_a_body_rather_than_passing_through_it() {
     );
 }
 
-// A joint is the stiffest thing in the solve, so a position change made
-// outside it is the change most able to make one explode. An arm held on a
-// one-unit link and launched sideways at fifty units a second crosses eight
-// tenths of a unit per tick, against a link that wants it back and a wall a
-// tenth of a unit thick that the tick would otherwise step straight over.
+// A jointed arm launched at a thin wall must neither tunnel nor explode.
 #[test]
 fn a_jointed_body_stopped_by_the_sweep_does_not_fight_the_joint() {
     // Thicker than the ball above, so the link has something to hold.

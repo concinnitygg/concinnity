@@ -9,14 +9,14 @@ use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::path::Path;
 
 use super::shader_fixtures::{
-    args, blocked, click, confirm, detail, form_world, in_project, key, material, plain_material,
-    press, rows, shader, shader_names, toasts, type_name, write,
+    args, blocked, click, confirm, detail, form_world, in_project, key, material, name_form,
+    plain_material, press, rows, shader, shader_names, toasts, write,
 };
 use crate::editor::hook::FormTarget;
 use crate::editor::hook::tests::fixtures::{hook, press_modal};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::shader;
 use crate::editor::panels::shader::list::RowKind;
-use crate::editor::panels::{form_panel, shader};
 
 // "+ New Shader" opens the form empty; a blank name blocks it, and Create
 // writes each file from its starter, assigns the Materials picked, and opens
@@ -29,9 +29,9 @@ fn a_new_shader_is_created_through_its_form() {
         std::fs::create_dir_all(&shaders).unwrap();
         std::fs::write(shaders.join("water.hlsl"), "someone else's").unwrap();
         let mut h = hook(vec![plain_material("sea"), plain_material("rock")]);
-        let mut world = form_world();
+        let world = form_world();
 
-        click(&mut h, &mut world, &RowKind::New);
+        click(&mut h, &world, &RowKind::New);
         assert_eq!(h.form.selected_type.as_deref(), Some("Shader"));
         assert_eq!(h.form.target, FormTarget::New);
         assert_eq!(h.form.host, PanelKey::Shaders);
@@ -40,25 +40,25 @@ fn a_new_shader_is_created_through_its_form() {
             "the file fields are the form's own"
         );
 
-        type_name(&mut world, "   ");
-        let reason = blocked(&h, &world).unwrap();
+        name_form(&mut h, "   ");
+        let reason = blocked(&h).unwrap();
         assert!(reason.contains("Enter a name"), "{reason}");
-        confirm(&mut h, &mut world);
+        confirm(&mut h, &world);
         assert!(h.entries.iter().all(|e| e["type"] != "Shader"));
         assert!(h.form_open(), "the form stays open with the reason");
 
-        type_name(&mut world, " water ");
-        assert_eq!(blocked(&h, &world), None);
+        name_form(&mut h, " water ");
+        assert_eq!(blocked(&h), None);
         assert_eq!(
-            detail(&h, &world, "fragment").as_deref(),
+            detail(&h, "fragment").as_deref(),
             Some("assets/shaders/water_1.hlsl"),
             "the preview numbers past a file already there"
         );
-        press(&mut h, &mut world, "vertex", false);
-        press(&mut h, &mut world, "fragment", true);
-        press(&mut h, &mut world, "vertex", true);
-        press(&mut h, &mut world, "sea", false);
-        confirm(&mut h, &mut world);
+        press(&mut h, &world, "vertex", false);
+        press(&mut h, &world, "fragment", true);
+        press(&mut h, &world, "vertex", true);
+        press(&mut h, &world, "sea", false);
+        confirm(&mut h, &world);
 
         assert!(!h.form_open());
         assert_eq!(shader_names(&h), ["water"]);
@@ -80,12 +80,12 @@ fn a_new_shader_is_created_through_its_form() {
         let src = h.shaders.source.as_ref().unwrap();
         assert_eq!(src.key, key("water", ShaderStage::Fragment));
         assert!(
-            toasts(&h)
+            toasts(&mut h)
                 .iter()
                 .any(|t| t.contains("Added Shader 'water'"))
         );
 
-        h.undo(&mut world);
+        h.undo();
         assert!(shader_names(&h).is_empty());
         assert!(args(&h, "sea").get("shader").is_none());
         assert!(!h.can_undo(), "one step");
@@ -104,18 +104,18 @@ fn a_taken_name_or_the_limit_blocks_the_form() {
         shader("lit", Path::new("/cn-none/lit.hlsl")),
         plain_material("rock"),
     ]);
-    let mut world = form_world();
-    h.open_form(&mut world, "Shader".to_string(), FormTarget::New);
+    let world = form_world();
+    h.open_form("Shader".to_string(), FormTarget::New);
     for (name, why) in [
         ("lit", "already taken"),
         ("rock", "already taken"),
         ("Shader#3", "reserved"),
     ] {
-        type_name(&mut world, name);
-        let reason = blocked(&h, &world).unwrap();
+        name_form(&mut h, name);
+        let reason = blocked(&h).unwrap();
         assert!(reason.contains(why), "{name}: {reason}");
     }
-    confirm(&mut h, &mut world);
+    confirm(&mut h, &world);
     assert_eq!(shader_names(&h), ["lit"]);
     assert!(h.form.error.as_deref().unwrap().contains("reserved"));
 
@@ -123,10 +123,10 @@ fn a_taken_name_or_the_limit_blocks_the_form() {
         .map(|i| shader(&format!("s{i}"), Path::new("/cn-none/s.hlsl")))
         .collect();
     let mut h = hook(full);
-    h.open_form(&mut world, "Shader".to_string(), FormTarget::New);
-    type_name(&mut world, "more");
-    assert!(blocked(&h, &world).unwrap().contains("No room"));
-    confirm(&mut h, &mut world);
+    h.open_form("Shader".to_string(), FormTarget::New);
+    name_form(&mut h, "more");
+    assert!(blocked(&h).unwrap().contains("No room"));
+    confirm(&mut h, &world);
     assert_eq!(shader::list::shader_count(&h.entries), MAX_SHADER_BUCKETS);
     assert!(!h.dirty);
 }
@@ -146,20 +146,16 @@ fn a_rename_through_the_form_rewrites_every_reference() {
         material("pond", "water"),
         material("stone", "lit"),
     ]);
-    let mut world = form_world();
+    let world = form_world();
     h.open_shader_file(key("water", ShaderStage::Fragment));
 
-    click(&mut h, &mut world, &RowKind::Header(1));
+    click(&mut h, &world, &RowKind::Header(1));
     assert!(h.form.target.is_edit());
-    assert_eq!(
-        crate::editor::widget::field_text(&world, form_panel::NAME_INPUT),
-        "water",
-        "seeded with the current name"
-    );
-    type_name(&mut world, "lit");
-    assert!(blocked(&h, &world).unwrap().contains("already taken"));
-    type_name(&mut world, "ocean");
-    confirm(&mut h, &mut world);
+    assert_eq!(h.form.name, "water", "seeded with the current name");
+    name_form(&mut h, "lit");
+    assert!(blocked(&h).unwrap().contains("already taken"));
+    name_form(&mut h, "ocean");
+    confirm(&mut h, &world);
     assert_eq!(shader_names(&h), ["lit", "ocean"]);
     assert_eq!(args(&h, "sea")["shader"], "ocean");
     assert_eq!(args(&h, "pond")["shader"], "ocean");
@@ -173,12 +169,12 @@ fn a_rename_through_the_form_rewrites_every_reference() {
         key("ocean", ShaderStage::Fragment)
     );
     assert!(
-        toasts(&h)
+        toasts(&mut h)
             .iter()
             .any(|t| t == "Renamed Shader 'water' to 'ocean' and the 2 references to it")
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(shader_names(&h), ["lit", "water"]);
     assert_eq!(args(&h, "sea")["shader"], "water");
     assert_eq!(
@@ -199,14 +195,14 @@ fn stages_add_and_drop_the_vertex_file() {
         let mut h = hook(vec![shader("lit", &lit)]);
         let mut world = form_world();
 
-        click(&mut h, &mut world, &RowKind::Header(0));
-        assert!(!rows(&h, &world).iter().any(|r| r.caption == "Starters"));
-        press(&mut h, &mut world, "vertex", false);
+        click(&mut h, &world, &RowKind::Header(0));
+        assert!(!rows(&h).iter().any(|r| r.caption == "Starters"));
+        press(&mut h, &world, "vertex", false);
         assert_eq!(
-            detail(&h, &world, "vertex").as_deref(),
+            detail(&h, "vertex").as_deref(),
             Some("assets/shaders/lit_vertex.hlsl")
         );
-        confirm(&mut h, &mut world);
+        confirm(&mut h, &world);
         let declared = args(&h, "lit")["vertex"].as_str().unwrap().to_string();
         assert_eq!(declared, "assets/shaders/lit_vertex.hlsl");
         let path = root.join(&declared);
@@ -218,22 +214,22 @@ fn stages_add_and_drop_the_vertex_file() {
         assert_eq!(h.shaders.source.as_ref().unwrap().key, vertex);
 
         h.shaders.source.as_mut().unwrap().area.type_char('x');
-        click(&mut h, &mut world, &RowKind::Header(0));
-        press(&mut h, &mut world, "vertex", false);
-        confirm(&mut h, &mut world);
+        click(&mut h, &world, &RowKind::Header(0));
+        press(&mut h, &world, "vertex", false);
+        confirm(&mut h, &world);
         assert!(h.modal.is_some(), "asked over the unsaved vertex file");
         press_modal(&mut h, &mut world, "Cancel");
         assert!(args(&h, "lit").get("vertex").is_some(), "Cancel keeps it");
         assert!(h.form_open() && h.shaders.source.is_some());
 
-        confirm(&mut h, &mut world);
+        confirm(&mut h, &world);
         press_modal(&mut h, &mut world, "Discard");
         assert!(args(&h, "lit").get("vertex").is_none());
         assert!(h.shaders.source.is_none());
         assert!(!h.form_open());
         assert!(path.exists(), "the file stays");
 
-        h.undo(&mut world);
+        h.undo();
         assert_eq!(args(&h, "lit")["vertex"], declared.as_str());
     });
 }
@@ -249,18 +245,18 @@ fn used_by_assigns_and_unassigns_in_one_step() {
         material("b", "lit"),
         plain_material("c"),
     ]);
-    let mut world = form_world();
-    click(&mut h, &mut world, &RowKind::Header(1));
-    assert_eq!(detail(&h, &world, "b").as_deref(), Some("names 'lit'"));
+    let world = form_world();
+    click(&mut h, &world, &RowKind::Header(1));
+    assert_eq!(detail(&h, "b").as_deref(), Some("names 'lit'"));
     for m in ["a", "b", "c"] {
-        press(&mut h, &mut world, m, false);
+        press(&mut h, &world, m, false);
     }
-    confirm(&mut h, &mut world);
+    confirm(&mut h, &world);
     assert!(args(&h, "a").get("shader").is_none());
     assert_eq!(args(&h, "b")["shader"], "water");
     assert_eq!(args(&h, "c")["shader"], "water");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(args(&h, "a")["shader"], "water");
     assert_eq!(args(&h, "b")["shader"], "lit");
     assert!(args(&h, "c").get("shader").is_none());
@@ -277,30 +273,30 @@ fn the_world_default_moves_through_the_form() {
         shader("b", Path::new("/cn-none/b.hlsl")),
         shader("c", Path::new("/cn-none/c.hlsl")),
     ]);
-    let mut world = form_world();
-    click(&mut h, &mut world, &RowKind::Header(2));
-    press(&mut h, &mut world, "World default", false);
+    let world = form_world();
+    click(&mut h, &world, &RowKind::Header(2));
+    press(&mut h, &world, "World default", false);
     assert!(
-        rows(&h, &world)
+        rows(&h)
             .iter()
             .any(|r| r.caption == "Materials naming no Shader switch to it")
     );
-    confirm(&mut h, &mut world);
+    confirm(&mut h, &world);
     assert_eq!(shader_names(&h), ["c", "a", "b"]);
     assert!(h.shader_rows()[0].badge.is_some(), "listed as the default");
 
-    click(&mut h, &mut world, &RowKind::Header(0));
-    press(&mut h, &mut world, "World default", false);
+    click(&mut h, &world, &RowKind::Header(0));
+    press(&mut h, &world, "World default", false);
     assert!(
-        rows(&h, &world)
+        rows(&h)
             .iter()
             .any(|r| r.caption == "'a' becomes the world default")
     );
-    confirm(&mut h, &mut world);
+    confirm(&mut h, &world);
     assert_eq!(shader_names(&h), ["a", "c", "b"]);
 
-    h.undo(&mut world);
-    h.undo(&mut world);
+    h.undo();
+    h.undo();
     assert_eq!(shader_names(&h), ["a", "b", "c"]);
 }
 
@@ -309,16 +305,17 @@ fn the_world_default_moves_through_the_form() {
 #[test]
 fn the_form_belongs_to_the_panel_that_opened_it() {
     let mut h = hook(vec![shader("lit", Path::new("/cn-none/lit.hlsl"))]);
-    let mut world = form_world();
-    let edit = crate::editor::panels::registry::panel(PanelKey::Edit);
+    let world = form_world();
+    let edit =
+        |h: &crate::editor::EditorHook| crate::editor::panels::registry::is_open(PanelKey::Edit, h);
     h.open[PanelKey::Shaders] = true;
-    click(&mut h, &mut world, &RowKind::Header(0));
-    assert!(edit.is_open(&h), "shown beside the Shaders panel");
+    click(&mut h, &world, &RowKind::Header(0));
+    assert!(edit(&h), "shown beside the Shaders panel");
     h.open[PanelKey::Shaders] = false;
-    assert!(!edit.is_open(&h));
+    assert!(!edit(&h));
 
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
+    h.open_form("PointLight".to_string(), FormTarget::New);
     assert_eq!(h.form.host, PanelKey::Assets);
     h.open[PanelKey::Assets] = true;
-    assert!(edit.is_open(&h));
+    assert!(edit(&h));
 }

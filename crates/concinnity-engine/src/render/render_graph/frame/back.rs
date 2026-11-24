@@ -9,11 +9,8 @@ use super::{FrontEnd, GBufferHandles, HdrTargets, SceneInputs, SceneVersions};
 use crate::render::render_graph::types::BufferHandle;
 use crate::render::render_graph::{GraphBuilder, PassId, PassKind, ReadStages, TextureHandle};
 
-// Main pass: reads optional shadow_map / spot_shadow_map / far_shadow_map /
-// draw_args / ao_output / cluster lists; writes the three HDR targets.
-// Captures hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
-// AutoExposure reads when two-pass is off) and hdr_depth_v1 (the depth
-// HizEarly reduces under two-pass).
+// Main reads the optional shadows, `draw_args`, `ao_output` and cluster lists,
+// and writes the HDR targets.
 pub(super) fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVersions {
     let mut main = b.add_pass(PassId::Main, PassKind::Render);
     if let Some(h) = front.scene_inputs.shadow {
@@ -103,19 +100,9 @@ pub(super) fn add_late_occlusion(
     (hiz_v1, SceneVersions { resolve, depth })
 }
 
-// hdr_resolve post-Main RMW chain: Raymarch → Decals → Fog →
-// ParticlesDraw, each blend- or opaque-writing on top of the
-// previous version. The handle walks forward through `h` so each
-// write picks up the latest version, giving the compile pass clean
-// WAW edges to derive the chain order. Raymarch slots first so its
-// depth+color write is visible to every later post-decoration
-// pass; AutoExposure's WAR-read on hdr_resolve_head pins it before
-// Raymarch (so SDF brightness doesn't skew exposure for the same
-// frame), matching the doc's chosen one-frame-lag trade-off.
-//
-// Main depth rides the same pattern: Raymarch sphere-traces against it and
-// writes the hit depth back, so it bumps the depth version, and every later
-// decoration samples that version rather than the one Main left.
+// The post-Main `hdr_resolve` chain, Raymarch, Decals, Fog, ParticlesDraw,
+// each writing a new version. AutoExposure's WAR read pins it before Raymarch.
+// Raymarch also bumps the depth version, which later decorations sample.
 pub(super) fn add_decorations(
     b: &mut GraphBuilder,
     inputs: &FrameGraphInputs,
@@ -170,12 +157,8 @@ pub(super) fn add_decorations(
         h = aerial.write_texture(h);
     }
     if inputs.fog_enabled {
-        // FogFroxel (compute) populates the 3D scatter/transmittance
-        // volume the Fog fragment shader samples. The post-write handle
-        // (`froxel_v1`) is what Fog reads: that gives the compile pass
-        // a clean RAW edge so FogFroxel runs before Fog in the toposort.
-        // All three backends implement the froxel path; the Fog render
-        // pass trilinear-samples the volume by (screen_uv, view_z).
+        // FogFroxel fills the volume Fog samples; reading `froxel_v1` orders it
+        // first.
         let froxel_v0 = b.import_texture("fog_froxel_volume", froxel_volume_desc());
         let mut froxel = b.add_pass(PassId::FogFroxel, PassKind::Compute);
         // Each slab does a cascade tap, so the kernel is a second reader of the
@@ -222,11 +205,8 @@ pub(super) fn add_decorations(
     }
 }
 
-// The clouds over the pre-TAA scene the see-through surfaces left, so they
-// stand in front of the sea as well as the ground: the march reads the
-// atmosphere's tables and the depth it stops at, and its target is
-// backend-owned, so the import only orders it ahead of the composite. Returns
-// the pre-TAA scene's next version.
+// The clouds over the pre-TAA scene, after the see-through surfaces so they
+// stand in front of the sea. Returns the scene's next version.
 pub(super) fn add_clouds(
     b: &mut GraphBuilder,
     inputs: &FrameGraphInputs,
@@ -328,25 +308,13 @@ pub(super) fn add_reflections_and_transparent(
         None
     };
 
-    // `scene_pre_taa` is a distinct texture only when a pass writes it:
-    // SsrResolve / RtReflections produce it, and Transparent read-modify-writes
-    // it. With neither resolve the engine binds the pre-TAA scene name straight
-    // to `hdr_resolve`, so declaring it here would put two graph resources on
-    // one GPU object -- each with its own barrier timeline over the same memory.
-    // Threading the upstream handle expresses that binding with one resource.
+    // `scene_pre_taa` is its own texture only when a resolve writes it;
+    // otherwise it is `hdr_resolve`, threaded through as one resource.
     if inputs.rt_reflections_enabled || inputs.ssr_enabled {
         let scene_pre_taa = b.import_texture("scene_pre_taa", scene_color_desc(inputs));
-        // SsrResolve and RtReflections occupy the same slot: both read the
-        // post-decoration hdr_resolve and write scene_pre_taa. Hardware RT
-        // *takes precedence* over SSR: a world can enable both (RT on the
-        // backend / GPU that supports it, SSR as the cross-backend fallback),
-        // and where RT is live the builder picks it and omits SsrResolve. Only
-        // one of the two is ever inserted.
-        // Both resolves trace against the pre-pass view normal + linear depth
-        // and pick their blur radius from its roughness. Declaring those reads
-        // is what keeps the G-buffer's modeled lifetime as long as its real
-        // one: roughness has no other consumer, so without this it would look
-        // dead the moment the pre-pass finished.
+        // RT takes precedence over SSR; only one is inserted. Both read the
+        // pre-pass normal, depth and roughness, which keeps the G-buffer's
+        // modeled lifetime honest.
         let mut current = if inputs.rt_reflections_enabled {
             // The classify and trace kernels read the scene and the G-buffer in
             // compute, the composite after them in its fragment.
@@ -417,6 +385,10 @@ pub(super) fn add_reflections_and_transparent(
             if let Some(h) = water_cascades {
                 trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
             }
+            // The producers haze what they draw by the air in front of it.
+            if let Some(h) = atmosphere_luts {
+                trans.read_texture(h);
+            }
             // RMW the resolve output. The read declares the sample dependency
             // (translucents sample the resolved scene for refraction); the
             // write produces the blended version downstream passes consume.
@@ -447,6 +419,9 @@ pub(super) fn add_reflections_and_transparent(
         if let Some(h) = water_cascades {
             trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
         }
+        if let Some(h) = atmosphere_luts {
+            trans.read_texture(h);
+        }
         trans.read_texture(hdr_resolve_cur);
         *reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
         trans.write_texture(hdr_resolve_cur)
@@ -455,14 +430,9 @@ pub(super) fn add_reflections_and_transparent(
     }
 }
 
-// `scene_color` is the engine-owned output the post-TAA composite stack
-// consumes, and -- with TAA on -- the history slot next frame samples, which
-// is why it stays imported rather than becoming a transient. Declared only
-// when TaaResolve or Upscale writes it, for the same one-object-one-resource
-// reason as above: with neither, the engine binds the name to the latest
-// pre-TAA scene texture. The two writers are mutually exclusive -- the
-// upscaler does its own temporal accumulation, so layering TaaResolve on top
-// would double-temporal the scene.
+// `scene_color` is the post-TAA scene and TAA's history, so it stays imported.
+// Declared only when TaaResolve or Upscale writes it; the two are mutually
+// exclusive.
 pub(super) fn add_temporal(
     b: &mut GraphBuilder,
     inputs: &FrameGraphInputs,

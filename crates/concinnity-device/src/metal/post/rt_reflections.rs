@@ -174,13 +174,9 @@ struct RtScreen<'a> {
 }
 
 impl MtlContext {
-    // Encode the RT-reflection resolve: reset the ray arguments, classify every
-    // trace texel, trace the listed ones, then run the shared roughness-aware
-    // blur + composite into its output. Runs after the main pass in the
-    // SSR-resolve slot; only called when RT reflections are on and the
-    // acceleration structure + pipelines are live. Returns `Ok(0)` (a no-op)
-    // when any required resource is missing: the engine then leaves the base
-    // scene untouched, the same defensive pattern `encode_ssgi` uses.
+    // Encode the RT reflection resolve: reset the ray arguments, classify, trace
+    // the listed texels, then blur and composite. Returns 0 when any resource is
+    // missing.
     pub(in crate::metal) fn encode_rt_reflections(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -346,8 +342,11 @@ impl MtlContext {
             }
         }
         // The TLAS references each BLAS indirectly, so the BLASes are not
-        // auto-tracked: declare them resident or the trace reads garbage.
-        crate::metal::raytrace::use_blas_resident_compute(&enc, accel.traced_blas());
+        // auto-tracked: without the residency set, declare them resident or the
+        // trace reads garbage.
+        if self.rt.blas_residency.is_none() {
+            crate::metal::raytrace::use_blas_resident_compute(&enc, accel.traced_blas());
+        }
         // SAFETY: the argument buffer holds the three group counts the classify
         // grew to cover its list, at offset 0, written before this encoder.
         unsafe {

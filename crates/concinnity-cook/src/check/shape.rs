@@ -100,7 +100,7 @@ fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic
     }
 }
 
-// A Screen's `focus` must reference a TextInput on that same screen: an input
+// A Screen's `focus` must reference a TextField on that same screen: an input
 // on another screen is not even visible while this one is up, so focusing it
 // would send keystrokes off-screen. An unowned (global) input is allowed. No
 // filler. Existence of the focus target is covered by the generic registry-ref
@@ -117,7 +117,7 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic
         };
         let Some(input) = assets
             .iter()
-            .find(|a| a.asset_type == RegisteredType::TextInput && a.id == focus)
+            .find(|a| a.asset_type == RegisteredType::TextField && a.id == focus)
         else {
             continue;
         };
@@ -129,7 +129,7 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic
                 "Screen",
                 &screen.id,
                 format!(
-                    "focus '{focus}' belongs to screen '{owner}'; a screen can only focus its own TextInput"
+                    "focus '{focus}' belongs to screen '{owner}'; a screen can only focus its own TextField"
                 ),
             ));
         }
@@ -346,7 +346,7 @@ mod tests {
         assets.push(asset("menu", RegisteredType::Screen, serde_json::json!({})));
         assets.push(asset(
             "menu_search",
-            RegisteredType::TextInput,
+            RegisteredType::TextField,
             serde_json::json!({"screen": "menu"}),
         ));
         let errs = errors_for(&assets);
@@ -365,7 +365,7 @@ mod tests {
         ));
         assets.push(asset(
             "menu_search",
-            RegisteredType::TextInput,
+            RegisteredType::TextField,
             serde_json::json!({"screen": "menu"}),
         ));
         // A global (unowned) input may be focused from any screen.
@@ -376,7 +376,7 @@ mod tests {
         ));
         assets.push(asset(
             "console_line",
-            RegisteredType::TextInput,
+            RegisteredType::TextField,
             serde_json::json!({}),
         ));
         assert!(errors_for(&assets).is_empty());
@@ -395,7 +395,7 @@ mod tests {
         ));
         assets.push(asset(
             "menu_search",
-            RegisteredType::TextInput,
+            RegisteredType::TextField,
             serde_json::json!({"screen": "pause"}),
         ));
         assert!(errors_for(&assets).is_empty());
@@ -410,7 +410,7 @@ mod tests {
         ));
         assets.push(asset(
             "menu_search",
-            RegisteredType::TextInput,
+            RegisteredType::TextField,
             serde_json::json!({}),
         ));
         assert!(errors_for(&assets).is_empty());

@@ -76,14 +76,9 @@ const DEFAULT_CURSOR_PX: f32 = 22.0;
 // beneath the menu it points at.
 const CURSOR_LAYER: i32 = i32::MAX;
 
-// Build the cursor draw calls (one mesh per visible `follow_cursor` sprite) at
-// the pointer, drawing `shape`'s silhouette (the arrow, or a resize double-arrow
-// over a `cn edit` panel edge). Each sprite's tint is the fill color and its
-// `height` the cursor height; `width` is ignored so the silhouette keeps its
-// aspect ratio. The height is authored in the reference canvas, so it is scaled
-// by the overlay factor for `viewport` to stay proportional with the menu it
-// belongs to; the pointer stays at the live cursor position. Returns empty when
-// no font atlas is loaded (the text pipeline is inactive then).
+// The cursor draw calls at the pointer, one per visible `follow_cursor`
+// sprite, in `shape`'s silhouette. The sprite's height scales with the overlay;
+// width is ignored. Empty without a font atlas.
 #[cfg(test)]
 pub(crate) fn build_cursor_calls(
     sprites: &[Sprite],
@@ -144,6 +139,7 @@ pub(crate) fn build_cursor_calls_into(
             // The cursor is never clipped: it draws on top of everything.
             clip_rect: None,
             layer: CURSOR_LAYER,
+            rank: 0,
         };
         // Outline first so the fill, appended after, composites on top of it
         // (the overlay draws indexed triangles in order, with no depth test).

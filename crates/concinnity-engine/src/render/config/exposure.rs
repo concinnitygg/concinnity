@@ -40,6 +40,9 @@ pub struct Exposure {
     pub ev: f32,
     /// Auto-exposure. Adapts exposure each frame toward a balanced mid-tone;
     /// `ev` then acts as an additive bias in stops on top of the adapted value.
+    /// A view lit only in a small part, such as a planet against space, is
+    /// metered by that part's brightly lit side, so a crescent shows as bright
+    /// as the full disc rather than blown out.
     #[asset(apply = rebuild)]
     pub auto: bool,
     /// Lower bound on the adapted exposure (EV). The `ev` bias is applied

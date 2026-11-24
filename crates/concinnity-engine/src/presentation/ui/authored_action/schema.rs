@@ -66,13 +66,33 @@ pub(super) static ACTION: TypeSchema = TypeSchema {
             FieldType::Enum(&STORY_COMMAND)
         }),
         keyed(
-            "group_toggle",
-            "Expand or collapse a settings-screen group by index. Emitted by generated settings menus.",
-            || FieldType::Integer,
+            "set",
+            "Set the value a binding (`setting:`, `var:`, or `state:`) names: `{\"binding\": \"state:mode\", \"value\": 2}`.",
+            || FieldType::Object,
+        ),
+        keyed(
+            "flip",
+            "Turn the boolean a binding (`setting:`, `var:`, or `state:`) names over.",
+            || FieldType::Str,
+        ),
+        keyed(
+            "add",
+            "Add to the number a binding (`setting:`, `var:`, or `state:`) names: `{\"binding\": \"var:score\", \"by\": 1}`.",
+            || FieldType::Object,
+        ),
+        keyed(
+            "step",
+            "Step the setting or whole number a binding (`setting:`, `var:`, or `state:`) names: `{\"binding\": \"setting:vsync\", \"by\": -1}`.",
+            || FieldType::Object,
+        ),
+        keyed(
+            "emit",
+            "Tell the app's own systems, which read it as a `UiEvent`: a name, `\"save\"`, or a name and a value, `{\"name\": \"pick\", \"value\": 3}`.",
+            || FieldType::Str,
         ),
         keyed(
             "setting",
-            "Operate a settings row: `{\"key\": \"<setting>\", \"verb\": \"<verb>\"}`. Emitted by generated settings menus.",
+            "Capture a key or button for a rebind setting, or open a setting's dropdown list: `{\"key\": \"<setting>\", \"verb\": \"rebind\"}` or `\"open\"`.",
             || FieldType::Object,
         ),
     ]),

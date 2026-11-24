@@ -1,12 +1,6 @@
-// Turning a world's `Variables` and `Behavior` columns into what the system
-// runs: the variable table and one compiled program per behavior.
-//
-// This happens at init and again whenever a write moves either column, so an
-// authoring tool holding a live world can rewrite a body in place instead of
-// reloading the world to apply it. A reseed keeps what the edit left
-// meaningful: a variable whose declaration is untouched keeps the value the
-// run put in it, and a behavior whose definition is unchanged keeps its
-// instances, their locals, and their clocks.
+// Turning a world's `Variables` and `Behavior` columns into the variable table
+// and compiled programs, at init and whenever either column changes. Unchanged
+// variables keep their values and unchanged behaviors their instances.
 
 use alloc::vec::Vec;
 

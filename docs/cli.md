@@ -10,10 +10,11 @@
 
 ## `concinnity init`
 
-Create a new app in the current directory
+Create a new application in the current directory
 
-Writes a starter world to `world.jsonl` and cooks it. A directory that
-already holds a world is left alone.
+Writes a starter application to `app.jsonl`, named after the directory,
+and cooks it. A directory that already holds an application is left
+alone.
 
 ```sh
 concinnity init
@@ -23,10 +24,11 @@ Usage: `concinnity init [OPTIONS]`
 
 ## `concinnity new`
 
-Create a new app in a new directory
+Create a new application in a new directory
 
-Creates the directory, writes a starter world to `world.jsonl` in it and
-cooks it. A directory that already holds a world is refused.
+Creates the directory, writes a starter application to `app.jsonl` in
+it, named after the directory, and cooks it. A directory that already
+holds an application is refused.
 
 ```sh
 concinnity new my-app
@@ -38,25 +40,32 @@ Usage: `concinnity new [OPTIONS] <PATH>`
 
 ## `concinnity cook`
 
-Cook an app into binary blobs
+Cook assets into binary blobs
 
-Compiles the world into the blobs a run loads and writes
-`world-lock.json`, showing each step as it runs and the warnings the
-build raises.
+Compiles the application, or the file `-f` names, into the blobs a run
+loads and writes `cook-lock.json`, showing each step as it runs and the
+warnings the build raises.
 
 ```sh
 concinnity cook
+concinnity cook --app Arena
 concinnity cook -f arena.jsonl --verbose
 ```
 
 Usage: `concinnity cook [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `-v, --verbose`: Also show the cook's informational messages, such as each imported mesh.
 
 ## `concinnity check`
 
-Validate an app without cooking it
+Validate assets without cooking them
+
+Without `-f`, checks every `.jsonl` file under the current directory,
+each on its own, skipping hidden files and directories such as `.git`.
+A fragment that relies on what its includer declares fails on its own;
+check the file that includes it with `-f` instead.
 
 ```sh
 concinnity check
@@ -65,27 +74,29 @@ concinnity check -f arena.jsonl
 
 Usage: `concinnity check [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to every `.jsonl` file under the current directory.
 
 ## `concinnity run`
 
-Run an app
+Run an application
 
-Without `-f`, cooks the discovered world and runs the blobs it writes,
-or runs the cooked blobs already in place when there is no world to
-discover. With `-f`, cooks the named world in memory and reloads it as
-its files change. `--debug-port` serves the debug protocol (MCP) either
-way.
+Without `-f`, cooks the application and runs the blobs it writes, or
+runs the cooked blobs already in place when there is no application. A
+project with several applications picks one with `--app`. With `-f`,
+cooks the named file in memory and reloads it as its files change.
+`--debug-port` serves the debug protocol (MCP) either way.
 
 ```sh
 concinnity run
+concinnity run --app Arena
 concinnity run -f arena.jsonl --debug-port
 concinnity run --graphics-api vulkan --graphics-quality high --no-vsync
 ```
 
 Usage: `concinnity run [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `--graphics-quality <PRESET>`: Force the graphics-quality preset for this run. One of `auto`, `low`, `medium`, `high`, `ultra`, `custom`.
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
@@ -112,10 +123,10 @@ Usage: `concinnity run [OPTIONS]`
 
 ## `concinnity bench`
 
-Benchmark an app and print what its frames cost
+Benchmark an application and print what its frames cost
 
-Finds its world the way `run` does, and prints the frame costs when the
-run ends.
+Finds its application the way `run` does, and prints the frame costs
+when the run ends.
 
 ```sh
 concinnity bench
@@ -124,7 +135,8 @@ concinnity bench --start-at 10 --stop-at 40 --screenshot-at 20:mid.png
 
 Usage: `concinnity bench [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `--graphics-quality <PRESET>`: Force the graphics-quality preset for this run. One of `auto`, `low`, `medium`, `high`, `ultra`, `custom`.
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
@@ -154,11 +166,12 @@ Usage: `concinnity bench [OPTIONS]`
 
 ## `concinnity edit`
 
-Edit an app in-engine with a save-back HUD
+Edit an application in-engine with a save-back HUD
 
-Cooks the world in memory, so it needs no `concinnity cook` first and
+Cooks the file in memory, so it needs no `concinnity cook` first and
 neither reads nor refreshes the cooked blobs. The editor HUD saves edits
-back to the world file and adds assets. `--debug-port` serves the same
+back to the file and adds assets. Without `-f` or `--app`, it opens on a
+listing of the project's files. `--debug-port` serves the same
 debug protocol `run` does, so an MCP client can drive the editor.
 
 ```sh
@@ -168,7 +181,8 @@ concinnity edit -f arena.jsonl --debug-port 8777
 
 Usage: `concinnity edit [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `--graphics-quality <PRESET>`: Force the graphics-quality preset for this run. One of `auto`, `low`, `medium`, `high`, `ultra`, `custom`.
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
@@ -195,7 +209,10 @@ Usage: `concinnity edit [OPTIONS]`
 
 ## `concinnity add`
 
-Add assets to the active app
+Add assets to a file
+
+Adds to the file `-f` names, else to the application. With no
+application, starts one in `app.jsonl`.
 
 Each TARGET is one of:
 
@@ -205,7 +222,7 @@ Each TARGET is one of:
   registered default args.
 - A whole entry, such as `'["Window", {}]'`.
 
-Only the world file changes; `run` and `cook` compile it. Every target
+Only the file changes; `run` and `cook` compile it. Every target
 resolves before the file is written, so one bad target adds nothing.
 
 ```sh
@@ -213,29 +230,34 @@ concinnity add models/scene.glb sky.hdr
 concinnity add models/scene.glb --template minimal-3d-world
 concinnity add PointLight --id lamp
 concinnity add '["Window", {}]'
+concinnity add PointLight --id lamp -f props/lights.jsonl
 ```
 
 Usage: `concinnity add [OPTIONS] <TARGET>...`
 
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `<TARGET>`: Paths to asset files, type names, or entries like '["Window", {}]'.
-- `-i, --id <ID>`: The `$id` written into the world, for a single TARGET. Without one, a file target's id comes from its file name, and a type name or an entry without one is added anonymous.
-- `-t, --template <TEMPLATE>`: Named scaffold preset used when bootstrapping a new world. `minimal-3d-world` adds a camera, sun, room and sky to the base scaffold. Ignored when the world already exists.
+- `-i, --id <ID>`: The `$id` written into the file, for a single TARGET. Without one, a file target's id comes from its file name, and a type name or an entry without one is added anonymous.
+- `-t, --template <TEMPLATE>`: Named scaffold preset used when a scene starts a new file. `minimal-3d-world` adds a camera, sun, room and sky to the base scaffold. Ignored when the file already renders.
 
 ## `concinnity rm`
 
-Remove an asset from the active app by its id
+Remove an asset from a file by its id
 
-ID is the `$id` an entry declares in its args, or the `<Type>#<ordinal>`
-handle of an anonymous one. Only the world file changes; `run` and
-`cook` compile it.
+Removes from the file `-f` names, else from the application. ID is the
+`$id` an entry declares in its args, or the `<Type>#<ordinal>` handle of
+an anonymous one. Only the file changes; `run` and `cook` compile it.
 
 ```sh
 concinnity rm lamp
-concinnity rm 'Prop#3'
+concinnity rm 'Prop#3' -f props/outdoor.jsonl
 ```
 
 Usage: `concinnity rm [OPTIONS] <ID>`
 
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `<ID>`: The asset's `$id`, or the `<Type>#<ordinal>` of an anonymous one.
 
 ## `concinnity list`
@@ -249,17 +271,18 @@ concinnity list --expanded --systems
 
 Usage: `concinnity list [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
-- `--expanded`: List the expanded world the cook produces. Cook-time macros are expanded and injected defaults included, each row tagged with where it came from: authored, injected or expanded.
-- `--systems`: List the systems this world runs, in order, each with the condition that includes it.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
+- `--expanded`: List the expanded assets the cook produces. Cook-time macros are expanded and injected defaults included, each row tagged with where it came from: authored, injected or expanded.
+- `--systems`: List the systems these assets run, in order, each with the condition that includes it.
 
 ## `concinnity explain`
 
-Print an asset's effective entry from the expanded app
+Print an asset's effective entry from the expanded assets
 
-Prints the whole world line for ID as the cook sees it, including assets
-that only exist through cook-time expansion or injection. The line can
-be pasted into the world file as it stands to override a default.
+Prints the whole line for ID as the cook sees it, including assets that
+only exist through cook-time expansion or injection. The line can be
+pasted into the file as it stands to override a default.
 
 ```sh
 concinnity explain lamp
@@ -269,7 +292,8 @@ concinnity explain 'Window#0' -f arena.jsonl
 Usage: `concinnity explain [OPTIONS] <ID>`
 
 - `<ID>`: The asset's `$id`, or the `<Type>#<ordinal>` of an anonymous one.
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 
 ## `concinnity docs`
 
@@ -290,16 +314,20 @@ Usage: `concinnity docs [OPTIONS]`
 
 ## `concinnity export`
 
-Package a cooked app for distribution
+Package an application for distribution
+
+Cooks the application and bundles it with the player. A project with
+several applications exports one at a time, picked with `--app`.
 
 ```sh
 concinnity export
-concinnity export --name "My App" --version 1.2.0 --format dir --out build
+concinnity export --app Arena --version 1.2.0 --format dir --out build
 ```
 
 Usage: `concinnity export [OPTIONS]`
 
-- `-f, --file <FILE>`: Path to a world JSONL file. Defaults to the nearest `world.jsonl` up from the current directory.
+- `-f, --file <FILE>`: Path to a .jsonl file. Defaults to the application: the .jsonl file under the current directory that declares an `AppConfig`.
+- `--app <NAME>`: The application to use when there are several, by its `AppConfig` name.
 - `-n, --name <NAME>`: Override the application name.
 - `--version <VERSION>`: Override the application version.
 - `--platform <PLATFORM>`: Target platform, which must be this machine's (`macos`, `windows` or `linux`).

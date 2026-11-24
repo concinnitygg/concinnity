@@ -27,7 +27,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     };
     let container = container_attrs(&input.attrs)?;
     let section = asset_attrs(&input.attrs)?;
-    if section.owned_file || section.default.is_some() || section.is_param() {
+    if section.file || section.owned_file || section.default.is_some() || section.is_param() {
         return Err(syn::Error::new_spanned(
             &input.ident,
             "a struct's `#[asset(...)]` states only `section`",
@@ -74,6 +74,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         let ty = &field.ty;
         let asset = asset_attrs(&field.attrs)?;
         let owned = asset.owned_file;
+        let file = asset.file || owned;
         if asset.section {
             if asset.is_param() || key.is_empty() {
                 return Err(syn::Error::new_spanned(
@@ -91,10 +92,10 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                 out.extend(nested);
             });
         }
-        if owned && key.is_empty() {
+        if file && key.is_empty() {
             return Err(syn::Error::new_spanned(
                 field,
-                "a flattened field cannot be an owned file",
+                "a flattened field cannot be a file",
             ));
         }
         if asset.is_param() {
@@ -153,6 +154,11 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             (&&&&::concinnity_engine::ecs::asset_fields::probe::Probe::<#ty>::NEW)
                 .collect(prefix, #key, out);
         });
+        if file {
+            probes.push(quote! {
+                ::concinnity_engine::ecs::asset_fields::probe::file(prefix, #key, out);
+            });
+        }
         if owned {
             probes.push(quote! {
                 ::concinnity_engine::ecs::asset_fields::probe::owned_file(prefix, #key, out);
@@ -305,6 +311,11 @@ mod tests {
             }
         });
         assert_eq!(out.matches("probe :: owned_file").count(), 1, "{out}");
+        assert_eq!(
+            out.matches("probe :: file").count(),
+            1,
+            "an owned file is a file too: {out}"
+        );
         assert!(
             out.contains("owned_file (prefix , :: core :: option :: Option :: Some (\"src\")"),
             "{out}"
@@ -312,9 +323,25 @@ mod tests {
     }
 
     #[test]
-    fn a_flattened_owned_file_and_an_unknown_asset_attribute_are_refused() {
+    fn a_file_is_recorded_under_its_key() {
+        let out = expanded(&syn::parse_quote! {
+            struct S {
+                #[asset(file)]
+                icon: String,
+            }
+        });
+        assert!(
+            out.contains("file (prefix , :: core :: option :: Option :: Some (\"icon\")"),
+            "{out}"
+        );
+        assert!(!out.contains("probe :: owned_file"), "{out}");
+    }
+
+    #[test]
+    fn a_flattened_file_and_an_unknown_asset_attribute_are_refused() {
         for input in [
             syn::parse_quote! { struct S { #[asset(owned_file)] #[serde(flatten)] x: Inner } },
+            syn::parse_quote! { struct S { #[asset(file)] #[serde(flatten)] x: Inner } },
             syn::parse_quote! { struct S { #[asset(shared)] x: String } },
         ] {
             assert!(expand(&input).is_err());

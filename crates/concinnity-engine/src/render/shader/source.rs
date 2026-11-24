@@ -99,6 +99,12 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // particle pass carries it too.
     ("{REACTIVE_MASK}", "reactive_mask.hlsl"),
     ("{TRANSPARENT_SCENE}", "transparent_scene.hlsl"),
+    // The air's fragments trail TRANSPARENT_SCENE, which carries their markers
+    // to haze what the transparent producers draw; AIR_HAZE trails
+    // ATMOSPHERE_COMMON, whose functions it reads.
+    ("{ATMOSPHERE_TYPES}", "atmosphere_types.hlsl"),
+    ("{ATMOSPHERE_COMMON}", "atmosphere_common.hlsl"),
+    ("{AIR_HAZE}", "air_haze.hlsl"),
     ("{TRANSPARENT_RT}", "transparent_rt.hlsl"),
     // CLUSTER_TYPES trails MAIN_TYPES and TRANSPARENT_TYPES, which carry its
     // marker: the forward and transparent passes both read the cluster grid.
@@ -142,8 +148,6 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // RAYMARCH_COMMON), so no marker is left unreplaced.
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     ("{SKY_RAY}", "sky_ray.hlsl"),
-    ("{ATMOSPHERE_TYPES}", "atmosphere_types.hlsl"),
-    ("{ATMOSPHERE_COMMON}", "atmosphere_common.hlsl"),
     ("{NIGHT_SKY}", "night_sky.hlsl"),
     ("{WIND}", "wind.hlsl"),
     ("{HIZ_TEST}", "hiz_test.hlsl"),

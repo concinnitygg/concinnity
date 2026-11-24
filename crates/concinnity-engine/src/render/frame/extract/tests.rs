@@ -44,6 +44,7 @@ fn a_capture_without_the_hud_hides_the_overlay_on_its_frame() {
         atlas_slot: 0,
         clip_rect: None,
         layer: 0,
+        rank: 0,
     };
     let overlay = |world: &mut World| {
         world.insert_resource(OverlayFrame {

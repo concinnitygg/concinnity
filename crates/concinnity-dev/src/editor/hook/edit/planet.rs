@@ -14,7 +14,8 @@ use crate::editor::panels::planet::panel::{PlanetAction, PlanetView};
 use crate::editor::panels::planet::tool_strip::StripView;
 use crate::editor::panels::planet::{self, Button, List, Row, RowKind};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::planet_tools::Tool;
+use crate::editor::ui::BuiltPanel;
 
 // The open water a new sea's wind blows across, in meters.
 const SEA_FETCH_METERS: f64 = 50_000.0;
@@ -41,23 +42,62 @@ impl EditorHook {
         rows
     }
 
-    // The tool strip's height.
-    pub(in crate::editor::hook) fn planet_strip(&self) -> f32 {
-        planet::tool_strip::height(&self.planet_tool.tools)
+    // Bring what the panel shows up to date with the entries, and build its
+    // rows again when what they lay out changed.
+    pub(in crate::editor::hook) fn prepare_planet(
+        &mut self,
+        world: &mut World,
+        built: &mut BuiltPanel,
+    ) {
+        let revision = self.entries.revision();
+        if self
+            .planet
+            .view
+            .as_ref()
+            .is_none_or(|(r, _)| *r != revision)
+        {
+            self.planet.view = Some((revision, self.planet_rows()));
+        }
+        // Texts that no longer match the rows, such as none at all in a fresh
+        // world, are seeded from the planet.
+        if self
+            .planet
+            .view
+            .as_ref()
+            .is_some_and(|(_, rows)| rows.len() != self.planet.texts.len())
+        {
+            self.seed_planet();
+        }
+        let tool = self.planet_tool.tools.active;
+        let pick = tool
+            .and_then(Tool::list)
+            .map_or(0, |l| self.planet_tool.tools.pick(l));
+        if self
+            .planet
+            .pick
+            .as_ref()
+            .is_none_or(|(r, t, p, _)| (*r, *t, *p) != (revision, tool, pick))
+        {
+            self.planet.pick = Some((revision, tool, pick, self.planet_pick_label()));
+        }
+        let Some((_, rows)) = &self.planet.view else {
+            return;
+        };
+        if self
+            .planet
+            .shown
+            .as_ref()
+            .is_none_or(|ids| !ids.lays_out(rows))
+        {
+            self.planet.shown = Some(planet::panel::build_rows(world, built, rows));
+        }
     }
 
-    pub(in crate::editor::hook) fn make_planet_view<'a>(
-        &'a self,
-        rows: &'a [Row],
-        pick: &'a str,
-        mouse: [f32; 2],
-    ) -> PlanetView<'a> {
-        PlanetView {
+    pub(in crate::editor::hook) fn make_planet_view(&self) -> Option<PlanetView<'_>> {
+        let (_, rows) = self.planet.view.as_ref()?;
+        Some(PlanetView {
             rows,
-            scroll: self
-                .planet
-                .scroll
-                .min(planet::panel::max_scroll(rows.len())),
+            texts: &self.planet.texts,
             // Focus only while frontmost, so the inputs never fight another
             // panel's focused field for typed keys.
             focus: self
@@ -66,50 +106,60 @@ impl EditorHook {
                 .filter(|_| self.panel_order.last() == Some(&PanelKey::Planet)),
             status: self.planet.status.as_deref(),
             dirty: self.planet.touched,
-            mouse,
             strip: StripView {
                 tools: &self.planet_tool.tools,
-                pick,
-                sliding: self.planet_tool.sliding,
-                mouse,
+                pick: self.planet.pick.as_ref().map_or("", |p| p.3.as_str()),
             },
+        })
+    }
+
+    // Take in what was typed into the panel and the box holding the keyboard.
+    pub(in crate::editor::hook) fn observe_planet(&mut self, world: &World) {
+        let Some(ids) = &self.planet.shown else {
+            return;
+        };
+        let focus = planet::panel::observe(world, ids, &mut self.planet.texts);
+        let shown = self.make_planet_view().and_then(|v| v.focus);
+        if focus != shown {
+            self.planet.focus = focus;
         }
     }
 
     // Seed every number box from the planet as committed: on open, after a
     // structural edit and after Apply. Not on every entry change, so a
     // half-typed edit is never clobbered.
-    pub(in crate::editor::hook) fn seed_planet(&mut self, world: &mut World) {
+    pub(in crate::editor::hook) fn seed_planet(&mut self) {
         self.planet.touched = false;
-        for (r, row) in self.planet_rows().iter().enumerate() {
-            if let Some(f) = row.field()
-                && f.kind.has_text_input()
-            {
-                widget::seed_field(world, planet::panel::input(r), &f.initial);
-            }
-        }
+        self.planet.texts = self
+            .planet_rows()
+            .iter()
+            .map(|row| {
+                row.field()
+                    .filter(|f| f.kind.has_text_field())
+                    .map(|f| f.initial.clone())
+                    .unwrap_or_default()
+            })
+            .collect();
     }
 
-    pub(in crate::editor::hook) fn scroll_planet(&mut self, delta: f32) {
-        let max = planet::panel::max_scroll(self.planet_rows().len());
-        let cur = self.planet.scroll.min(max);
-        self.planet.scroll = super::super::scroll_step(cur, delta, max);
-    }
-
-    pub(in crate::editor::hook) fn apply_planet_action(
-        &mut self,
-        action: PlanetAction,
-        world: &mut World,
-    ) {
+    pub(in crate::editor::hook) fn apply_planet_action(&mut self, action: PlanetAction) {
         match action {
-            PlanetAction::Focus(r) => self.planet.focus = Some(r),
             PlanetAction::CycleRef(r) => self.cycle_planet_ref(r),
-            PlanetAction::Button(b) => self.press_planet_button(b, world),
-            PlanetAction::AddPlanet => self.add_planet(world),
-            PlanetAction::AddSea => self.add_planet_sea(world),
-            PlanetAction::Apply => self.apply_planet(world),
+            PlanetAction::RowButton { row, slot } => {
+                let button = self
+                    .planet
+                    .view
+                    .as_ref()
+                    .and_then(|(_, rows)| rows.get(row))
+                    .and_then(|r| r.buttons.get(slot).copied().flatten());
+                if let Some(b) = button {
+                    self.press_planet_button(b);
+                }
+            }
+            PlanetAction::AddPlanet => self.add_planet(),
+            PlanetAction::AddSea => self.add_planet_sea(),
+            PlanetAction::Apply => self.apply_planet(),
             PlanetAction::Strip(a) => self.apply_strip_action(a),
-            PlanetAction::Consume => self.planet.focus = None,
         }
     }
 
@@ -139,16 +189,13 @@ impl EditorHook {
     }
 
     // Write every number box into the planet together.
-    pub(in crate::editor::hook) fn apply_planet(&mut self, world: &mut World) {
+    pub(in crate::editor::hook) fn apply_planet(&mut self) {
         let Some(args) = self.planet_args() else {
             return;
         };
         let rows = planet::rows(Some(&args));
-        let texts: Vec<String> = (0..rows.len())
-            .map(|r| widget::field_text(world, planet::panel::input(r)))
-            .collect();
-        if self.commit_planet(&planet::assemble(&args, &rows, &texts)) {
-            self.seed_planet(world);
+        if self.commit_planet(&planet::assemble(&args, &rows, &self.planet.texts)) {
+            self.seed_planet();
         }
     }
 
@@ -167,7 +214,7 @@ impl EditorHook {
         }
     }
 
-    fn press_planet_button(&mut self, button: Button, world: &mut World) {
+    fn press_planet_button(&mut self, button: Button) {
         let grass = match button {
             Button::Add(List::Layers) => Some(self.first_or_new("Grass", &json!({}))),
             _ => None,
@@ -178,7 +225,7 @@ impl EditorHook {
         if let Some(next) = planet::press(&args, button, grass.as_deref())
             && self.commit_planet(&next)
         {
-            self.seed_planet(world);
+            self.seed_planet();
         }
     }
 
@@ -203,23 +250,23 @@ impl EditorHook {
         name
     }
 
-    fn add_planet(&mut self, world: &mut World) {
+    fn add_planet(&mut self) {
         if self.entry_index_of(planet::TY).is_some() {
             return;
         }
         self.entries.push(json!({"type": planet::TY, "args": {}}));
         self.mark_changed();
-        self.seed_planet(world);
+        self.seed_planet();
     }
 
     // Give the planet a sea of its own new water.
-    fn add_planet_sea(&mut self, world: &mut World) {
+    fn add_planet_sea(&mut self) {
         let Some(args) = self.planet_args() else {
             return;
         };
         let water = self.add_named("WaterSurface", &json!({"fetch_meters": SEA_FETCH_METERS}));
         if self.commit_planet(&planet::with_sea(&args, &water)) {
-            self.seed_planet(world);
+            self.seed_planet();
         } else if let Some(i) = self
             .entries
             .iter()

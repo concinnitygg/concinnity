@@ -42,7 +42,7 @@ fn ctx() -> BuildCtx<'static> {
             concinnity_core::platform::Platform::Metal,
         ),
         name: "test",
-        assets_dir: None,
+        root: None,
         all_assets: &[],
     }
 }
@@ -372,7 +372,7 @@ fn compile_entry_voxel_chunk_resolves_palette_from_ctx() {
             concinnity_core::platform::Platform::Metal,
         ),
         name: "chunk",
-        assets_dir: None,
+        root: None,
         all_assets: &blocks,
     };
     let args = serde_json::json!({

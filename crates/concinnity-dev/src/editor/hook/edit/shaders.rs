@@ -9,10 +9,12 @@
 //! and `sdf_edits.rs`.
 
 use concinnity_engine::ecs::World;
+use std::path::Path;
 
 use super::shaders_state::RowsKey;
 use crate::debug::hot_reload::ReloadReports;
 use crate::editor::asset_handle::AssetHandle;
+use crate::editor::entry_list::Origin;
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::sdf;
@@ -29,30 +31,44 @@ impl EditorHook {
         self.shaders.reports.clone()
     }
 
-    // Every Shader the working entries declare, each file resolved once it
-    // exists and kept (`ShadersState::resolved`).
+    // Every Shader the working entries declare, each file resolved under the
+    // root of the file declaring it.
     pub(in crate::editor::hook) fn declared_shaders(&mut self) -> Vec<ShaderDecl> {
-        let dir = crate::project::assets_dir();
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        let entries = &self.entries;
         let state = &mut self.shaders;
-        shader::list::declared(&self.entries, |declared| {
-            state.resolved(declared, dir.as_deref())
+        shader::list::declared(entries, |i, declared| {
+            let root = state.root_for(entries, entries.included_from(i), origin);
+            shader::source::resolve_path(declared, Some(&root))
         })
     }
 
     // Every distance field the working entries' SdfVolumes read, each file
-    // resolved once it exists and kept (`ShadersState::resolved_field`).
+    // resolved under the root of the file declaring it.
     pub(in crate::editor::hook) fn declared_fields(&mut self) -> Vec<FieldDecl> {
-        let dir = crate::project::assets_dir();
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        let entries = &self.entries;
         let state = &mut self.shaders;
-        sdf::field_list::declared_fields(&self.entries, |declared| {
-            state.resolved_field(declared, dir.as_deref())
+        sdf::field_list::declared_fields(entries, |i, declared| {
+            let root = state.root_for(entries, entries.included_from(i), origin);
+            shader::source::resolve_path(declared, Some(&root))
         })
     }
 
-    // A declared field path's on-disk path.
+    // A field path the world file declares, on disk.
     pub(in crate::editor::hook) fn resolved_field(&mut self, declared: &str) -> String {
-        let dir = crate::project::assets_dir();
-        self.shaders.resolved_field(declared, dir.as_deref())
+        let origin = Origin {
+            world: Path::new(self.entries_from.as_deref().unwrap_or(&self.world_path)),
+            root: &self.content_root,
+        };
+        let root = self.shaders.root_for(&self.entries, None, origin);
+        shader::source::resolve_path(declared, Some(&root))
     }
 
     // The list's rows, rebuilt only when the declared Shaders or fields, the
@@ -67,6 +83,15 @@ impl EditorHook {
         };
         let state = &mut self.shaders;
         if state.rows_key.as_ref() != Some(&key) {
+            // A row stands for a Shader or field by its place among them, so an
+            // open menu could act on another one once they change.
+            let renumbered = state
+                .rows_key
+                .as_ref()
+                .is_some_and(|k| k.shaders != key.shaders || k.fields != key.fields);
+            if renumbered {
+                state.menu = None;
+            }
             state.rows = shader::list::rows(
                 &key.shaders,
                 &key.fields,
@@ -74,78 +99,79 @@ impl EditorHook {
                 key.open.as_ref(),
             );
             state.rows_key = Some(key);
+            state.rows_rev += 1;
         }
         &state.rows
     }
 
-    pub(in crate::editor::hook) fn make_shaders_view<'a>(
-        &self,
-        rows: &'a [Row],
-        mouse: [f32; 2],
-    ) -> ShadersView<'a> {
+    pub(in crate::editor::hook) fn make_shaders_view(&self) -> ShadersView<'_> {
+        let rows = &self.shaders.rows;
         let menu = self.shaders.menu.as_ref();
         ShadersView {
             rows,
-            scroll: self.shaders.scroll,
-            mouse,
+            rows_rev: self.shaders.rows_rev,
             menu: menu.and_then(|kind| rows.iter().position(|r| &r.kind == kind)),
         }
     }
 
-    pub(in crate::editor::hook) fn scroll_shaders(&mut self, delta: f32) {
-        let window = shader::list_panel::rows_for_height(self.effective_size(PanelKey::Shaders)[1]);
-        let max = self.shaders.rows.len().saturating_sub(window);
-        self.shaders.scroll = crate::editor::hook::scroll_step(self.shaders.scroll, delta, max);
-        self.shaders.menu = None;
+    // A press off the open context menu, or Escape, closed it.
+    pub(in crate::editor::hook) fn observe_shaders(&mut self, world: &World) {
+        if self.shaders.menu.is_some() && !shader::list_panel::menu_open(world) {
+            self.shaders.menu = None;
+        }
     }
 
-    // Route a resolved Shaders-panel click on `rows`.
+    // Act on what the user asked of the list.
     pub(in crate::editor::hook) fn apply_shaders_action(
         &mut self,
         action: ShadersAction,
-        rows: &[Row],
-        world: &mut World,
+        world: &World,
     ) {
+        let rows = self.shader_rows().to_vec();
         let i = match action {
             ShadersAction::Row(i) => i,
-            ShadersAction::OpenMenu(i) => {
-                self.shaders.menu = rows.get(i).map(|r| r.kind.clone());
+            ShadersAction::Context(i) => {
+                self.shaders.menu = rows
+                    .get(i)
+                    .filter(|r| !r.menu().is_empty())
+                    .map(|r| r.kind.clone());
                 return;
             }
-            ShadersAction::Menu(item) => {
+            ShadersAction::Menu(k) => {
                 if let Some(kind) = self.shaders.menu.take() {
-                    self.apply_menu_item(item, kind, world);
+                    let item = rows
+                        .iter()
+                        .find(|r| r.kind == kind)
+                        .and_then(|r| r.menu().get(k).copied());
+                    if let Some(item) = item {
+                        self.apply_menu_item(item, kind);
+                    }
                 }
                 return;
             }
-            ShadersAction::CloseMenu => {
-                self.shaders.menu = None;
-                return;
-            }
-            ShadersAction::Consume => return,
         };
-        match rows.get(i).map(|r| &r.kind) {
+        match rows.get(i).filter(|r| r.clickable()).map(|r| &r.kind) {
             Some(RowKind::File(key)) => self.open_shader_file(key.clone()),
-            Some(&RowKind::Materials(shader)) => self.select_shader_materials(shader, world),
+            Some(&RowKind::Materials(shader)) => self.select_shader_materials(shader),
             Some(&RowKind::AddVertex(shader)) => self.add_vertex_file(shader),
             Some(RowKind::New) => self.open_new_form(world),
-            Some(&RowKind::Header(shader)) => self.open_shader_form(Some(shader), world),
+            Some(&RowKind::Header(shader)) => self.open_shader_form(Some(shader)),
             Some(&RowKind::Field(field)) => self.open_field(field),
-            Some(RowKind::FieldVolume(name)) => self.open_volume_form(&name.clone(), world),
+            Some(RowKind::FieldVolume(name)) => self.open_volume_form(&name.clone()),
             Some(RowKind::Note | RowKind::Section) | None => {}
         }
     }
 
-    fn apply_menu_item(&mut self, item: MenuItem, kind: RowKind, world: &mut World) {
+    fn apply_menu_item(&mut self, item: MenuItem, kind: RowKind) {
         match (item, kind) {
-            (MenuItem::Edit, RowKind::Header(i)) => self.open_shader_form(Some(i), world),
+            (MenuItem::Edit, RowKind::Header(i)) => self.open_shader_form(Some(i)),
             (MenuItem::Duplicate, RowKind::Header(i)) => self.duplicate_shader(i),
             (MenuItem::Delete, RowKind::Header(i)) => self.confirm_delete_shader(i),
             (MenuItem::RemoveVertex, RowKind::File(SourceKey::Shader { name, .. })) => {
                 self.remove_vertex_file(&name);
             }
             (MenuItem::Open, RowKind::Field(i)) => self.open_field(i),
-            (MenuItem::SelectVolumes, RowKind::Field(i)) => self.select_field_volumes(i, world),
+            (MenuItem::SelectVolumes, RowKind::Field(i)) => self.select_field_volumes(i),
             (MenuItem::Delete, RowKind::Field(i)) => self.confirm_delete_field(i),
             _ => {}
         }
@@ -153,13 +179,13 @@ impl EditorHook {
 
     // "+ New Shader": the Shader form, or at the Shader limit the form for a
     // volume with a new field, the one kind still open.
-    fn open_new_form(&mut self, world: &mut World) {
+    fn open_new_form(&mut self, world: &World) {
         let shaders = shader::list::shader_count(&self.entries);
         if shader::list::can_add_shader(shaders) {
-            self.open_shader_form(None, world);
+            self.open_shader_form(None);
             return;
         }
-        self.open_form(world, SDF_VOLUME.to_string(), FormTarget::New);
+        self.open_form(SDF_VOLUME.to_string(), FormTarget::New);
         self.form.host = PanelKey::Shaders;
         self.place_form_at_view(world);
     }
@@ -173,17 +199,17 @@ impl EditorHook {
 
     // Open the form of the volume named `name`. It shows while this panel
     // does.
-    fn open_volume_form(&mut self, name: &str, world: &mut World) {
+    fn open_volume_form(&mut self, name: &str) {
         let found = concinnity_cook::authoring::world::find_entry(&self.entries, name);
         let Some(key) = found.and_then(|idx| self.entries.key_at(idx)) else {
             return;
         };
-        self.open_form(world, SDF_VOLUME.to_string(), FormTarget::Entry(key));
+        self.open_form(SDF_VOLUME.to_string(), FormTarget::Entry(key));
         self.form.host = PanelKey::Shaders;
     }
 
     // Select the volumes reading field `i`.
-    fn select_field_volumes(&mut self, i: usize, world: &mut World) {
+    fn select_field_volumes(&mut self, i: usize) {
         let Some(field) = self.declared_fields().into_iter().nth(i) else {
             return;
         };
@@ -197,12 +223,12 @@ impl EditorHook {
             return;
         }
         self.selection.set(handles);
-        self.follow_active(world);
+        self.follow_active();
     }
 
     // Open the Shader form on declared Shader `i`, or empty for a new one. It
     // shows while this panel does.
-    fn open_shader_form(&mut self, i: Option<usize>, world: &mut World) {
+    fn open_shader_form(&mut self, i: Option<usize>) {
         let target = match i {
             None => FormTarget::New,
             Some(i) => {
@@ -217,7 +243,7 @@ impl EditorHook {
                 FormTarget::Entry(key)
             }
         };
-        self.open_form(world, "Shader".to_string(), target);
+        self.open_form("Shader".to_string(), target);
         self.form.host = PanelKey::Shaders;
     }
 
@@ -233,7 +259,7 @@ impl EditorHook {
     }
 
     // Select the Materials naming declared Shader `i`.
-    fn select_shader_materials(&mut self, i: usize, world: &mut World) {
+    fn select_shader_materials(&mut self, i: usize) {
         let Some(shader) = self.declared_shaders().into_iter().nth(i) else {
             return;
         };
@@ -243,6 +269,6 @@ impl EditorHook {
             return;
         }
         self.selection.set(handles);
-        self.follow_active(world);
+        self.follow_active();
     }
 }

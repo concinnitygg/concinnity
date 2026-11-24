@@ -6,15 +6,14 @@
 
 use concinnity_engine::components::FrameInput;
 
-use super::fixtures::{entry, hook, set_input, world_with_fields, world_with_input};
+use super::fixtures::{entry, hook, world_with_fields, world_with_input};
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::form::{self, FormField};
-use crate::editor::panels::form_panel::{FormAction, FormFocus};
+use crate::editor::panels::form_panel::FormAction;
 
 use crate::editor::panels::assets_panel::PanelAction;
-use crate::editor::panels::preview;
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::sim;
@@ -69,46 +68,9 @@ fn tick_f1_toggles_hud_visibility() {
     assert!(h.hud_visible, "second F1 shows it again");
 }
 
-// While a drag is in progress the press's click must not also resolve to a
-// control underneath on later frames -- e.g. dragging the Assets panel across
-// the Preview checkbox must not toggle play mode.
-#[test]
-fn dragging_does_not_trigger_controls_it_crosses() {
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Assets] = true;
-    let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Assets, vp);
-    let mut world = world_with_input(FrameInput {
-        viewport: vp,
-        mouse_x: start[0] + 10.0,
-        mouse_y: start[1] + 10.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    // Cross the Preview panel's capture row with the button still held and a
-    // stray click edge (e.g. from event coalescing).
-    let pv = h.origin(PanelKey::Preview, vp);
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: pv[0] + 10.0,
-            mouse_y: pv[1] + preview::size()[1] - 5.0,
-            left_click: true,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert!(!h.sim.playing(), "the drag swallowed the click");
-    assert!(h.drag.is_some(), "still dragging");
-}
-
 #[test]
 fn apply_form_focus_toggle_and_consume() {
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let mut h = hook(Vec::new());
     h.form.fields = vec![FormField {
         key: "on".into(),
@@ -121,54 +83,43 @@ fn apply_form_focus_toggle_and_consume() {
         sparse: false,
         unset: false,
     }];
-    h.apply_form(FormAction::FocusField(0), &mut world);
-    assert!(matches!(h.form.focus, FormFocus::Field(0)));
-    h.apply_form(FormAction::FocusName, &mut world);
-    assert!(matches!(h.form.focus, FormFocus::Name));
-    h.apply_form(FormAction::ToggleField(0), &mut world);
+    h.apply_form(FormAction::ToggleField(0), &world);
     assert!(h.form.fields[0].boolval, "the bool field flipped");
-    // A click that hits no control is swallowed without side effects.
-    h.apply_form(FormAction::Consume, &mut world);
-    assert!(h.form.fields[0].boolval);
 }
 
 #[test]
-fn apply_panel_toggles_the_picker_and_consumes() {
-    let mut world = world_with_fields();
+fn apply_panel_toggles_the_picker() {
     let mut h = hook(Vec::new());
-    h.apply_panel(PanelAction::TogglePicker, &mut world);
+    h.apply_panel(PanelAction::TogglePicker);
     assert!(h.assets.picker_open);
     assert!(
         h.assets.search_focus,
         "the picker types into the search field"
     );
-    h.apply_panel(PanelAction::TogglePicker, &mut world);
+    h.apply_panel(PanelAction::TogglePicker);
     assert!(!h.assets.picker_open, "a second toggle closes the picker");
-    h.apply_panel(PanelAction::Consume, &mut world);
 }
 
 #[test]
 fn apply_panel_pick_option_opens_the_add_form() {
-    let mut world = world_with_fields();
     let mut h = hook(vec![entry("log", "Logger")]);
 
     h.assets.picker_open = true;
-    h.apply_panel(PanelAction::PickOption(0), &mut world);
+    h.apply_panel(PanelAction::PickOption(0));
     assert!(h.form_open(), "a picker pick opens the add form");
     assert!(!h.assets.picker_open, "and closes the picker behind it");
 
     // A pick with the picker already closed is a no-op: there is no option
     // list to index into.
     h.form.close();
-    h.apply_panel(PanelAction::PickOption(0), &mut world);
+    h.apply_panel(PanelAction::PickOption(0));
     assert!(!h.form_open());
 }
 
 #[test]
 fn confirm_form_without_a_selected_type_just_closes() {
-    let world = world_with_fields();
     let mut h = hook(Vec::new());
     h.form.selected_type = None;
-    h.confirm_form(&world);
+    h.confirm_form();
     assert!(!h.form_open());
 }

@@ -49,12 +49,8 @@ use super::post::taa::TaaResources;
 use super::raytrace::SkinPipeline;
 use super::transparent::GlassReflectionLayers;
 
-// The fixed descriptor-heap slots of the live-toggleable features outside the
-// post block. Minted once at init (the slots are reserved unconditionally,
-// independent of the init-time quality gates) and stashed on `DxContext` so a
-// live toggle can construct a launched-off feature into its slot without
-// re-deriving the heap layout. The G-buffer is kept once built and its colors
-// live in a pool no toggle repacks, so its slots are written once per resize.
+// The reserved heap slots of the live-toggleable features, kept so a later
+// enable builds into them without re-deriving the layout.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct QualitySlotHandles {
     pub gbuffer: GbufferSlots,
@@ -100,15 +96,7 @@ impl DxContext {
             },
         );
         let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, g, &plan));
-        // SSR, SSGI and RT share the SSR resources (the resolve half is SSR's).
-        let shares_ssr = [
-            RebuildFeature::Ssr,
-            RebuildFeature::Ssgi,
-            RebuildFeature::RtReflections,
-        ]
-        .into_iter()
-        .any(|f| features.contains(f));
-        let ssr = if shares_ssr {
+        let ssr = if features.touches_reflections() {
             self.rebuild_ssr(g, &plan)
         } else {
             Ok(())
@@ -304,11 +292,9 @@ impl DxContext {
         Ok(())
     }
 
-    // Ray-traced reflections. Turning on builds the DXR pass and the scene
-    // acceleration structure; turning off retires both, and
-    // `scene_srv_for_post` falls back to the SSR resolve / HDR next frame. A
-    // new trace resolution moves the output to fresh descriptors. The glass
-    // reflection pre-pass follows the trace divisor.
+    // Ray-traced reflections: turning on builds the pass and BVH, turning off
+    // retires both and the post scene falls back next frame. The glass reflection
+    // pre-pass follows the trace divisor.
     fn rebuild_rt(
         &mut self,
         settings: Option<rt_reflections::RtReflectionSettings>,
@@ -347,11 +333,8 @@ impl DxContext {
         Ok(())
     }
 
-    // The roughness-aware reflection composite, present whenever a resolve
-    // can composite (`ReflectionPath::composite`, the gate init builds it
-    // under). It follows the post-build RT state, so a failed RT enable falls
-    // back to the SSR resolve. A live composite takes a new blur resolution in
-    // place; every consumer reads its targets' descriptors per frame.
+    // The reflection composite, present whenever a resolve can composite, after
+    // the RT state settles; a new blur resolution applies in place.
     fn rebuild_reflection_composite(
         &mut self,
         g: &ResolvedGraphics,
@@ -452,15 +435,10 @@ impl DxContext {
         }
     }
 
-    // Build the RT reflection pass + acceleration structure at runtime (a live
-    // toggle-on). Mirrors the init RT block: a shader-compile failure leaves
-    // `rt_reflections` `None` and the renderer stays on SSR (a soft failure,
-    // returns `Ok`), while an empty scene or an AS-build error leaves only
-    // `rt.accel` `None` until `rt_dynamic_update` seeds it. The G-buffer
-    // rebuild, which runs first, has built the pre-pass it samples. The skin
-    // pipeline is built before the BVH, since whether skinned geometry can join
-    // decides whether a scene with no static geometry gets one (a build failure
-    // is non-fatal: static geometry still reflects, just without skinned hits).
+    // Build RT reflections and the BVH for a live toggle-on, like init: a compile
+    // failure stays on SSR, and an empty scene leaves the BVH `None` until seeded.
+    // The skin pipeline builds first, since skinned geometry decides whether a
+    // scene without static geometry gets a BVH.
     fn build_rt_runtime(&mut self, settings: rt_reflections::RtReflectionSettings) {
         let hot_reload = self.hot_reload.enabled;
         let rt = match RtReflectionsResources::new(

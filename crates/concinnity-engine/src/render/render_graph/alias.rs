@@ -112,17 +112,9 @@ impl AliasPlan {
     }
 }
 
-// Compute the aliasing plan over the transients `poolable` accepts by label,
-// i.e. the ones a backend's pool actually owns, at the given drawable extent.
-// Pure: the same graph + extent + predicate always produces the same plan. See
-// the module header for the packing strategy.
-//
-// Restricting the *candidate set*
-// rather than filtering the finished plan is what lets a pool plan against the
-// real frame graph: the greedy then packs the pooled resources against each
-// other, instead of pairing one of them with an unpooled resource and leaving
-// the other alone. Everything `poolable` rejects is left unplaced, exactly like
-// an imported resource.
+// The aliasing plan over the transients `poolable` accepts, at the drawable
+// extent. Restricting the candidate set rather than filtering the plan lets the
+// pooled resources pack against each other.
 pub(crate) fn plan_aliasing_for(
     graph: &CompiledGraph,
     drawable_w: u32,
@@ -446,13 +438,8 @@ mod tests {
 
     #[test]
     fn three_disjoint_chain_packs_into_one_slot() {
-        // Three RGBA16 transients with gapped, non-touching lifetimes:
-        // a [0,1] (Main writes, Decals reads), b [2,3] (Fog writes, Particles
-        // reads), c [4,5] (SsrResolve writes, Composite reads). Each begins
-        // strictly after the previous ends, so all three reuse one slot:
-        // saved = two of the three footprints. (A write-then-immediately-read
-        // chain a->b->c would instead TOUCH at the shared pass and not alias;
-        // the gaps here are deliberate.)
+        // Three transients with gapped lifetimes share one slot. Touching
+        // lifetimes would not alias.
         let mut g = GraphBuilder::new();
         let a = g.create_texture("a", tex(PixelFormat::Rgba16Float));
         let b = g.create_texture("b", tex(PixelFormat::Rgba16Float));
@@ -480,11 +467,8 @@ mod tests {
         );
     }
 
-    // Two write-only transients, one written by the graph's first pass and one by
-    // its second, with a buffer producer / consumer pair beside them so the
-    // first pass can earn the async-compute queue. `kind` is what that first
-    // pass declares, which is the only difference between the two graphs the
-    // test below compares.
+    // Two write-only transients from the first two passes, beside a buffer
+    // pair that lets the first pass go async. `kind` is the only difference.
     fn split_transient_graph(kind: PassKind) -> CompiledGraph {
         let mut g = GraphBuilder::new();
         let args = g.create_buffer(
@@ -565,11 +549,8 @@ mod tests {
 
     #[test]
     fn real_frame_graph_aliases_some_transients() {
-        // The actual per-frame graph with SSAO + bloom on: `ao_output` (early,
-        // SsaoBlur -> Main) and `bloom_top` (late, Bloom -> Composite) are both
-        // transient with disjoint lifetimes, so the planner saves at least
-        // `ao_output`'s footprint. Guards the import->create reclassification +
-        // the end-to-end planner against a representative graph.
+        // The real graph with SSAO and bloom: `ao_output` and `bloom_top` have
+        // disjoint lifetimes, so the planner saves at least one footprint.
         let mut inputs = all_off();
         inputs.ssao_enabled = true;
         inputs.bloom_enabled = true;

@@ -9,5 +9,5 @@ becomes mesh data); other kinds are path-only references.
 
 ## Parameters
 
-- `path`: A string. Path to the source file, relative to the project root.
+- `path`: A string. Path to the source file, relative to the root of the file holding the line.
 - `kind`: A string (see [FileKind](FileKind.md)). File category. Inferred from the path extension when absent.

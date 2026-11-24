@@ -1,0 +1,285 @@
+// The engine defaults that need the authoring vocabulary, and so cannot wait
+// for the runtime pass that injects the rest (`concinnity_engine::defaults`): a
+// StatHud for a world with a MainMenu, whose performance-stats toggles drive
+// its chips, and an Escape-toggled pause MainMenu for a story world that
+// declares none. Both are stated in terms of MainMenu, which the build expands
+// away, so the runtime cannot see the condition either one keys off.
+//
+// The chips and font of the StatHud injected here are filled in at world
+// start, alongside every other injected default.
+//
+// An `EngineDefaults` entry turns either one off. It is read rather than
+// consumed: it is a stored component now, and the runtime pass drains it.
+
+use crate::authoring::world::args_with_id;
+use crate::world_builder::Diagnostic;
+use concinnity_engine::components::{EngineDefaults, NamedAction, StoryCommand};
+
+use crate::authoring::registry::RegisteredType;
+use crate::build_only::expand::{ExpandReport, asset_name, registered_type};
+
+// Complete a world with the two defaults stated in build-only terms. Runs
+// before menu expansion, so an injected MainMenu expands like an authored one,
+// and after story expansion, so the compiled Story and its title screen are
+// present.
+pub(crate) fn inject_menu_defaults(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+) -> Result<(), Diagnostic> {
+    let toggles = declared_toggles(assets)?;
+    if toggles.hud {
+        inject_stat_hud(assets, report)?;
+    }
+    // Injected after the StatHud so it does not turn one on: the trimmed pause
+    // menu carries no performance-stats toggles to drive it.
+    if toggles.story_pause_menu {
+        inject_story_pause_menu(assets, report)?;
+    }
+    Ok(())
+}
+
+// The toggles the world declares, or all-on when it declares none. More than
+// one entry is ambiguous and rejected here as well as by the singleton check,
+// so this pass never has to pick.
+fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, Diagnostic> {
+    let mut declared = assets
+        .iter()
+        .filter(|v| registered_type(v) == Some(RegisteredType::EngineDefaults));
+    let Some(value) = declared.next() else {
+        return Ok(EngineDefaults::default());
+    };
+    if let Some(second) = declared.next() {
+        return Err(Diagnostic::asset(
+            "EngineDefaults",
+            asset_name(second),
+            format!(
+                "the world already declares EngineDefaults '{}'; \
+             declare at most one",
+                asset_name(value)
+            ),
+        ));
+    }
+    let args = value
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    serde_json::from_value(args).map_err(|e| {
+        Diagnostic::asset(
+            "EngineDefaults",
+            asset_name(value),
+            format!("invalid args: {e}"),
+        )
+    })
+}
+
+// A world with a MainMenu gets the stats strip its video settings toggle. The
+// chips themselves are minted at world start, so what is injected here is the
+// bare component that says the world wants one.
+fn inject_stat_hud(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+) -> Result<(), Diagnostic> {
+    let has_menu = assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::MainMenu));
+    let has_hud = assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::StatHud));
+    if !has_menu || has_hud {
+        return Ok(());
+    }
+    if name_claimed(assets, report, "hud", "stat_hud", RegisteredType::StatHud)? {
+        // Unreachable in practice: a same-name same-type asset would have
+        // matched the type scan above.
+        return Ok(());
+    }
+    inject(
+        assets,
+        report,
+        "hud",
+        "stat_hud",
+        RegisteredType::StatHud,
+        serde_json::json!({}),
+    );
+    Ok(())
+}
+
+// Give a story world an Escape pause menu (Resume / Save / Load / Settings /
+// Quit) when it plays a Story but declares no MainMenu. The menu targets the
+// story's own title screen for its Quit item and uses the trimmed settings
+// profile: a 2D story renders no scene, so only window / output and volume are
+// worth configuring.
+fn inject_story_pause_menu(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+) -> Result<(), Diagnostic> {
+    // An authored MainMenu takes over the pause role; only inject when the
+    // world declares none of its own.
+    if assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
+    {
+        return Ok(());
+    }
+    let Some(prefix) = assets
+        .iter()
+        .find(|v| registered_type(v) == Some(RegisteredType::Story))
+        .map(asset_name)
+        .filter(|n| !n.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let name = format!("{prefix}_pause");
+    // No MainMenu exists (checked above), so this can only flag a same-name
+    // collision with an unrelated asset, which is a hard error rather than a
+    // silent skip.
+    if name_claimed(
+        assets,
+        report,
+        "story_pause_menu",
+        &name,
+        RegisteredType::MainMenu,
+    )? {
+        return Ok(());
+    }
+
+    // Main Menu returns to the story's own title screen; it is offered only
+    // when the story has one (a story built without a title screen has nowhere
+    // to return to, so its pause menu skips the item). Quit always exits to
+    // desktop.
+    let title_screen = format!("{prefix}_title");
+    let has_title = assets.iter().any(|v| {
+        registered_type(v) == Some(RegisteredType::Screen) && asset_name(v) == title_screen
+    });
+
+    let mut items = vec![
+        serde_json::json!({ "label": "Resume", "action": NamedAction::Story(StoryCommand::TogglePause) }),
+        serde_json::json!({ "label": "Save", "action": NamedAction::Story(StoryCommand::OpenSave) }),
+        serde_json::json!({ "label": "Load", "action": NamedAction::Story(StoryCommand::OpenLoad) }),
+        serde_json::json!({ "label": "Settings", "action": NamedAction::Story(StoryCommand::OpenSettings) }),
+    ];
+    if has_title {
+        items.push(serde_json::json!({
+            "label": "Main Menu",
+            "action": NamedAction::Show(title_screen.into()),
+        }));
+    }
+    items.push(serde_json::json!({ "label": "Quit", "action": NamedAction::Quit }));
+
+    // The story system drives the pause and settings navigation (Resume /
+    // Settings / the settings Back), so closing returns to the stage instead of
+    // dismissing to an empty screen. A translucent backdrop rather than the
+    // opaque MainMenu default, so the menu reads as an overlay. `toggle_key` is
+    // empty: Escape is a separate story-driven binding (below), not the
+    // MainMenu's own screen toggle. `settings_back_action` both routes Back
+    // through the story and forces the settings screen to be generated.
+    let args = serde_json::json!({
+        "toggle_key": "",
+        "dim": [0.0, 0.0, 0.0, 0.6],
+        "settings_profile": "minimal",
+        "settings_back_action": NamedAction::Story(StoryCommand::CloseSettings),
+        "items": items,
+    });
+    inject(
+        assets,
+        report,
+        "story_pause_menu",
+        &name,
+        RegisteredType::MainMenu,
+        args,
+    );
+
+    // Escape toggles the pause through the story system.
+    inject(
+        assets,
+        report,
+        "story_pause_menu",
+        &format!("{name}_key"),
+        RegisteredType::KeyBinding,
+        serde_json::json!({ "key": "Escape", "action": NamedAction::Story(StoryCommand::TogglePause) }),
+    );
+
+    // Point the story at its pause menu and settings entry screens so the story
+    // system can show them. Those screens are generated later by the menu
+    // expansion; the names are stable and intern to the same ids.
+    patch_story_scaffold(assets, prefix.as_str(), &name);
+    Ok(())
+}
+
+// Add the injected pause menu's screen (`<menu>`) and settings entry screen
+// (`<menu>_settings_video`) to the Story asset's scaffold, so the story system
+// resolves them like every other stage reference.
+fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu_name: &str) {
+    let pause_screen = menu_name.to_string();
+    let settings_screen = format!("{menu_name}_settings_video");
+    for v in assets.iter_mut() {
+        if registered_type(v) != Some(RegisteredType::Story) || asset_name(v) != story_name {
+            continue;
+        }
+        // Best-effort: a build-generated Story always carries an object args +
+        // scaffold, but a hand-authored one might be malformed. Skip the patch
+        // rather than panic; the malformed Story surfaces its own error at
+        // validation / compile.
+        let Some(args) = v.get_mut("args").and_then(|a| a.as_object_mut()) else {
+            return;
+        };
+        let Some(scaffold) = args
+            .entry("scaffold")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+        else {
+            return;
+        };
+        scaffold.insert("pause".to_string(), serde_json::json!(pause_screen));
+        scaffold.insert("settings".to_string(), serde_json::json!(settings_screen));
+        return;
+    }
+}
+
+// Whether the world already provides `name`. A claimed name is recorded as a
+// shadow, so a listing can show the default the world overrides rather than
+// leaving it unaccounted for. A name held by a different type is a hard error:
+// the default cannot be injected and silently skipping it would hide the
+// conflict.
+fn name_claimed(
+    assets: &[serde_json::Value],
+    report: &mut ExpandReport,
+    injected_by: &'static str,
+    name: &str,
+    asset_type: RegisteredType,
+) -> Result<bool, Diagnostic> {
+    let Some(claim) = assets.iter().find(|v| asset_name(v) == name) else {
+        return Ok(false);
+    };
+    if registered_type(claim) != Some(asset_type) {
+        return Err(Diagnostic::world(format!(
+            "engine default '{}' ({}) collides with your {} asset of the same name; \
+             rename that asset or disable the default with an EngineDefaults entry",
+            name,
+            asset_type.as_str(),
+            claim.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
+        )));
+    }
+    report.record_shadowed(name, asset_type, injected_by, serde_json::json!({}));
+    Ok(true)
+}
+
+// Push one injected asset and record it in the report.
+fn inject(
+    assets: &mut Vec<serde_json::Value>,
+    report: &mut ExpandReport,
+    injected_by: &'static str,
+    name: &str,
+    asset_type: RegisteredType,
+    args: serde_json::Value,
+) {
+    assets.push(serde_json::json!({
+        "type": asset_type.as_str(),
+        "args": args_with_id(args.clone(), name),
+    }));
+    report.record(name, asset_type, args, injected_by);
+}
+
+#[cfg(test)]
+mod tests;

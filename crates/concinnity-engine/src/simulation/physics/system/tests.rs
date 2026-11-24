@@ -58,11 +58,8 @@ fn controlled_camera() -> Camera3D {
     }
 }
 
-// A third-person camera is a virtual orbit: no player capsule is created
-// for it. (Regression: the spectator capsule spawned at the camera eye
-// overlapped the followed rig's capsule and squeezed it through the
-// floor.) A first-person camera keeps its capsule. The schedule gate that
-// builds the system at all is covered by the engine's schedule tests.
+// A third-person camera creates no player capsule, which would overlap the
+// followed rig's; a first-person camera keeps its capsule.
 #[test]
 fn third_person_camera_gets_no_player_capsule() {
     // Third-person (follow) camera: a virtual orbit, so no player capsule.
@@ -631,13 +628,8 @@ fn a_shipped_budget_matching_the_world_is_adopted() {
     );
 }
 
-// A world with no shipped budget (built in memory, as every test world is)
-// reserves from what it holds plus the headroom its config authored, and
-// caps spawns there. The cap used to be left open for such a world, on the
-// grounds that nothing had counted its spawns; a fixed-capacity simulation
-// cannot honor that -- a spawn past the reservation gets no body either
-// way, and the cap is what turns a silently declined one into a refusal
-// naming the knob to raise.
+// A world with no shipped budget reserves what it holds plus its authored
+// headroom and refuses spawns past that, naming the knob to raise.
 #[test]
 fn a_world_without_a_shipped_budget_reserves_from_what_it_holds() {
     let mut world = World::new();
@@ -695,13 +687,7 @@ fn a_spawn_past_the_shipped_budget_is_refused() {
     assert!(live_y < 3.0, "the authored prop still falls");
 }
 
-// A rig capsule authored standing exactly on the floor stays there: it
-// neither sinks tick after tick nor is lifted off it. The driver used to
-// spawn one a fingernail above its authored position, because the
-// controller ignored a hit a downward move started already touching and
-// the capsule sank a little every frame; the controller now separates
-// along the contact normal instead, so the authored position is the one
-// that holds.
+// A rig capsule authored on the floor neither sinks nor lifts off.
 #[test]
 fn a_rig_capsule_spawned_on_the_floor_neither_sinks_nor_rises() {
     let identity = [
@@ -936,11 +922,8 @@ fn an_unreadable_terrain_falls_back_to_the_slab() {
     assert_eq!(floor_height(&physics, 3.0, 4.0), Some(0.0));
 }
 
-// A capsule that jumps leaves the ground, then lands: the impulse is
-// applied on the tick the request arrives, gravity brings it back, and
-// touching down clears the downward velocity rather than letting it
-// accumulate into the floor. The grounded state is published back to the
-// RigidBody, which is what gates the next jump.
+// A jumping capsule leaves the ground, lands without accumulating downward
+// velocity, and publishes its grounded state to the RigidBody.
 #[test]
 fn a_grounded_player_jumps_and_lands() {
     let mut world = World::new();

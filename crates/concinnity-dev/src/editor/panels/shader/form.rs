@@ -572,11 +572,13 @@ mod tests {
         let include = json!({"type": "Include", "args": {"path": "lib.jsonl"}});
         let inc = |e| SourcedEntry {
             entry: e,
-            file: Some("lib.jsonl".into()),
+            file: Some("/p/lib.jsonl".into()),
+            root: None,
         };
         let own = |e| SourcedEntry {
             entry: e,
             file: None,
+            root: None,
         };
         // Included twice, so its entries are read-only.
         let entries = EntryList::with_includes(
@@ -587,7 +589,10 @@ mod tests {
                 inc(material("inc", None)),
                 own(material("own", None)),
             ],
-            std::path::Path::new("world.jsonl"),
+            crate::editor::entry_list::Origin {
+                world: std::path::Path::new("/p/world.jsonl"),
+                root: std::path::Path::new("/p"),
+            },
         );
         let mut form = ShaderForm::open(&entries, None);
         for _ in 0..=templates::FRAGMENT.len() {
@@ -680,10 +685,12 @@ mod tests {
         let own = |e| SourcedEntry {
             entry: e,
             file: None,
+            root: None,
         };
         let inc = |e| SourcedEntry {
             entry: e,
-            file: Some("lib.jsonl".into()),
+            file: Some("/p/lib.jsonl".into()),
+            root: None,
         };
         let include = json!({"type": "Include", "args": {"$id": "lib", "path": "lib.jsonl"}});
         let mut entries = EntryList::with_includes(
@@ -693,7 +700,10 @@ mod tests {
                 inc(shader("b")),
                 own(shader("c")),
             ],
-            std::path::Path::new("world.jsonl"),
+            crate::editor::entry_list::Origin {
+                world: std::path::Path::new("/p/world.jsonl"),
+                root: std::path::Path::new("/p"),
+            },
         );
         let mut form = ShaderForm::open(&entries, Some(3));
         form.press(DEFAULT);

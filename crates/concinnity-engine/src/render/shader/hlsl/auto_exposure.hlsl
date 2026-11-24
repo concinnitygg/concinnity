@@ -14,9 +14,9 @@
 //   AE_AVERAGE - histogram_average: one threadgroup of 256 threads reduces the
 //                histogram to the log-luminance the brightest
 //                HIGHLIGHT_FRACTION of the frame starts at and the
-//                count-weighted average log-luminance of the bins no more than
-//                METERED_RANGE_EV under it and of every bin, then clears it for
-//                the next frame.
+//                count-weighted average log-luminance of the bins within the
+//                metered range under it (see `metered_range`) and of every
+//                bin, then clears it for the next frame.
 //
 // The HDR resolve is only ever fetched by integer coordinate, on every backend,
 // so it is declared as a plain texture and no backend binds a sampler for this
@@ -26,16 +26,19 @@
 // concinnity-shader's `metal_bindings`), which is what puts the histogram on
 // buffer(0) and the output measurement on buffer(1) without a table.
 //
-// HISTOGRAM_BINS, HISTOGRAM_STRIDE, HIGHLIGHT_FRACTION, LIT_FRACTION and
-// METERED_RANGE_EV mirror
-// gfx::auto_exposure; AutoExposureParams and ExposureMeasurement mirror
-// render::uniforms.
+// HISTOGRAM_BINS, HISTOGRAM_STRIDE, HIGHLIGHT_FRACTION, LIT_FRACTION,
+// METERED_RANGE_EV, SMALL_SUBJECT_RANGE_EV, SMALL_SUBJECT_SHARE and
+// WIDE_SUBJECT_SHARE mirror gfx::auto_exposure; AutoExposureParams and
+// ExposureMeasurement mirror render::uniforms.
 
 static const uint HISTOGRAM_BINS = 256u;
 static const uint HISTOGRAM_STRIDE = 2u;
 static const float HIGHLIGHT_FRACTION = 0.001;
 static const float LIT_FRACTION = 0.05;
 static const float METERED_RANGE_EV = 10.0;
+static const float SMALL_SUBJECT_RANGE_EV = 4.0;
+static const float SMALL_SUBJECT_SHARE = 0.25;
+static const float WIDE_SUBJECT_SHARE = 0.6;
 
 struct AutoExposureParams
 {
@@ -120,8 +123,8 @@ void histogram_build(uint3 gid : SV_DispatchThreadID, uint tid : SV_GroupIndex)
 
 struct ExposureMeasurement
 {
-    // Count-weighted mean log2 luminance of the bins whose centers sit no
-    // more than METERED_RANGE_EV under the highlight, the sub-floor bin left
+    // Count-weighted mean log2 luminance of the bins whose centers sit
+    // within the metered range under the highlight, the sub-floor bin left
     // out.
     float mean_log_lum;
     // Log2 luminance the brightest HIGHLIGHT_FRACTION of all pixels starts at,
@@ -162,6 +165,22 @@ bool brightest_start(uint tid, uint count, uint at, uint above, uint total, floa
     float inside = (wanted - float(above)) / float(max(count, 1u));
     log_lum = params.lum_log2_min + (float(tid) + 1.0 - inside) * step;
     return true;
+}
+
+// How many stops under the highlight the mean counts a pixel, for a frame of
+// `total` pixels: METERED_RANGE_EV, narrowing to SMALL_SUBJECT_RANGE_EV as
+// the share of the frame within METERED_RANGE_EV of the highlight falls from
+// WIDE_SUBJECT_SHARE to SMALL_SUBJECT_SHARE, so a small lit subject against
+// the dark (a planet from space) is metered by its lit side rather than its
+// fading edge. `metered_range` in gfx::auto_exposure.
+float metered_range(uint total, float step)
+{
+    float from = (highlight - METERED_RANGE_EV - params.lum_log2_min) / step - 0.5;
+    uint first = uint(clamp(ceil(from), 1.0, float(HISTOGRAM_BINS)));
+    uint inside = first < HISTOGRAM_BINS ? counts_at_or_above[first] : 0u;
+    float share = total > 0u ? float(inside) / float(total) : 1.0;
+    return lerp(SMALL_SUBJECT_RANGE_EV, METERED_RANGE_EV,
+                smoothstep(SMALL_SUBJECT_SHARE, WIDE_SUBJECT_SHARE, share));
 }
 
 [shader("compute")]
@@ -211,9 +230,9 @@ void histogram_average(uint tid : SV_GroupIndex)
     GroupMemoryBarrierWithGroupSync();
 
     // The mean meters what the highlight lights: the sub-floor bin and
-    // everything more than METERED_RANGE_EV under the highlight (black space
+    // everything more than the metered range under the highlight (black space
     // around a lit planet) are left out, so a mostly-dark frame does not peg it.
-    bool metered = tid > 0u && center >= highlight - METERED_RANGE_EV;
+    bool metered = tid > 0u && center >= highlight - metered_range(total, step);
     uint effective_count = metered ? count : 0u;
     reduce_counts[tid] = effective_count;
     reduce_weighted[tid] = center * float(effective_count);

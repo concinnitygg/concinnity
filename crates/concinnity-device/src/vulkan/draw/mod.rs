@@ -1,8 +1,5 @@
-// Frame recording for the Vulkan backend, and the passes it records.
-// Encodes the shadow pass, main scene pass, and post stack into a single
-// command buffer. Called from VkContext::draw_frame each tick. Every
-// pass dispatches through the render-graph executor; see
-// `vulkan/graph_exec.rs` and this directory's `composite.rs`.
+// Frame recording for the Vulkan backend, and the passes it records. Every
+// pass dispatches through the render-graph executor (`vulkan/graph_exec.rs`).
 
 mod composite;
 mod far_shadow;
@@ -90,13 +87,9 @@ impl VkContext {
         packing
     }
 
-    // Overwrite the instance tail's `GpuDrawArgs` with each instance's active
-    // LOD slice, for the clusters that declare alternates. The init-time fill
-    // wrote every cluster's base slice into every frame's buffer, so this is a
-    // no-op for a world without alternates and touches only the instances of
-    // the clusters that have them. Not part of `build_records_into`: the probe
-    // bake shares that body and deliberately leaves its instance tail zeroed,
-    // which disables instances in a bake.
+    // Overwrite the instance tail's draw args with each instance's active LOD
+    // slice, for clusters that declare alternates. Kept out of
+    // `build_records_into` because the probe bake leaves its instance tail zeroed.
     fn patch_instance_lod_into(&self, buf: &super::allocator::PooledBuffer, cam_pos: [f32; 3]) {
         use concinnity_engine::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if !self.instanced.any_lod {
@@ -119,17 +112,10 @@ impl VkContext {
         );
     }
 
-    // Write the bindless `GpuObjectData` and GPU-cull `GpuDrawArgs` records --
-    // static, streamed-chunk and spawned-clone, and skinned-tail, each draw's
-    // active-LOD slice picked by distance from `cam_pos` -- into `objects` and
-    // `args`. The pool indices address the shared handle-indexed texture pool:
-    // albedo = `texture_slot`, normal = the normal map's own handle (or the
-    // flat-normal fallback slot for a normal-less draw). Shared with the
-    // reflection-probe capture, which builds into its own bake-owned buffers
-    // against the probe eye; the instance tail is left untouched, so a bake
-    // buffer must be zeroed first (a zero record is a disabled draw the cull
-    // kernel skips, which is how the probe omits instanced geometry). Returns
-    // the static draws' packing time.
+    // Write the bindless object and cull draw-arg records (static, runtime and
+    // skinned tail), each draw's LOD picked by distance from `cam_pos`. Shared with
+    // the probe bake, which zeroes its buffers first so the untouched instance tail
+    // stays disabled. Returns the static draws' packing time.
     pub(in crate::vulkan) fn build_records_into(
         &self,
         objects: &super::allocator::PooledBuffer,
@@ -197,14 +183,9 @@ impl VkContext {
             FanOutTiming::default()
         };
 
-        // Runtime objects -- streamed chunks and spawned clones -- one record each
-        // in the reserved region at `[runtime_record_base() + k]`, packed like a
-        // static object. Their geometry already lives in the shared VB/IB with
-        // their own `base_vertex` and index slice, so they ride the static +
-        // instance prefix indirect draw. Both kinds are non-cullable (NaN AABB,
-        // because the init-time BVH cannot refit to admit them), so a resident
-        // one draws unconditionally; a freed slot's `resident` clear disables
-        // it, and the cull kernel skips a disabled record's stale object.
+        // Runtime objects (streamed chunks, spawned clones), one record each in the
+        // reserved region, drawn with the static prefix. They are not cullable (NaN
+        // AABB), so a resident one always draws and a freed slot is disabled.
         let runtime_base = self.state.draw.runtime_record_base();
         let routes = self.cull.world_pipelines.routes();
         let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
@@ -243,15 +224,8 @@ impl VkContext {
             args.write_val((runtime_base + k) * args_stride, &disabled);
         }
 
-        // Skinned objects: one record each in the reserved tail at
-        // `[skinned_record_base(), record_count())`. `model = obj.model` (applied
-        // after the per-frame skin deform), flat-pool texture indices like a
-        // static object, and a padded bind-pose AABB so the cull kernel can
-        // frustum/Hi-Z test them, so they are cullable + resident. The main
-        // pass's 2nd indirect draw binds the per-frame deformed VB + the skinned
-        // IB, so `base_vertex = 0` (the deformed buffer mirrors global skinned
-        // indexing) and the active-LOD slice is the element offset into the
-        // skinned IB. `take(n_skinned)` no-ops when the fold is inactive.
+        // Skinned objects in the reserved tail: cullable by a padded bind-pose AABB,
+        // drawn by the second indirect draw over the deformed VB, so `base_vertex = 0`.
         let skinned_base = self.state.draw.skinned_record_base();
         for (k, obj) in self
             .state
@@ -290,15 +264,8 @@ impl VkContext {
     ) -> RenderResult<vk::CommandBuffer> {
         let device = self.hw.device.clone();
         let device = &device;
-        // Profiler-overlay timestamp pair. The pool slot for this frame is reset
-        // (the matching `get_query_pool_results` already ran in
-        // `read_gpu_timings`, after the fence wait that gated the previous trip's
-        // writes), then the start tick is recorded as the first cmd-buffer op.
-        // The matching end tick is written just before `end_command_buffer`
-        // returns control. Outer "start" command buffer: the leading timestamp
-        // (the frame's first GPU op), recorded into its own buffer so it can be
-        // submitted before the per-pass buffers. The query-pool reset must
-        // precede every pass, hence it lives here at the head of the batch.
+        // The outer "start" buffer: reset this frame's timestamp block and write the
+        // frame's first timestamp, ahead of every pass buffer.
         let start_cmd = self.commands.start_command_buffers[frame_idx];
         // SAFETY: `start_cmd` belongs to this frame slot, whose fence was already waited on, so
         // it is not in flight and may be reset.
@@ -312,12 +279,8 @@ impl VkContext {
         )
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin start cmd buf"))?;
         if let Some(pool) = self.hw.timestamp_query_pool {
-            // Reset this frame's whole timestamp block (whole-frame pair + every
-            // per-pass pair) here, before any per-pass buffer writes into it.
-            // `start_cmd` is submitted first, so the reset precedes every write in
-            // queue order. The whole-frame start goes in the block's first slot;
-            // each pass writes its own pair (see graph_exec); the whole-frame end
-            // is the block's second slot, written in the end buffer below.
+            // Reset the whole timestamp block before any pass writes into it; the frame
+            // start and end take the block's first two slots.
             let block_base = pass_timing::frame_block_base(frame_idx);
             let (wf_start, _) = pass_timing::whole_frame_pair(frame_idx);
             rec.reset_query_pool(
@@ -327,14 +290,9 @@ impl VkContext {
             );
             rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, wf_start);
         }
-        // Hardware ray-traced reflections: rebuild the TLAS for moved props (when
-        // the dynamic mode + dirty gate call for it) onto the start buffer, which
-        // is submitted before every per-pass trace, then re-point this frame's RT
-        // descriptor set at the live TLAS + geometry table. A no-op when RT is
-        // off. Recorded here (not on a per-pass worker) because it needs
-        // `&mut self`; the start buffer carries it within the frame's submit batch.
-        // Skipped while the world is hidden, which traces nothing; a topology
-        // change stays owed to the next frame that draws it.
+        // Update the TLAS for moved props onto the start buffer, which needs
+        // `&mut self` and runs before every trace, then re-point this frame's RT set.
+        // Skipped while the world is hidden; a topology change stays owed.
         if !world_hidden {
             let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(&rec, frame_idx);
@@ -553,11 +511,8 @@ impl FrameDevice for VkContext {
     }
 
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<VkFrame>> {
-        // Minimized window: the client area is 0x0. Vulkan rejects every
-        // zero-extent operation (swapchain, render area, viewport, image copy),
-        // so park the whole frame (no acquire / record / submit / present) until
-        // the window is restored. `window_closed` keeps pumping the message loop
-        // each tick, so the restore is picked up.
+        // Park the whole frame while the window is minimized; Vulkan rejects zero
+        // extents, and the message pump keeps running for the restore.
         if self.frame_is_parked() {
             return Ok(None);
         }
@@ -625,11 +580,8 @@ impl FrameDevice for VkContext {
         // skin fold reads. No-op when no SkinnedMesh carries morph targets.
         self.upload_morph_weights(frame_idx);
 
-        // Line resources: built on the first frame that publishes lines (and
-        // this slot's vertex buffer grown to fit them), so the plan's graph gate
-        // can see them live this same frame and a world that never draws a line
-        // never compiles them. Safe here: the `wait_frame_slot` fence retired
-        // everything that read this slot last trip.
+        // Line resources, built on the first frame that publishes lines so the graph
+        // gate sees them that frame; this slot's fence already retired its old reads.
         self.ensure_line_pipeline(frame_idx, params.lines);
 
         Ok(Some(VkFrame {
@@ -674,6 +626,15 @@ impl FrameDevice for VkContext {
             upload_shadow_uniforms(&self.shadow.probe_ubos[frame_idx], &plan.probe_uniforms);
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        // The transparent pass hazes through this frame's atmosphere, which
+        // the view's air flag follows; the slot's fence has passed.
+        let air = self
+            .atmosphere
+            .as_ref()
+            .and_then(|a| a.transparent_air(frame_idx));
+        if let Some(t) = self.transparent.as_mut() {
+            t.wire_air(&self.hw.device, frame_idx, air);
+        }
         self.prepare_water_wake(
             cam_pos,
             water_time,
@@ -741,12 +702,8 @@ impl FrameDevice for VkContext {
             frame_idx,
             planar,
         };
-        // The per-frame submission order, excluding the outer "end" buffer
-        // (`cmd`) the caller appends: the `start` buffer (leading timestamp)
-        // followed by the per-pass buffers in graph order. Submission order is
-        // GPU order on the single graphics queue, so every encoder's inline
-        // barrier synchronizes against the prior pass across buffer boundaries.
-        // Composite + the post-graph work below record into `cmd`.
+        // The submission order before the caller's "end" buffer: `start`, then the
+        // pass buffers in graph order, which is GPU order on the single queue.
         let mut submit = std::mem::take(&mut self.submit_scratch);
         submit.clear();
         submit.push(start_cmd);

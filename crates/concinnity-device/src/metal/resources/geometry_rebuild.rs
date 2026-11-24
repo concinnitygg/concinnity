@@ -59,12 +59,9 @@ impl GeometryBuffers for MtlContext {
         Ok(())
     }
 
-    // The RT acceleration structure was built against the old buffers and draw
-    // offsets, so its static BLAS hold stale geometry and the RT shader would
-    // read the new vertex buffer at old offsets. Rebuild it synchronously,
-    // whatever the dynamic mode: even a build-once BVH is invalid once its
-    // source buffers are replaced. A failure keeps the prior BVH and must not
-    // fail the reload, which already succeeded.
+    // Rebuild the acceleration structure synchronously, since its BLAS hold the
+    // replaced geometry. A failure keeps the prior BVH without failing the
+    // reload.
     fn static_geometry_moved(&mut self) {
         if self.rt.accel.is_some() {
             let albedo_count = self.scene.textures.len();

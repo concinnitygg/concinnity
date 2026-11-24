@@ -34,12 +34,9 @@ pub(super) struct BindlessPass {
     pub(super) material_params: Option<MaterialParams>,
 }
 
-// The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
-// world default that drives bucket 0 (`programs: None` for the engine's own),
-// entries 1.. are the material-referenced buckets. Each gets its own GPU-driven
-// main-pass and G-buffer pre-pass PSOs; an entry flagged `deferred` is a bucket
-// whose Shader belongs to a scene that has not pinned, and is installed later
-// by `install_world_shader`.
+// One bucket per world Shader: entry 0 is the world default (`programs: None`
+// for the engine's), entries 1.. the material buckets. A `deferred` entry is
+// installed later by `install_world_shader`.
 pub(super) fn build_bindless_pass(
     gpu: &InitGpu<'_>,
     world_shaders: &[WorldShader<'_>],
@@ -58,12 +55,9 @@ pub(super) fn build_bindless_pass(
         ));
     }
     let buckets = BucketPlan::new(world_shaders)?;
-    // The GPU-driven main pass and its G-buffer pre-pass. The engine's pairs
-    // are compiled regardless of the world default: they are the programs for
-    // every bucket that declares no Shader, and the main pair the source of the
-    // Wireframe twin. Bucket 0 takes the world default's programs where the
-    // world declares one. Pre-pass PSOs build only while a G-buffer consumer
-    // is on; a quality change that adds one builds them then.
+    // The engine's pairs always compile: they serve buckets without a Shader
+    // and the Wireframe twin. Pre-pass PSOs build only while a G-buffer
+    // consumer is on.
     let bindless_main_shaders = compile_main_bindless_shaders(hot_reload)?;
     let prepass_root_sig = dump_on_err(
         info_queue,

@@ -29,15 +29,8 @@ use concinnity_engine::components::{AuthoredAction, NamedAction, StoryCommand};
 use concinnity_engine::ecs::{ActionField, RefField};
 use serde_json::{Map, Value};
 
-// The form's default (and minimum) scrolling window: the number of field rows the
-// edit panel shows before it scrolls. A form derives ALL of a type's editable
-// fields and the panel renders a window this many rows tall over them, so a type
-// wider than the window (or an array grown past it) scrolls rather than truncating.
+// The rows the edit panel shows before its fields scroll.
 pub(crate) const FIELD_POOL: usize = 14;
-// The injected control pool (checkboxes, text inputs, cycle buttons, swatches):
-// the default shows `FIELD_POOL` rows, resizing the panel taller reveals more up
-// to this.
-pub(crate) const FIELD_POOL_MAX: usize = 28;
 
 // The editable kinds. Everything else in an asset's args is left at its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,11 +56,9 @@ pub(crate) enum FieldKind {
     // fills in (`set_action_options`). `FormField::choices` holds what each
     // option writes.
     Action { extras: &'static [&'static str] },
-    // A variable-length array (non-vector) at `FormField::key`, rendered as a header
-    // row with add / remove buttons; its element count is carried in
-    // `FormField::variant_idx`. The elements' own leaves follow it as indexed
-    // dotted-path fields (`waves.0.amplitude`). This is NOT the fixed 2..=4 numeric
-    // vector (that stays a `Vec` leaf) -- only longer / object / reference arrays.
+    // A variable-length array at `FormField::key`: a header row with add and
+    // remove buttons, its count in `variant_idx`, its elements' leaves
+    // following as indexed paths (`waves.0.amplitude`).
     Array,
 }
 
@@ -76,7 +67,7 @@ impl FieldKind {
     // seeds / reads a control for it). Bools (checkbox), enums / refs (cycle
     // button), arrays (header), and non-color vectors (a disclosure of per-element
     // leaves) carry their state elsewhere, not in a text box.
-    pub(crate) fn has_text_input(self) -> bool {
+    pub(crate) fn has_text_field(self) -> bool {
         !matches!(
             self,
             Self::Bool
@@ -246,11 +237,8 @@ const PICKED_STORY_COMMANDS: [StoryCommand; 11] = [
 ];
 
 // Fill an action field's options: `(none)`, its `extras`, then every action
-// the world's `screens` and `scenes` let it make, each labeled by its verb and
-// target, selecting the one matching the field's current value (stashed as
-// JSON text in `initial`). A current value the list does not offer (a
-// generated settings-row action, a story choice) is kept as an option of its
-// own, so editing the entry never drops it.
+// `screens` and `scenes` allow, selecting the current value. A current value
+// not on offer is kept as its own option.
 pub(crate) fn set_action_options(field: &mut FormField, screens: &[String], scenes: &[String]) {
     let FieldKind::Action { extras } = field.kind else {
         return;
@@ -296,11 +284,8 @@ pub(crate) fn set_action_options(field: &mut FormField, screens: &[String], scen
     (field.variants, field.choices) = options.into_iter().unzip();
 }
 
-// Fill a reference field's options: `(none)` followed by `names` (the world's
-// existing assets of the target type), selecting whichever matches the field's
-// current target (stashed in `initial`), else `(none)`. The hook calls this after
-// `fields_for` because the option list depends on the working entry list, which
-// this world-free module does not see.
+// Fill a reference field's options: `(none)` then `names`, selecting the
+// current target.
 pub(crate) fn set_ref_options(field: &mut FormField, names: &[String]) {
     let mut variants = Vec::with_capacity(names.len() + 2);
     variants.push(NONE_LABEL.to_string());
@@ -341,12 +326,8 @@ fn value_text(v: &Value) -> String {
     }
 }
 
-// A JSON number as display text. A float that originated from an `f32` (as the
-// engine's args almost always are) is printed at f32's shortest round-tripping
-// form rather than the full f64 expansion serde emits (`0.05`, not
-// `0.05000000074505806`); a genuine f64 that does not round-trip through f32 keeps
-// full precision. Integers print as-is. Re-parsing the shortened text yields the
-// same f32, so the displayed value round-trips unchanged through cook.
+// A JSON number as display text: an f32-origin float at f32's shortest
+// round-tripping form, a genuine f64 at full precision, integers as-is.
 #[expect(
     clippy::float_cmp,
     reason = "an exact round trip shows the value is an f32"
@@ -378,25 +359,20 @@ pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-// How deep the form descends into nested objects. A field whose default value is
-// a plain object is flattened into its scalar leaves, keyed by a dotted path
-// (`controller.move_speed`), up to this many levels below the root. Arrays and
-// deeper objects are left at their defaults (they want the nested-array / deeper
-// controls). 2 covers the current cases (Camera3D's `controller`).
+// How many levels of nested plain objects the form flattens into dotted-path
+// leaves (`controller.move_speed`).
 const MAX_NEST_DEPTH: usize = 2;
 
-// The editable fields for a type, in declaration order. `seed` supplies current
-// values (an existing entry's args when editing), overriding the defaults for the
-// initial text / bool state; the kind is always taken from the default so it is
-// stable. Nested plain objects are flattened into dotted-path leaves (see
-// `collect_fields`). All fields are returned; the panel renders a scrolling window
-// `FIELD_POOL` rows tall over them.
-// A convenience for the collapsed form (no disclosed vectors), used by the tests.
+// The collapsed form's fields, for the tests.
 #[cfg(test)]
 pub(crate) fn fields_for(ty: &str, seed: Option<&Map<String, Value>>) -> Vec<FormField> {
     fields_for_with(ty, seed, &std::collections::HashSet::new())
 }
 
+// The editable fields for a type in declaration order, seeded with current
+// values but kinds from the defaults, nested objects flattened into dotted
+// paths.
+//
 // `fields_for` with a set of expanded (disclosed) non-color vector paths: each
 // expanded vector is followed by an editable leaf per element (`position.0` ..)
 // so its components edit one at a time; a collapsed vector is just its header row.
@@ -479,13 +455,9 @@ fn collect_value(
         meta.ref_targets(path)
     };
 
-    // A plain nested object that is not itself a declared reference is flattened into
-    // its leaves one level deeper -- UNLESS the seed (an entry being edited) authored
-    // this path as a non-object (e.g. Camera3D's `controller: null`, a load-bearing
-    // "uncontrolled cutscene camera" marker): flattening from the object-shaped
-    // DEFAULT would rebuild a default object over the authored null on `assemble`.
-    // Left unflattened, the object default is not an editable leaf kind, so it is
-    // skipped and the merge preserves the authored value.
+    // Flatten a plain nested object one level deeper, unless the seed authored
+    // this path as a non-object (`controller: null`), which flattening the
+    // default would overwrite.
     if ref_target.is_none()
         && depth < MAX_NEST_DEPTH
         && let Value::Object(nested) = def
@@ -595,13 +567,9 @@ fn collect_value(
             .and_then(|s| get_at_path(s, path))
             .and_then(Value::as_array)
             .unwrap_or(def_arr);
-        // Only offer add / remove for a genuinely variable-length LIST. A pure
-        // numeric array is indistinguishable from a fixed `[T; N]` once serialized
-        // (SdfVolume's `[f32; 32]` params, index / matrix buffers), and growing one
-        // is rejected at cook -- so treat only object / string / reference element
-        // arrays (never a plain number) as editable, and only when a template element
-        // exists (a non-empty current or default array) to clone for `[+]`. Others
-        // are left at their default (round-tripped untouched), as before.
+        // Offer add and remove only for object, string or reference element lists
+        // with an element to clone; numeric arrays may be fixed-size and are left
+        // alone.
         let template = cur_arr.first().or_else(|| def_arr.first());
         if template.is_none_or(Value::is_number) {
             return;
@@ -837,7 +805,7 @@ fn assemble_sparse(
         let text = texts.get(i).map_or("", String::as_str);
         let cleared = match field.kind {
             FieldKind::Enum => field.variant_idx == 0,
-            kind if kind.has_text_input() => text.trim().is_empty(),
+            kind if kind.has_text_field() => text.trim().is_empty(),
             _ => false,
         };
         if field.sparse && cleared {
@@ -983,11 +951,8 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
     let Some(ct) = RegisteredType::parse(ty) else {
         return Err(format!("unknown asset type '{ty}'"));
     };
-    // A resource asset gets the same two checks a component does -- the typed
-    // schema round-trip, then the structural check `cn add` / `cn check` run --
-    // but never a payload compile: an EnvironmentMap's convolution costs seconds
-    // and would stall the editor on every Apply. A source file that parses but
-    // decodes badly is caught by the preview rebuild, which cooks for real.
+    // A resource gets the schema round-trip and structural check but never a
+    // payload compile, which could stall Apply for seconds.
     if ct.is_resource() {
         let args = Value::Object(args.clone());
         ct.normalized_args(&args).map_err(|e| e.to_string())?;
@@ -1066,7 +1031,7 @@ mod tests {
                 color: true
             })
         );
-        // A `background` RGBA box is a color too (so TextLabel/TextInput get a swatch).
+        // A `background` RGBA box is a color too (so TextLabel/TextField get a swatch).
         assert_eq!(
             kind_of("background", &json!([0.0, 0.0, 0.0, 0.0])),
             Some(FieldKind::Vec {

@@ -344,7 +344,7 @@ mod tests {
 
         let error = open_world(&tree.root_path(), surface).expect_err("no world was built");
         let logged = chain(&error);
-        assert!(logged.contains("concinnity build"), "{logged}");
+        assert!(logged.contains("concinnity cook"), "{logged}");
         assert!(logged.contains(&tree.root_path()), "{logged}");
         assert_eq!(code_for(&error), CnResult::CN_ERROR_NO_WORLD_DATA);
     }

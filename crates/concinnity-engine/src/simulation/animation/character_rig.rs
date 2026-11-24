@@ -13,7 +13,7 @@ use concinnity_core::math::sin_cos;
 /// The renderer moves the rendered mesh to follow. The one-frame
 /// producer/consumer hand-offs are invisible at animation rates.
 ///
-/// Not authored in world files: it has no `args`.
+/// Not authored in .jsonl files: it has no `args`.
 #[derive(Debug, Clone)]
 pub struct CharacterRig {
     /// The `SkinnedMesh` resource this rig moves.

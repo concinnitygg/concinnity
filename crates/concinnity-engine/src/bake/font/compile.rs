@@ -14,29 +14,14 @@ use concinnity_core::math::SaturatingFrom;
 // (in low-resolution / atlas pixels).
 const SDF_SPREAD: f32 = 4.0;
 
-// Glyphs are rasterized at this multiple of the requested size, the SDF is
-// computed at that high resolution, and then box-filtered down to the atlas
-// resolution. Oversampling avoids the staircase artifacts that come from
-// thresholding a low-resolution coverage bitmap; the box filter averages
-// OVERSAMPLE² high-res samples per atlas texel, so curves stay smooth.
+// Glyphs rasterize at this multiple of the requested size and the SDF is
+// box-filtered down, avoiding staircase artifacts.
 const OVERSAMPLE: u32 = 8;
 
-// Atlas supersampling: the final atlas stores each glyph at this multiple of the
-// requested size, while the positional metrics (advance, bearing) stay in
-// requested-size units, so on-screen layout is unchanged but the atlas carries
-// SUPERSAMPLE times more texels per displayed pixel. HUD chips draw the font
-// minified (small scale), so a 1x atlas undersamples and aliases; the extra
-// texels let the renderer's trilinear mip chain supersample the glyph down
-// cleanly. It also shrinks the SDF spread in screen terms (SDF_SPREAD is fixed
-// in atlas texels), so thin strokes hold their contrast at small sizes instead
-// of fading out of the antialiasing band.
+// The atlas stores glyphs at this multiple of the requested size, with metrics
+// in requested units, so minified HUD text supersamples through the mip chain
+// and thin strokes keep their contrast.
 const SUPERSAMPLE: u32 = 2;
-
-// If 8× still isn't enough, the next lever isn't more oversample
-// (diminishing returns and atlas memory growth), but switching the EDT to
-// consume fontdue's antialiased coverage values directly instead of
-// binary-thresholding them. That's the Gustavson 2012 anti-aliased EDT, and
-// it places the implicit surface at sub-pixel positions derived from coverage.
 
 /// Source filename of the bundled default face. Companion injection derives the
 /// auto-injected Font asset's name from it, so a generated default font is named

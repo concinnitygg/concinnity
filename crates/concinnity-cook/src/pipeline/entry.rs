@@ -38,8 +38,9 @@ pub fn build_from_path(
     targets: PlatformSet,
 ) -> Result<BuildReport, WorldBuildError> {
     let content = std::fs::read_to_string(json_path).map_err(WorldBuildError::Build)?;
-    let source = crate::authoring::world::WorldSource::file(&content, json_path);
-    let loaded = crate::build_only::prepare_world(source, Some(&tree.assets_dir()))?;
+    let source =
+        crate::authoring::world::WorldSource::file(&content, json_path, Some(tree.content_root()));
+    let loaded = crate::build_only::prepare_world(source)?;
     build_loaded(tree, loaded, targets, None)
 }
 
@@ -48,7 +49,7 @@ pub fn build_from_path(
 pub struct BuildReport {
     /// Each blob file written, with its size on disk in bytes.
     pub blobs: Vec<(std::path::PathBuf, u64)>,
-    /// The `world-lock.json` written beside the blobs.
+    /// The `cook-lock.json` written beside the blobs.
     pub lock: std::path::PathBuf,
     /// Payloads the build cache already held.
     pub cache_hits: usize,
@@ -86,8 +87,8 @@ pub fn build_loaded(
     targets: PlatformSet,
     progress: Option<ProgressFn<'_>>,
 ) -> Result<BuildReport, WorldBuildError> {
-    let assets_dir = tree.assets_dir();
-    let result = build_compiled_with_progress(loaded.assets, Some(&assets_dir), targets, progress)?;
+    let root = tree.content_root();
+    let result = build_compiled_with_progress(loaded.assets, Some(root), targets, progress)?;
     let mut report =
         write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed, progress)?;
     report.injected = loaded.injected.len();
@@ -115,7 +116,7 @@ pub(crate) fn write_blobs_to(
     )
 }
 
-/// Write the blobs and world-lock.json for a compiled world into `tree`, then
+/// Write the blobs and cook-lock.json for a compiled world into `tree`, then
 /// render its thumbnails: the shared build tail used by the CLI and the
 /// editor. The lock records each asset under its real name plus every
 /// injected default with its full args. The report's `injected` is left for
@@ -181,7 +182,7 @@ fn write_outputs(
     let thumbnails = crate::compile::thumbnail::bake_thumbnails(result, progress);
     Ok(BuildReport {
         blobs,
-        lock: tree.world_lock_path(),
+        lock: tree.cook_lock_path(),
         cache_hits: result.cache_hits,
         cache_misses: result.cache_misses,
         injected: 0,
@@ -191,25 +192,26 @@ fn write_outputs(
 
 /// Run the full build pipeline on an in-memory JSONL string without writing any
 /// blobs. Loads, expands, and validates the world (`crate::build_only::prepare_world`),
-/// then compiles it. `assets_dir` is the asset search root a bare `source`
-/// filename is searched under.
+/// then compiles it. `root` is the root every relative path resolves under.
 ///
 /// # Errors
 ///
 /// Returns an error if the world fails validation or an asset fails to compile.
 pub fn build_pipeline_from_str(
     content: &str,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     targets: PlatformSet,
 ) -> Result<PipelineResult, WorldBuildError> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir)?;
-    build_compiled(loaded.assets, assets_dir, targets)
+    let loaded = crate::build_only::prepare_world(crate::authoring::world::WorldSource::text(
+        content, root,
+    ))?;
+    build_compiled(loaded.assets, root, targets)
 }
 
 /// Compile an already-prepared world (expanded + structurally and semantically
 /// validated) into in-memory blobs. This is the compile-only stage; it assumes
 /// the assets have passed `crate::build_only::prepare_world`, which should have been
-/// given the same `assets_dir`: an asset resolves its source the same way in
+/// given the same `root`: an asset resolves its source the same way in
 /// both halves.
 ///
 /// # Errors
@@ -217,10 +219,10 @@ pub fn build_pipeline_from_str(
 /// Returns an error if an asset fails to import or compile.
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     targets: PlatformSet,
 ) -> Result<PipelineResult, WorldBuildError> {
-    build_compiled_with_progress(assets, assets_dir, targets, None)
+    build_compiled_with_progress(assets, root, targets, None)
 }
 
 /// [`build_compiled`] reporting the import and compile stages through
@@ -231,16 +233,16 @@ pub fn build_compiled(
 /// Returns an error if an asset fails to import or compile.
 pub fn build_compiled_with_progress(
     assets: Vec<WorldJsonlAsset>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     targets: PlatformSet,
     progress: Option<ProgressFn<'_>>,
 ) -> Result<PipelineResult, WorldBuildError> {
-    compile_world(assets, assets_dir, targets, progress).map_err(WorldBuildError::Build)
+    compile_world(assets, root, targets, progress).map_err(WorldBuildError::Build)
 }
 
 fn compile_world(
     mut assets: Vec<WorldJsonlAsset>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
     targets: PlatformSet,
     progress: Option<ProgressFn<'_>>,
 ) -> std::io::Result<PipelineResult> {
@@ -255,7 +257,7 @@ fn compile_world(
     // means no work). On a miss, the recorded key is used when the compile
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
-    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, targets);
+    let mesh_cache = probe_mesh_payload_cache(&assets, root, targets);
     let imports = match pending_imports(&assets, &mesh_cache) {
         0 => StageProgress::silent(BuildStage::Import),
         pending => progress.stage(BuildStage::Import, pending),
@@ -266,11 +268,11 @@ fn compile_world(
     // skinned-mesh pass so an importer that wanted to share state could read
     // already-imported skeletons; today both passes parse the .glb fresh,
     // but the ordering keeps that option open without an API churn.
-    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache, assets_dir, &imports)?;
-    desugar_fbx_skinned_meshes(&mut assets, &mesh_cache, &imports)?;
-    desugar_gltf_meshes(&mut assets, &mesh_cache, assets_dir, &imports)?;
-    desugar_fbx_meshes(&mut assets, &mesh_cache, &imports)?;
-    desugar_animation_imports(&mut assets, assets_dir, &imports)?;
+    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache, root, &imports)?;
+    desugar_fbx_skinned_meshes(&mut assets, &mesh_cache, root, &imports)?;
+    desugar_gltf_meshes(&mut assets, &mesh_cache, root, &imports)?;
+    desugar_fbx_meshes(&mut assets, &mesh_cache, root, &imports)?;
+    desugar_animation_imports(&mut assets, root, &imports)?;
     desugar_root_motion(&mut assets)?;
     crate::compile::character_shape::warn_unresolved(&assets);
     crate::compile::character::bake::bake_shapes(&mut assets, |name| {
@@ -341,7 +343,7 @@ fn compile_world(
             partition: &partition,
             mesh_source_handles: &resource_handles,
             max_blob_bytes: crate::blob::DEFAULT_MAX_BLOB_BYTES,
-            assets_dir,
+            root,
             targets,
             mesh_cache: &mesh_cache,
             progress,
@@ -1070,5 +1072,47 @@ mod tests {
                 .scene,
             None
         );
+    }
+
+    // A library marked with `.concinnity/` builds the same on its own and
+    // mounted at a project's `assets/`: its files are named from its own root
+    // either way, whichever world includes it.
+    #[test]
+    fn a_marked_library_builds_standalone_and_mounted() {
+        let dir = concinnity_testing::TempTree::new();
+        let project = dir.path();
+        let library = project.join("assets");
+        let write = |path: &Path, bytes: &[u8]| {
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("dirs");
+            std::fs::write(path, bytes).expect("write");
+        };
+        std::fs::create_dir_all(library.join(concinnity_host::store::source::LIBRARY_MARKER))
+            .expect("marker");
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 1, 1);
+            enc.set_color(png::ColorType::Rgba);
+            let mut writer = enc.write_header().expect("png header");
+            writer
+                .write_image_data(&[200, 120, 40, 255])
+                .expect("png data");
+        }
+        write(&library.join("tex/bark.png"), &png);
+        write(
+            &library.join("kits/bark.jsonl"),
+            br#"["Texture",{"$id":"tex_bark","source":"tex/bark.png"}]"#,
+        );
+        let gallery = library.join("apps/gallery.jsonl");
+        write(&gallery, br#"["Include",{"path":"kits/bark.jsonl"}]"#);
+        let world = project.join("world.jsonl");
+        write(&world, br#"["Include",{"path":"assets/kits/bark.jsonl"}]"#);
+
+        let mounted = crate::paths::StateTree::at(project);
+        build_from_path(&mounted, &world, Platform::Metal.into()).expect("the project world");
+        build_from_path(&mounted, &gallery, Platform::Metal.into())
+            .expect("the library's world, from the project");
+        let standalone = crate::paths::StateTree::at(&library);
+        build_from_path(&standalone, &gallery, Platform::Metal.into())
+            .expect("the library's world, on its own");
     }
 }

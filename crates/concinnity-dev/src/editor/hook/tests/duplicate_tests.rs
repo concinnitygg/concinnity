@@ -2,16 +2,15 @@
 //! and selects, and the Ctrl+D that stands down while the Behavior panel owns
 //! the keyboard.
 
-use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput};
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
 use concinnity_engine::ecs::World;
 use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 
 use super::fixtures::{entry, hook, world_with_input};
-use crate::editor::behavior;
 use crate::editor::hook::declared_id;
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{select, selected};
+use crate::editor::hook::tests::fixtures::{select, selected, toasted};
 use crate::editor::panels::registry::{self, PanelKey};
 
 // Duplicating the selection clones each authored entry (args included) under
@@ -44,7 +43,7 @@ fn duplicate_selection_clones_entries_and_selects_the_copies() {
     let lines = h.console_sink.window(0, 16);
     assert!(lines.iter().any(|l| l.text == "duplicated 1"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), 2, "one undo step removes the whole batch");
     assert!(!h.can_undo());
 }
@@ -59,15 +58,12 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
-    for id in behavior::panel::ids().field_ids() {
-        world.push_identified(id, TextInput::default());
-    }
     let mut h = hook(vec![entry("box", "Sprite")]);
     select(&mut h, &["box"]);
     h.tick(&mut world);
     assert_eq!(h.entries.len(), 2, "Ctrl+D duplicates the selection");
 
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     select(&mut h, &["box"]);
     let before = h.entries.len();
     h.tick(&mut world);
@@ -111,7 +107,7 @@ fn duplicates_own_copies_of_their_files() {
     assert_eq!(read("tale_copy.md"), "someone else's", "never overwritten");
     assert_eq!(read("tale_copy_1.md"), "tale");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), 3);
     assert!(!h.can_undo(), "one step");
     assert!(
@@ -133,11 +129,9 @@ fn a_shader_is_not_duplicated_past_the_limit() {
     h.run_console_line(&mut world, "/dup");
     assert_eq!(h.entries.len(), max);
     assert!(!h.dirty);
-    let cards = h.notifier.stack().cards;
+    let cards = toasted(&mut h);
     assert!(
-        cards
-            .iter()
-            .any(|c| c.message.starts_with("Not duplicated")),
+        cards.iter().any(|c| c.starts_with("Not duplicated")),
         "{cards:?}"
     );
 }

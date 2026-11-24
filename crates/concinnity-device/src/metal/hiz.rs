@@ -206,11 +206,7 @@ impl HiZResources {
 }
 
 impl MtlContext {
-    // Encode the Hi-Z build into `cmd_buf`. Reads this frame's MSAA main
-    // depth and writes the mip chain that *next* frame's cull dispatch
-    // consults. A no-op when no Hi-Z resource was built (bindless cull
-    // pipeline not active). Caller runs this on the outer command buffer
-    // after `execute_graph` so the Main pass has already written depth.
+    // Encode the Hi-Z build from this frame's main depth. A no-op without Hi-Z.
     pub(in crate::metal) fn encode_hiz_build(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

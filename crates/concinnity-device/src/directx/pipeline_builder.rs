@@ -1,11 +1,7 @@
-// World Shader and SdfVolume pipelines built on a hot-reload worker.
-//
-// `ID3D12Device` is free-threaded and every object a PSO is created against is
-// reference counted, so the builder holds its own references to the device and
-// the root signatures. A PSO built against a root signature the context no
-// longer binds is never swapped in: the context compares the one it was built
-// against with its own. The pipeline library is the frame thread's, so a
-// worker's PSO builds uncached.
+// World Shader and SdfVolume pipelines built on a hot-reload worker, holding
+// its own device and root-signature references. A PSO built against a root
+// signature the context no longer binds is never swapped in. Worker builds
+// skip the frame thread's pipeline library.
 
 use concinnity_engine::components::ShaderPrograms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};

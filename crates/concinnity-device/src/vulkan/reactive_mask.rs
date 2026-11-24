@@ -1,15 +1,9 @@
-// The reactive mask on Vulkan: one R8 render-resolution image per frame in
-// flight, written beside the scene by the particle and transparent passes and
-// read by TAA, the upscalers and the reactive view. Like the scene spine it
-// rests in SHADER_READ_ONLY_OPTIMAL and its writers' render passes move it in
-// and out of the attachment layout, which is why the frame graph's barriers for
-// it are left to them.
-//
-// A writer has three compatible render passes, one per `ReactiveWrite`; they
-// differ only in the mask's load and store ops and initial layout, so its
-// pipeline and framebuffers serve all three. A device without
-// `independentBlend` cannot max-blend the mask beside the alpha-blended scene,
-// so there the writers draw the scene alone and the mask is off for the run.
+// The reactive mask: one R8 render-resolution image per frame in flight,
+// written beside the scene by the particle and transparent passes and read by
+// TAA, the upscalers and the reactive view. It rests SHADER_READ_ONLY and its
+// writers' render passes move it, so the graph leaves its barriers to them.
+// Each writer has three compatible render passes, one per `ReactiveWrite`.
+// Without `independentBlend` the mask is off for the run.
 
 use ash::vk;
 use concinnity_engine::render::backend::error::RenderResult;
@@ -232,11 +226,8 @@ impl WriterRenderPasses {
     }
 }
 
-// Clear `mask` outside any render pass: for a writer that draws nothing on a
-// frame it was to clear, and for a reader that must have a mask on a frame with
-// no writer. From the resting layout to a transfer and back, ordered after any
-// earlier read and before any later read or writer pass, whose incoming
-// dependency waits on the attachment stage.
+// Clear `mask` outside any render pass, for a writer that draws nothing on a
+// clearing frame or a reader with no writer this frame.
 pub(in crate::vulkan) fn clear_outside_pass(rec: &Recorder<'_>, mask: vk::Image) {
     let reads = vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER;
     let later = reads | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;

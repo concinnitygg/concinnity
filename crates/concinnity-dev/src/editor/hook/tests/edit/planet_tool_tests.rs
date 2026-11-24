@@ -48,7 +48,7 @@ fn rig() -> (EditorHook, World) {
         serde_json::json!({"type": "Prop", "args": {"$id": "crate"}}),
         serde_json::json!({"type": "Planet", "args": {"layers": [{"grass": "meadow"}]}}),
     ]);
-    registry::panel(PanelKey::Planet).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Planet, &mut h, &mut world);
     (h, world)
 }
 
@@ -164,6 +164,6 @@ fn the_tool_keys_stand_down_while_a_box_is_typed_in() {
 fn closing_the_panel_puts_the_tool_down() {
     let (mut h, mut world) = rig();
     h.planet_tool.tools.toggle(Tool::Erase);
-    registry::panel(PanelKey::Planet).close(&mut h, &mut world);
+    registry::close(PanelKey::Planet, &mut h, &mut world);
     assert_eq!(h.planet_tool.tools.active, None);
 }

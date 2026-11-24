@@ -4,24 +4,21 @@
 //! unpickable.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 use std::collections::BTreeSet;
 
-use super::fixtures::{click_at, entry, hook, pick_world, release_at, set_input};
+use super::fixtures::{click_at, entry, hook, pick_world, release_at, rings, set_input};
 use crate::editor::hook::FormTarget;
 use crate::editor::hook::pick::{camera_ray, ray_hits};
 use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 
-use crate::editor::panels::assets_panel;
-
 use crate::editor::hook::tests::fixtures::{active, entry_target, selected};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
-use crate::editor::viewport::highlight;
 use crate::test_support::isolate_state_dir;
 
 // A click through the scene picks the nearest hit and nothing more: no
@@ -51,7 +48,7 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
     assert!(!h.form_open(), "a viewport click opens no form");
 
     // An already-open form follows the pick instead.
-    h.open_asset_form("box_far", &mut world);
+    h.open_asset_form("box_far");
     assert_eq!(h.form.target, entry_target(&h, 1));
     // Off the repeat-click slop, so this is a fresh pick and not a cycle.
     click_at(&mut world, &mut h, [650.0, 370.0]);
@@ -161,7 +158,7 @@ fn a_history_jump_keeps_a_selection_its_entries_survive() {
 
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         active(&h).as_deref(),
         Some("box_near"),
@@ -184,7 +181,7 @@ fn a_history_jump_drops_a_member_whose_entry_it_removes() {
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(active(&h).as_deref(), Some("added"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         active(&h).as_deref(),
         None,
@@ -202,20 +199,13 @@ fn selection_ring_tracks_the_picked_asset() {
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
 
-    let ring = |world: &World| {
-        world
-            .get_by_id::<Sprite>(highlight::ids().sprites[0])
-            .cloned()
-            .expect("outline sprite injected")
-    };
-    let s = ring(&world);
-    assert!(s.visible, "the ring shows on pick");
-    let (cx, cy) = (s.x + s.width * 0.5, s.y + s.height * 0.5);
+    let ring = |world: &World| rings(world).first().map(|r| r.rect);
+    let s = ring(&world).expect("the ring shows on pick");
+    let (cx, cy) = (s[0] + s[2] * 0.5, s[1] + s[3] * 0.5);
     assert!(
         (cx - 640.0).abs() < 2.0 && (cy - 360.0).abs() < 2.0,
         "ring centered on the box, got ({cx}, {cy})"
     );
-    assert!(s.border_width > 0.0 && s.tint[3] == 0.0, "border-only ring");
 
     // Play mode hides the ring; returning to edit mode restores it.
     h.sim.state = sim::SimState::Playing;
@@ -227,10 +217,10 @@ fn selection_ring_tracks_the_picked_asset() {
         },
     );
     h.tick(&mut world);
-    assert!(!ring(&world).visible, "hidden in play mode");
+    assert!(ring(&world).is_none(), "hidden in play mode");
     h.sim.state = sim::SimState::Stopped;
     h.tick(&mut world);
-    assert!(ring(&world).visible, "back in edit mode it returns");
+    assert!(ring(&world).is_some(), "back in edit mode it returns");
 }
 
 // A locked asset is skipped by viewport picking: the click passes through to
@@ -327,11 +317,10 @@ fn ray_hits_leaves_out_a_box_the_ray_misses() {
     assert_eq!(ray_hits(&world, &ray, &BTreeSet::new()), vec![near]);
 }
 
-// A viewport pick unfolds the picked asset's group and scrolls its row into
-// the tree's window.
+// A viewport pick unfolds the picked asset's group and asks for its row to be
+// scrolled into view.
 #[test]
 fn viewport_pick_reveals_the_tree_row() {
-    let world = World::new();
     let mut h = hook(Vec::new());
     h.open[PanelKey::Assets] = true;
     h.assets.stale = false;
@@ -347,12 +336,11 @@ fn viewport_pick_reveals_the_tree_row() {
             .collect(),
     }];
 
-    h.reveal_in_tree("a25", &world);
+    h.reveal_in_tree("a25");
     assert_eq!(h.assets.unfolded, vec![0], "the group unfolds");
-    // Rows: header at 0, a25 at 26; the scroll clamps to the last window.
-    assert_eq!(h.assets.scroll, 31 - assets_panel::ROW_POOL);
-
-    // A revealed row already inside the window leaves the scroll alone.
-    h.reveal_in_tree("a20", &world);
-    assert_eq!(h.assets.scroll, 31 - assets_panel::ROW_POOL);
+    assert_eq!(
+        h.assets.reveal,
+        Some(26),
+        "a25 after the header and a00..a24"
+    );
 }

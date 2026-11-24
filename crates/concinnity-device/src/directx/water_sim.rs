@@ -398,11 +398,8 @@ fn write_mip_uav(
 }
 
 impl DxContext {
-    // Encode the `WaterSim` node: for every simulation, evolve and transform
-    // its rows, then its columns into mip 0, then reduce down the mips, each
-    // mip of its layers handed back to the resting state once written; then
-    // run the wake one frame forward, in frame slot `frame_idx`, when a sea
-    // runs one.
+    // Encode `WaterSim`: per simulation, the row and column transforms into
+    // mip 0 and the mip reduction, then the wake one frame forward.
     pub(in crate::directx) fn encode_water_sim(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -506,7 +503,7 @@ impl DxContext {
             uav_barrier(cmd, &k.row_data);
         }
         uav_barrier(cmd, &k.foam);
-        if let (Some(wake), Some(frame)) = (&ocean.wake, &self.wake_frame)
+        if let (Some(wake), Some(frame)) = (&ocean.wake, self.wake.frame())
             && wake.encode(cmd, frame_idx, &frame.params)
         {
             self.wake.ran();

@@ -1,10 +1,6 @@
-// Name resolution: the authored body walked once, every name replaced by the
-// slot that holds its value at tick time.
-//
-// Compilation is total. The world crate's checker has already rejected unknown
-// names and mistyped expressions, so anything unresolvable here becomes
-// `CExpr::Never` or `COp::Never`, which evaluates to nothing and skips its node
-// rather than panicking.
+// Name resolution: every authored name replaced by its tick-time slot. The
+// world checker already rejected bad input, so anything unresolvable becomes
+// `Never` and skips its node.
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -56,11 +52,8 @@ impl Names<'_> {
     }
 }
 
-// Resolve an authored component name to the tag that still holds its entities
-// at tick time. A load-time pass drains some columns during `World::start`;
-// `surviving_tag` maps those to the runtime component that replaces them
-// (`Prop` -> `PropInstance`) and drops the ones nothing replaces, which the
-// world checker rejects before a build gets here.
+// The tag that still holds an authored component's entities at tick time,
+// mapping drained columns to their replacements (`Prop` -> `PropInstance`).
 fn surviving_tag(name: &str) -> Option<u8> {
     ComponentTag::parse(name)
         .and_then(ComponentTag::surviving_tag)

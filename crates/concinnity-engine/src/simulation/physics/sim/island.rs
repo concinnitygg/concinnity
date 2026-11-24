@@ -1,14 +1,5 @@
-// Which bodies are resting on which, so a settled group can stop being
-// simulated together.
-//
-// Sleeping has to be an island decision rather than a per-body one. A body
-// that stops moving before the one leaning on it would otherwise sleep under a
-// load that is still shifting, and wake a step later looking like a glitch.
-// Grouping the bodies a contact connects and requiring the whole group to be
-// still makes the stack settle as one.
-//
-// Union-find over body slots, in two fixed arrays: no allocation while
-// stepping, and no traversal order that could vary between runs.
+// Islands of bodies connected by contacts, so a whole stack sleeps together.
+// Union-find over slots in fixed arrays.
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

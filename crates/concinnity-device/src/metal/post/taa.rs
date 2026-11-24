@@ -64,11 +64,8 @@ impl MtlContext {
         }
     }
 
-    // Encode the TAA resolve pass: one fullscreen-triangle draw that blends
-    // `scene_input` (the reflection composite's output, or `hdr_resolve` when no
-    // reflection path is live) with the reprojected history. Runs between SSR
-    // and bloom; its output is both the scene color the later passes consume
-    // and next frame's history.
+    // Encode the TAA resolve: blend `scene_input` with the reprojected history.
+    // The output is both the later passes' scene and next frame's history.
     pub(in crate::metal) fn encode_taa(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

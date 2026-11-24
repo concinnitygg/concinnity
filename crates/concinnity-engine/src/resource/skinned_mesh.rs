@@ -122,6 +122,7 @@ pub struct SkinnedMesh {
     /// Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the
     /// build imports `vertices` / `indices` / `skeleton` from it; an
     /// inline-authored mesh leaves this empty.
+    #[asset(file)]
     pub source: String,
     /// Which skinned mesh of `source` to import, in file declaration order
     /// (default 0). A character split into several meshes bound to one

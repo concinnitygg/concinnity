@@ -95,9 +95,10 @@ pub struct Texture {
     /// `puff` is a soft white disc fading to clear at its rim, for particle
     /// sprites.
     pub generator: String,
-    /// Path to the source image, relative to the project root.
-    /// Used only when `generator` is empty. A `.glb` path is allowed, use
-    /// `image_index` to pick which embedded image to use.
+    /// Path to the source image, relative to the root of the file holding the
+    /// line. Used only when `generator` is empty. A `.glb` path is allowed,
+    /// use `image_index` to pick which embedded image to use.
+    #[asset(file)]
     pub source: String,
     /// When `source` points to a `.glb` file, which embedded image to import.
     /// Ignored for regular image files.

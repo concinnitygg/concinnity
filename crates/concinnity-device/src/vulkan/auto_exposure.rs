@@ -218,11 +218,7 @@ impl AutoExposureResources {
         self.average_pipeline = average_pipeline;
     }
 
-    // Rewrite the per-frame build sets' HDR sampled-image binding after a
-    // swapchain rebuild swapped the `hdr_resolve_images`. The histogram /
-    // output buffers are resolution-independent and survive the rebuild
-    // untouched; only binding 0 of each build set needs to point at the
-    // new view.
+    // Re-point each build set's HDR binding after a resize; the buffers survive.
     pub(in crate::vulkan) fn rebuild(
         &self,
         device: &VkDevice,
@@ -293,16 +289,9 @@ fn create_pipelines(
 }
 
 impl VkContext {
-    // Step the auto-exposure EMA from a previous frame's GPU measurement,
-    // then push the new exposure multiplier into `self.post_process.exposure`.
-    // A no-op when auto-exposure is disabled: the static authored EV then
-    // drives `exposure` unchanged.
-    //
-    // Called at the top of `draw_frame` after the fence wait for this slot's
-    // previous use completes, so the matching readback buffer holds a fully
-    // committed GPU result (one or two frames stale, smoothed by the EMA).
-    // `elapsed` is the total elapsed seconds since startup; the per-call
-    // diff drives `dt` for the EMA.
+    // Step the auto-exposure EMA from a previous frame's measurement, committed by
+    // this slot's fence wait, and push the exposure multiplier. A no-op without
+    // auto-exposure.
     #[expect(
         clippy::cast_ptr_alignment,
         reason = "mapped memory is aligned to at least `minMemoryMapAlignment`"
@@ -319,9 +308,6 @@ impl VkContext {
         };
         let ptr = readback.mapped_ptr() as *const ExposureMeasurement;
 
-        // Read the previous frame's measurement for this slot. The fence wait
-        // above already gated the GPU work that wrote it, so the HOST_COHERENT
-        // mapping reflects the committed value.
         // SAFETY: `ptr` is the HOST_COHERENT mapping of this slot's output buffer, which holds one
         // `ExposureMeasurement`; the fence wait above gated the GPU write, so the value is
         // committed and initialized.
@@ -335,14 +321,8 @@ impl VkContext {
         self.post_process.exposure = adaptation.step(measured, dt);
     }
 
-    // Encode the auto-exposure histogram passes against the current frame's
-    // resolved HDR scene. The build kernel runs one thread per metered pixel;
-    // the average kernel runs one threadgroup of `HISTOGRAM_BINS` threads
-    // that reduces the histogram, clears it for the next frame, and writes
-    // the average log-luminance to the device-local output buffer; a copy
-    // then carries the value into this frame's readback buffer for the
-    // CPU's EMA step at the top of a later frame. A no-op when
-    // auto-exposure is disabled.
+    // Encode the histogram build and average over this frame's HDR scene, then copy
+    // the average into this frame's readback buffer for a later frame's EMA.
     pub(in crate::vulkan) fn encode_auto_exposure(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
@@ -356,11 +336,7 @@ impl VkContext {
             return;
         }
 
-        // Order Main pass's resolve color writes before our compute
-        // shader sample of the HDR resolve image. The render pass's
-        // exit-dep targets COLOR_ATTACHMENT_OUTPUT (for the next
-        // subpass-attachment consumer); compute-shader reads need a
-        // dedicated barrier.
+        // Order the main pass's resolve writes before the compute sample.
         let pre_barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -453,11 +429,8 @@ impl VkContext {
             std::slice::from_ref(&copy),
         );
 
-        // Order the transfer write to the host-visible buffer before the
-        // CPU read at the top of a later frame. The fence wait that
-        // gates this slot's next trip provides the host-side ordering;
-        // this barrier just makes the transfer write visible to the
-        // host.
+        // Make the copy visible to the host read a later frame does after its fence
+        // wait.
         let host_barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ);

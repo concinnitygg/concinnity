@@ -12,12 +12,15 @@
 - [Behavior](Behavior.md) - A unit of world logic: an event source, the entities it runs against, its state, the world it reads, and the nodes it runs.
 - [BenchmarkConfig](BenchmarkConfig.md) - Customizes how a world is benchmarked.
 - [BlockType](BlockType.md) - Describes one entry in a [`VoxelChunk`](VoxelChunk.md) palette.
+- [Button](Button.md) - A captioned button: a click fires its `action`.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
 - [CameraShot](CameraShot.md) - A reusable [`Camera3D`](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
 - [CameraTrack](CameraTrack.md) - Drives the world's [`Camera3D`](Camera3D.md) along a scripted path, so a fly-through visits the same poses on every machine that runs it.
+- [Canvas](Canvas.md) - An area that draws a named list of shapes, clipped to itself, such as a chart of cards and wires or marks laid over a view. The app writes the shape list into its UI state at runtime.
 - [CharacterModel](CharacterModel.md) - A character body that conforms to a [`CharacterSchema`](CharacterSchema.md).
 - [CharacterSchema](CharacterSchema.md) - The contract between a character body and everything that uses it.
 - [CharacterShape](CharacterShape.md) - Shape sliders and joint proportions applied to one [`SkinnedMesh`](SkinnedMesh.md).
+- [Checkbox](Checkbox.md) - A box that shows and flips a boolean, with a caption beside it and an optional dimmer note under the caption.
 - [Cloud](Cloud.md) - A layer of clouds in the sky: fair-weather cumulus, a gray stratus sheet, towering heaps or anything between, drawn as a volume that can be seen from below, flown through and seen from above.
 - [ColorLut](ColorLut.md) - A 3D color-grading lookup table applied as a final post-process step. The build bakes the source into a color cube; the graded result is blended over the image by `strength`.
 - [CubemapTexture](CubemapTexture.md) - A six-face HDR cubemap baked from an equirectangular Radiance HDR source.
@@ -33,17 +36,21 @@
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - The world's graphics settings, one section per feature. One per world; a world that draws gets an empty one when it declares none.
 - [Grass](Grass.md) - The look of a grass cover: individual blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
+- [Grid](Grid.md) - A scrolling grid of the items of a list in the app's [`UiStateValues`](UiStateValues.md), as many columns of cells as its width holds, drawing only the cells in view.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
-- [Include](Include.md) - Inlines the entries of another world file at this line.
+- [Include](Include.md) - Inlines the entries of another file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action.
-- [LayoutContainer](LayoutContainer.md) - Positions a set of [`TextLabel`](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, color, background, padding) but their `x`/`y` are overwritten each frame.
+- [Layout](Layout.md) - Places overlay elements in a row, a column, or a stack, so a screen does not hand-position every piece.
 - [LightRig](LightRig.md) - A named grouping of lights.
+- [List](List.md) - A scrolling list of the items of a list in the app's [`UiStateValues`](UiStateValues.md), drawing only the rows in view, so it stays cheap at thousands of items.
 - [LoadingOverlay](LoadingOverlay.md) - Requests the scene-loading overlay: a full-window backdrop with a progress bar, shown while a scene jump waits for its streamed content and faded out once the destination scene is fully resident.
 - [MainMenu](MainMenu.md) - A ready-made menu declared in a single line.
 - [Material](Material.md) - A Material bundles the surface parameters that control how a [Prop](Prop.md) is lit and shaded.
 - [MaterialPalette](MaterialPalette.md) - A named set of [Material](Material.md) entries with short aliases.
+- [Menu](Menu.md) - A popup menu: a column of entries drawn over the rest of its [Screen](Screen.md) while the boolean `open` names is true.
 - [Mesh](Mesh.md) - Raw geometry. Supply `vertices` and `indices` directly, or import them from a binary glTF file with `source` + `primitive_index`.
+- [Modal](Modal.md) - A dialog drawn centered over a dimmed [Screen](Screen.md) while the boolean `open` names is true: a title, a wrapped message, and a row of buttons.
 - [Model](Model.md) - An ordered list of sub-meshes, each with its own material.
 - [NightSky](NightSky.md) - The sky beyond the air: stars, the Milky Way, distant galaxies and the moon, fixed to the celestial sphere so they rise and set as a [`SkyRotation`](SkyRotation.md) turns it.
 - [OptionSelect](OptionSelect.md) - A settings row that cycles through a fixed set of values on click.
@@ -82,11 +89,16 @@
 - [Story](Story.md) - A compiled branching story graph, played at runtime by the story system.
 - [StoryImport](StoryImport.md) - Imports a Markdown story file as a single declaration.
 - [StreamingConfig](StreamingConfig.md) - Enables and tunes asset streaming.
+- [Tabs](Tabs.md) - A strip of tabs sharing its width, one of them selected.
 - [Terrain](Terrain.md) - A rectangle of ground shaped by a height grid: rendered as a mesh with `material`, collided by physics, and covered by grass `layers`.
-- [TextInput](TextInput.md) - An editable single-line text field drawn as a UI overlay.
+- [TextArea](TextArea.md) - A multi-line text editor: line numbers in a gutter, a scrolling window of the text, a caret and selection, and scrollbars.
+- [TextField](TextField.md) - An editable single-line text field drawn as a UI overlay.
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
+- [Toasts](Toasts.md) - A stack of short-lived message cards in a corner of its [Screen](Screen.md), newest nearest the corner, drawn over the screen's other elements.
 - [TriggerVolume](TriggerVolume.md) - An invisible sensor region that reports when something enters or leaves it.
+- [UiStateValues](UiStateValues.md) - The values the app's UI state holds when the world loads, and the lists it shows.
+- [ValueSlider](ValueSlider.md) - A track and handle dragged to set the number `value` names, between `min` and `max`, with the number written at its right end.
 - [Variables](Variables.md) - The world's shared variables: the state [Behavior](Behavior.md)s read with `var` and write with `set`, and the state a `save` node persists.
 - [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
@@ -129,6 +141,7 @@
 - [Display](Display.md) - How the finished frame is encoded for the display: standard dynamic range, extended-range HDR, or PQ (HDR10). The `display` section of [`GraphicsConfig`](GraphicsConfig.md); left unset, the output is standard dynamic range.
 - [DriveKey](DriveKey.md) - One stretch of a scripted [`RollingDrive`](RollingDrive.md): how the drive is steered from `seconds` until the next key.
 - [Ease](Ease.md) - How a [`CameraTrack`](CameraTrack.md) leg paces the run between its start and its end.
+- [EntryMark](EntryMark.md) - The mark a menu entry shows beside it while a boolean is true.
 - [Exposure](Exposure.md) - Scene exposure: a fixed offset in photographic stops, or auto-exposure that measures the scene's average brightness each frame and adapts toward a balanced mid-tone. The `exposure` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [`CameraController`](CameraController.md).
@@ -138,16 +151,24 @@
 - [GroundCover](GroundCover.md) - A look a [Planet](Planet.md)'s ground takes where its `rule` holds: sand on a beach, a duller seabed under deeper water, rock on steep slopes.
 - [GroundMap](GroundMap.md) - Which of a ground surface's maps a [Texture](Texture.md) holds.
 - [GroundRule](GroundRule.md) - Where on the ground something belongs: between two altitudes and between two slopes, fading in and out over soft edges.
+- [Icon](Icon.md) - A small vector icon drawn in one color: rounded rectangles, filled or outlined, laid out on a unit square and scaled to whatever cell shows it, so it stays sharp at any size. Parts draw back to front.
+- [IconPart](IconPart.md) - One rounded rectangle of an [Icon](Icon.md), in units of the icon's side.
 - [IndirectLighting](IndirectLighting.md) - Indirect (ambient) lighting: how strong the environment's ambient term is, and whether a screen-space bounce lets nearby lit surfaces bleed color onto one another. The `indirect_lighting` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [IndirectTechnique](IndirectTechnique.md) - Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl` is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
 - [JointProportion](JointProportion.md) - One joint's proportion change.
-- [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.
 - [KeyMods](KeyMods.md) - The modifier keys held with a key press.
 - [KeyPolarity](KeyPolarity.md) - Whether a shape key is one target or a `+` / `-` pair.
 - [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
-- [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.
+- [LayoutAlign](LayoutAlign.md) - Where a [Layout](Layout.md)'s children sit along an axis when they leave space over.
+- [LayoutAnchor](LayoutAnchor.md) - Where a root [Layout](Layout.md) sits on its screen.
+- [LayoutChild](LayoutChild.md) - One child of a [Layout](Layout.md), and how it is sized.
+- [LayoutDirection](LayoutDirection.md) - How a [Layout](Layout.md) arranges its children.
+- [LayoutSize](LayoutSize.md) - How one axis of a [Layout](Layout.md) child is sized.
+- [ListToggle](ListToggle.md) - A column of icons at the head of a [List](List.md)'s rows, each cell flipping one flag of its row, such as whether an item shows or is locked.
 - [MainMenuItem](MainMenuItem.md) - One entry in a [`MainMenu`](MainMenu.md).
+- [MenuEntry](MenuEntry.md) - One entry of a [Menu](Menu.md).
+- [ModalButton](ModalButton.md) - One button of a [Modal](Modal.md).
 - [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
 - [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
 - [PaletteEntry](PaletteEntry.md) - One entry in a [`MaterialPalette`]. Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. The [Texture](Texture.md)s named by `albedo` / `normal_map` resolve on the expanded Material.
@@ -170,6 +191,7 @@
 - [SchemaKey](SchemaKey.md) - One shape key the schema knows, authored on the source or synthesized.
 - [SchemaRegion](SchemaRegion.md) - A named group of joints. A vertex belongs to a region by the skin weight it gives the region's joints.
 - [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
+- [ScreenSpace](ScreenSpace.md) - Where a [Screen](Screen.md)'s elements are laid out.
 - [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [`ScrollPanel`](ScrollPanel.md).
 - [ScrollRow](ScrollRow.md) - One row inside a [`ScrollPanel`](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
 - [SettingsProfile](SettingsProfile.md) - Which settings screen a [`MainMenu`](MainMenu.md)'s `"settings"` item builds.
@@ -196,12 +218,16 @@
 - [SynthesizedTarget](SynthesizedTarget.md) - A morph target the build generates from the mesh instead of reading from the source.
 - [TerrainLayer](TerrainLayer.md) - One ground cover a [Terrain](Terrain.md) grows: a [Grass](Grass.md) look, and where on the terrain it grows.
 - [TextAlign](TextAlign.md) - Horizontal alignment of a [`TextLabel`](TextLabel.md) relative to its `x`.
+- [TextLanguage](TextLanguage.md) - The language a [`TextArea`](TextArea.md) colors its text as.
 - [TextureFiltering](TextureFiltering.md) - How the scene's surface textures (albedo and normal maps) are filtered. The `texture_filtering` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below, capped by the quality tier.
 - [TriggerFilter](TriggerFilter.md) - What a [`TriggerVolume`](TriggerVolume.md) senses.
+- [UiStateList](UiStateList.md) - One list the app's UI state holds: its name and the rows it starts with.
+- [UiStateValue](UiStateValue.md) - One value the UI state starts with: its name and its starting value, whose type the value fixes.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `GraphicsConfig.anti_aliasing.upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9. `Native` renders every output pixel, so the upscaler only anti-aliases.
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler selector for `GraphicsConfig.anti_aliasing.upscaler`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific upscaler and fall back when it is unavailable. DirectX and Vulkan both resolve all three, each from the vendor SDK staged beside the binary; Metal uses `MetalFX` and treats any value as its native path.
 - [VariableDecl](VariableDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
 - [Vignette](Vignette.md) - Darkening toward the corners of the frame. The `vignette` section of [`GraphicsConfig`](GraphicsConfig.md); left unset, there is no vignette.
 - [WaterWave](WaterWave.md) - One authored swell wave on a water surface, on top of the waves the wind raises. Swell is the long, regular motion left by distant weather: it rolls along `direction`, rising and falling `amplitude` around the rest height, `wavelength` between crests, at the speed deep water carries a wave that long (about 1.25 m/s times the square root of the wavelength in meters). `steepness` in [0, 1] pinches the crests and broadens the troughs.
+- [WidgetStyle](WidgetStyle.md) - How a widget draws: its font, its text colors, and the fills of its background, frame, and highlights. Every field has a default, so a widget that sets none draws in the engine's dark UI theme.
 - [WindowMode](WindowMode.md) - How the application window is presented.

@@ -79,11 +79,8 @@ impl GraphQueues {
         (events, self.signaled)
     }
 
-    // Record the terminals of every queue whose carrying command buffer has been
-    // committed, and take the frame's value slice. `pending` names a terminal
-    // whose buffer the caller commits later (the composite pass rides the
-    // command buffer `draw_frame` owns); it is recorded by
-    // [`Self::record_terminal`] once that commit has happened.
+    // Record the terminals of every committed queue and take the frame's value
+    // slice. `pending` is recorded by `record_terminal` once committed.
     pub(super) fn end_submission(&mut self, plan: &FramePlan, pending: Option<PassQueue>) {
         for queue in PassQueue::ALL {
             if Some(queue) == pending {

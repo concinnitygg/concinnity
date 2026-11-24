@@ -47,9 +47,9 @@ pub(crate) struct BuildCtx<'a> {
     // The shader platforms this build cooks for: a shader-backed asset compiles
     // its programs for each, side by side in one payload.
     pub(crate) targets: PlatformSet,
-    // The build's asset search root: the tree a bare `source` filename is
-    // searched under. `None` leaves bare filenames unresolved.
-    pub(crate) assets_dir: Option<&'a Path>,
+    // The build's root, every relative source path resolves under. `None`
+    // leaves a path as written.
+    pub(crate) root: Option<&'a Path>,
     // All sibling assets declared in the same world. Used by types like
     // `VoxelChunk` that need to resolve cross-asset references (palette).
     pub(crate) all_assets: &'a [WorldJsonlAsset],
@@ -172,11 +172,11 @@ impl CacheInputs {
 // tests that compile one asset with no surrounding world.
 #[cfg(test)]
 impl crate::authoring::registry::RegisteredType {
-    fn test_ctx(assets_dir: Option<&Path>) -> BuildCtx<'_> {
+    fn test_ctx(root: Option<&Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "test",
             targets: PlatformSet::single(concinnity_core::platform::Platform::Metal),
-            assets_dir,
+            root,
             all_assets: &[],
         }
     }
@@ -189,17 +189,17 @@ impl crate::authoring::registry::RegisteredType {
     pub(crate) fn compile_payload(
         self,
         args: &serde_json::Value,
-        assets_dir: Option<&Path>,
+        root: Option<&Path>,
     ) -> std::io::Result<Vec<u8>> {
-        (self.entry().compile)(args, &Self::test_ctx(assets_dir))
+        (self.entry().compile)(args, &Self::test_ctx(root))
     }
 
     pub(crate) fn source_files(
         self,
         args: &serde_json::Value,
-        assets_dir: Option<&Path>,
+        root: Option<&Path>,
     ) -> Vec<std::path::PathBuf> {
-        match (self.entry().cache_inputs)(args, &Self::test_ctx(assets_dir)).sources {
+        match (self.entry().cache_inputs)(args, &Self::test_ctx(root)).sources {
             SourceFiles::Extra(paths) | SourceFiles::Only(paths) => paths,
         }
     }

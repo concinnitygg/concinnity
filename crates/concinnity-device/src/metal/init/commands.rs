@@ -15,15 +15,8 @@ use crate::record_pack::RecordPacker;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::record_pack::StaticSlots;
 
-// The bindless buffers an async reflection-probe bake reads across frames
-// (object, draw-args, and the skinned joint palettes) get one EXTRA ring
-// slot; its faces sample the frame's own bindless-texture-args instead.
-// The frame only ever uses slots
-// `frame_ring_index % frames_in_flight` -- i.e. `[0, frames_in_flight)`
-// -- so slot `frames_in_flight` is reserved for the bake: a slot the
-// frame never overwrites, keeping the bake's CPU-written buffers valid
-// across its asynchronous (no `waitUntilCompleted`) GPU capture. See
-// metal/probe.rs `bake_ring_slot`.
+// Ring slots for the buffers a probe bake reads across frames: one past
+// `frames_in_flight`, reserved for the bake since the frame never writes it.
 pub(super) fn ring_slots(frames_in_flight: usize) -> usize {
     frames_in_flight.max(1) + 1
 }

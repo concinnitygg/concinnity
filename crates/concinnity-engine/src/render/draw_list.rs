@@ -297,11 +297,8 @@ pub fn load_mesh_geometry(
             }
         }
     }
-    // ProceduralMesh components are cloned rather than drained, so the column
-    // stays the world's record of what its generators built. A generator the world baked for itself at start carries no locator: its
-    // payload is in the runtime store with the rest of the trailing
-    // `MeshBlock::Runtime` block, loaded after the compiled ones so a handle
-    // the build assigned keeps its index.
+    // ProceduralMesh components are cloned rather than drained. A generator
+    // baked at start has no locator; its payload loads after the compiled ones.
     type Identified<C> = (Option<AssetId>, C);
     let (proc_meshes, baked_meshes): (
         Vec<Identified<ProceduralMesh>>,
@@ -593,11 +590,8 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
             draw_objects: Vec::new(),
             instanced_clusters: Vec::new(),
             prop_draw_indices: Vec::new(),
-            // Map every mesh-source handle to the draw slots that received a copy of
-            // its geometry. Hot-reload (`cn run -f` only) walks this to know which slots
-            // to overwrite when the source `.glb` changes. The slot list accumulates
-            // every push since a mesh shared by N `Prop`s yields N independent draw
-            // objects.
+            // The draw slots holding a copy of each mesh's geometry, for hot
+            // reload.
             mesh_handle_to_draws: hashbrown::HashMap::new(),
             prop_local_bounds: Vec::new(),
         },
@@ -619,14 +613,8 @@ struct DrawListBuilder<'a> {
 }
 
 impl DrawListBuilder<'_> {
-    // append_mesh: add a mesh into the shared buffers by handle, return
-    // (vertex_offset, vertex_count, index_offset, index_count, lod_slices,
-    // local_bb_min, local_bb_max). `lod_slices` is empty for legacy
-    // single-LOD meshes; otherwise each entry is a `LodSlice` pointing at the
-    // alternate's rebased indices in `all_indices`, paired with its switch
-    // distance. Every LOD alternate reuses the same `vertex_offset` /
-    // `vertex_count` since clustering decimation does not modify the vertex
-    // set.
+    // Add a mesh to the shared buffers by handle. LOD alternates share the
+    // vertex range and point at their own indices.
     fn append_mesh(&mut self, handle: usize) -> Option<AppendedMesh> {
         let loaded = self.inputs.mesh_geometry.get(handle)?;
         let all_vertices = &mut self.out.vertices;
@@ -930,11 +918,8 @@ impl DrawListBuilder<'_> {
         Some(())
     }
 
-    // Room components placed at the world origin with optional texture.
-    // Rooms also opt out of culling (they enclose the camera). LOD picks
-    // come from camera-to-origin distance per [`crate::gfx::lod::camera_distance`]'s
-    // sentinel-AABB fallback, so practical swaps only fire if the camera
-    // wanders far from the world origin.
+    // Room components at the world origin, never culled since they enclose the
+    // camera.
     fn append_rooms(&mut self) {
         let DrawListInputs {
             room_geometry,

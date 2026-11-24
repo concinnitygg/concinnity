@@ -1,4 +1,4 @@
-// Readers for the optional numeric args a generator takes from world.jsonl.
+// Readers for the optional numeric args a generator takes from a .jsonl file.
 
 use concinnity_core::math::narrow_f32;
 

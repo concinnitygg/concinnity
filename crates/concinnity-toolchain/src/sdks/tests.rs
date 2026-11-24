@@ -120,15 +120,12 @@ fn install_ngx_dll(dir: &Path) {
 #[test]
 fn check_cfg_directives_declare_every_gated_cfg() {
     let lines = check_cfg_directives();
-    assert_eq!(lines.len(), 8);
+    assert_eq!(lines.len(), 5);
     for cfg in [
         "backend_metal",
         "backend_dx",
         "backend_vk",
         "agility_sdk_configured",
-        "ffx_dx_sdk_bundled",
-        "ffx_vk_sdk_bundled",
-        "xess_sdk_bundled",
         "ngx_sdk_bundled",
     ] {
         assert!(lines.contains(&format!("cargo::rustc-check-cfg=cfg({cfg})")));
@@ -276,22 +273,27 @@ fn ffx_bundles_the_loader_and_upscaler_next_to_exe() {
             let src = ffx_dll(tmp.path(), dll);
             assert!(has(&out, &rerun_path(&src)), "{dll}");
         }
-        assert!(out.contains(&rustc_cfg(runtime.cfg)));
+        assert!(!has(&out, "rustc-cfg"));
         assert!(warnings(&out).is_empty());
     }
 }
 
+// A package building no binary has nowhere to put the runtime, and the build
+// does not depend on it.
 #[test]
-fn ffx_present_without_bundling_emits_cfg_without_copy() {
+fn runtime_sdks_without_bundling_emit_nothing() {
     let tmp = TempDir::new().unwrap();
     install_ffx_dx(tmp.path());
+    install_xess(tmp.path());
     let env = env_in(tmp.path());
 
     let mut out = Vec::new();
     fidelityfx_directives(&env, BinaryTargets::None, FFX_DX12, &mut out);
+    xess_directives(&env, BinaryTargets::None, &mut out);
 
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_dx_sdk_bundled".to_string()));
+    assert!(out.is_empty(), "{out:?}");
     assert!(!profile(tmp.path()).join(FFX_DX12.loader).exists());
+    assert!(!profile(tmp.path()).join("libxess.dll").exists());
 }
 
 // The loader alone cannot upscale: it only finds the effect DLL beside it.
@@ -306,23 +308,17 @@ fn ffx_without_its_upscaler_dll_is_missing() {
 
     assert!(has(&out, "FidelityFX SDK not found at"));
     assert!(has(&out, FFX_VK.upscaler));
-    assert!(!has(&out, "ffx_vk_sdk_bundled"));
     assert!(!profile(tmp.path()).join(FFX_VK.loader).exists());
 }
 
 #[test]
-fn ffx_missing_or_opted_out_emits_no_cfg() {
+fn ffx_missing_or_opted_out_warns() {
     let tmp = TempDir::new().unwrap();
     let env = env_in(tmp.path());
 
     let mut missing = Vec::new();
     fidelityfx_directives(&env, BinaryTargets::Bins, FFX_DX12, &mut missing);
     assert!(has(&missing, "FidelityFX SDK not found at"));
-    assert!(!has(&missing, "ffx_dx_sdk_bundled"));
-
-    let mut quiet = Vec::new();
-    fidelityfx_directives(&env, BinaryTargets::None, FFX_VK, &mut quiet);
-    assert!(warnings(&quiet).is_empty());
 
     let disabled_env = SdkEnv {
         ffx_enabled: false,
@@ -331,12 +327,11 @@ fn ffx_missing_or_opted_out_emits_no_cfg() {
     let mut disabled = Vec::new();
     fidelityfx_directives(&disabled_env, BinaryTargets::Bins, FFX_DX12, &mut disabled);
     assert!(has(&disabled, "CN_ENABLE_FFX_FSR3=0"));
-    assert!(!has(&disabled, "ffx_dx_sdk_bundled"));
     assert!(!has(&disabled, "CN_FIDELITYFX_SDK"));
 }
 
 #[test]
-fn xess_bundles_dll_and_emits_cfg() {
+fn xess_bundles_dll() {
     let tmp = TempDir::new().unwrap();
     install_xess(tmp.path());
     let env = env_in(tmp.path());
@@ -345,19 +340,18 @@ fn xess_bundles_dll_and_emits_cfg() {
     xess_directives(&env, BinaryTargets::Bins, &mut out);
 
     assert!(profile(tmp.path()).join("libxess.dll").is_file());
-    assert!(out.contains(&"cargo::rustc-cfg=xess_sdk_bundled".to_string()));
+    assert!(!has(&out, "rustc-cfg"));
     assert!(warnings(&out).is_empty());
 }
 
 #[test]
-fn xess_missing_or_opted_out_emits_no_cfg() {
+fn xess_missing_or_opted_out_warns() {
     let tmp = TempDir::new().unwrap();
     let env = env_in(tmp.path());
 
     let mut missing = Vec::new();
     xess_directives(&env, BinaryTargets::Bins, &mut missing);
     assert!(has(&missing, "XeSS SDK not found at"));
-    assert!(!has(&missing, "xess_sdk_bundled"));
 
     let disabled_env = SdkEnv {
         xess_enabled: false,
@@ -751,9 +745,11 @@ fn windows_vulkan_sets_up_the_vulkan_sdks() {
 
     let out = graphics_sdk_directives(&[Backend::Vk], &[BinaryTargets::Bins], &env);
 
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_vk_sdk_bundled".to_string()));
     assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
-    assert!(out.contains(&"cargo::rustc-cfg=xess_sdk_bundled".to_string()));
+    let prof = profile(tmp.path());
+    for file in [FFX_VK.loader, FFX_VK.upscaler, "libxess.dll"] {
+        assert!(prof.join(file).is_file(), "{file}");
+    }
     // No DirectX-only setup on the Vulkan path.
     assert!(!has(&out, "CN_ENABLE_AGILITY_SDK"));
 }
@@ -772,15 +768,8 @@ fn directx_and_vulkan_together_set_up_both_apis() {
 
     let out = graphics_sdk_directives(&[Backend::Dx, Backend::Vk], &[BinaryTargets::Bins], &env);
 
-    for cfg in [
-        "ffx_dx_sdk_bundled",
-        "ffx_vk_sdk_bundled",
-        "xess_sdk_bundled",
-        "ngx_sdk_bundled",
-    ] {
-        let line = format!("cargo::rustc-cfg={cfg}");
-        assert_eq!(out.iter().filter(|l| **l == line).count(), 1, "{cfg}");
-    }
+    let ngx = "cargo::rustc-cfg=ngx_sdk_bundled";
+    assert_eq!(out.iter().filter(|l| *l == ngx).count(), 1);
     let prof = profile(tmp.path());
     for file in [
         FFX_DX12.loader,
@@ -804,12 +793,7 @@ fn directx_bundling_runs_every_sdk() {
 
     let out = graphics_sdk_directives(&[Backend::Dx], &[BinaryTargets::Bins], &env);
 
-    for cfg in [
-        "agility_sdk_configured",
-        "ffx_dx_sdk_bundled",
-        "xess_sdk_bundled",
-        "ngx_sdk_bundled",
-    ] {
+    for cfg in ["agility_sdk_configured", "ngx_sdk_bundled"] {
         assert!(out.contains(&format!("cargo::rustc-cfg={cfg}")), "{cfg}");
     }
     assert!(warnings(&out).is_empty());

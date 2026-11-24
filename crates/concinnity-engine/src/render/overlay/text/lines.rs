@@ -28,12 +28,8 @@ impl LaidOut<'_> {
     }
 }
 
-// The content a label actually draws. Wrapping measures in the label's own
-// pixel space with `label.scale`, which gives the same breaks as measuring in
-// window pixels: a screen-owned label scales its advances and its wrap width by
-// the same overlay factor. A centered label has no container (it is fitted to
-// the viewport), so it is left alone. Borrows the authored content whenever no
-// line breaks or truncates, so a fitting label allocates nothing.
+// The content a label draws, wrapped in its own pixel space. Centered labels
+// are left alone, and fitting labels borrow their content.
 pub(super) fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> LaidOut<'a> {
     let content = label.content.as_str();
     let borrowed = LaidOut {
@@ -49,14 +45,9 @@ pub(super) fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> LaidOut<'
     for authored in content.split('\n') {
         authored_lines += 1;
         if label.wrap_width > 0.0 {
-            wrap_line(
-                authored,
-                base,
-                font,
-                label.scale,
-                label.wrap_width,
-                &mut lines,
-            );
+            wrap_line(authored, base, font, label.scale, label.wrap_width, |r| {
+                lines.push(r);
+            });
         } else {
             lines.push(base..base + authored.len());
         }
@@ -120,21 +111,56 @@ fn source_map(content: &str, lines: &[Range<usize>], ellipsis: bool) -> Vec<u32>
     out
 }
 
-// Greedily pack `line`'s words into `out` as byte ranges of the content `line`
-// starts at `base` in, breaking at spaces. A word too wide to fit a line of its
-// own is split mid-word, since leaving it whole would put it back outside the
-// container wrapping exists to respect. Widths accumulate one glyph advance at
-// a time in authored order, matching a from-scratch measure of the same text.
+/// `content` broken at spaces to fit `width`, its lines joined by newlines and
+/// appended to `out`, so a label of it draws the same lines with no wrap of
+/// its own.
+pub(in crate::render::overlay) fn wrap_into(
+    content: &str,
+    font: &LoadedFont,
+    scale: f32,
+    width: f32,
+    out: &mut String,
+) {
+    let mut first = true;
+    let mut base = 0usize;
+    for authored in content.split('\n') {
+        wrap_line(authored, base, font, scale, width, |r| {
+            if !first {
+                out.push('\n');
+            }
+            first = false;
+            out.push_str(&content[r]);
+        });
+        base += authored.len() + 1;
+    }
+}
+
+/// The part of `content`'s first line that fits `width` beside a trailing
+/// ellipsis, with the ellipsis, appended to `out`.
+pub(in crate::render::overlay) fn ellipsize_into(
+    content: &str,
+    font: &LoadedFont,
+    scale: f32,
+    width: f32,
+    out: &mut String,
+) {
+    let line = content.split('\n').next().unwrap_or_default();
+    out.push_str(&line[..ellipsis_cut(line, font, scale, width)]);
+    out.push_str(ELLIPSIS);
+}
+
+// Greedily pack `line`'s words into `out` as byte ranges, breaking at spaces
+// and mid-word when a word cannot fit a line alone.
 fn wrap_line(
     line: &str,
     base: usize,
     font: &LoadedFont,
     scale: f32,
     width: f32,
-    out: &mut Vec<Range<usize>>,
+    mut out: impl FnMut(Range<usize>),
 ) {
     let advance = |ch: char| advance_px(ch, font, scale);
-    let mut push = |start: usize, end: usize| out.push(base + start..base + end);
+    let mut push = |start: usize, end: usize| out(base + start..base + end);
     // The line under construction, `line[start..end]`, and its measured width.
     let (mut start, mut end) = (0usize, 0usize);
     let mut current_width = 0.0_f32;
@@ -196,11 +222,8 @@ fn wrap_line(
     push(start, end);
 }
 
-// Byte length of the longest prefix of `line` that fits `width` with a
-// trailing ellipsis, found in one forward scan. Prefix widths accumulate one
-// glyph advance at a time in authored order, with the ellipsis advances added
-// after, matching a from-scratch measure of the same candidate. A zero width
-// (capping lines without wrapping them) keeps the whole line.
+// Byte length of the longest prefix of `line` that fits `width` with an
+// ellipsis. A zero width keeps the whole line.
 fn ellipsis_cut(line: &str, font: &LoadedFont, scale: f32, width: f32) -> usize {
     if width <= 0.0 {
         return line.len();

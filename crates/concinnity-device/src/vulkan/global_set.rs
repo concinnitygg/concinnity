@@ -113,11 +113,9 @@ impl GlobalBindings<'_> {
         }
     }
 
-    // A set for an off-camera render (a probe face, a planar mirror) through
-    // `view`, `light`, `shadow` and `canopy`. It reads no probe, so a capture
-    // never recurses into the set it feeds; no screen-space indirect light,
-    // which is the main camera's; and no cluster grid unless one binned for its
-    // viewpoint is added (`with_clusters`).
+    // A set for an off-camera render (probe face, planar mirror): no probes, so a
+    // capture never reads what it feeds, no screen-space indirect light, and no
+    // clusters unless `with_clusters` adds them.
     pub(in crate::vulkan) fn off_camera(
         &self,
         view: vk::Buffer,

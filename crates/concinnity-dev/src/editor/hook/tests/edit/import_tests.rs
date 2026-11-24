@@ -9,7 +9,8 @@ use concinnity_engine::ecs::World;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{entry, entry_target, hook, key_input};
 
-use crate::editor::{inject, widget};
+use crate::editor::install;
+use crate::editor::ui::{BuiltUi, field};
 
 use crate::editor::panels::import_panel::{self, ImportAction};
 
@@ -22,7 +23,7 @@ use crate::editor::entry_list::EntryList;
 
 fn import_session() -> (EditorHook, World, concinnity_testing::TempTree) {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(Vec::new());
     h.open[PanelKey::Import] = true;
     h.import.focus = true;
@@ -30,8 +31,19 @@ fn import_session() -> (EditorHook, World, concinnity_testing::TempTree) {
     (h, world, concinnity_testing::TempTree::new())
 }
 
+// The path field's text.
+fn path_text(world: &World) -> String {
+    let built = world.resource::<BuiltUi>().unwrap();
+    field::text(
+        world,
+        import_panel::path_field(built.panel(PanelKey::Import).unwrap()),
+    )
+}
+
 fn type_path(world: &mut World, path: &str) {
-    widget::seed_field(world, import_panel::PATH_INPUT, path);
+    let built = world.resource::<BuiltUi>().unwrap();
+    let id = import_panel::path_field(built.panel(PanelKey::Import).unwrap());
+    field::set_text(world, id, path);
 }
 
 // A scene file resolves through the same dispatch `cn add` uses: one
@@ -52,11 +64,7 @@ fn import_add_resolves_a_scene_file() {
         serde_json::Value::String(glb.to_string_lossy().to_string())
     );
     assert!(h.dirty && h.rebuild_preview);
-    assert_eq!(
-        widget::field_text(&world, import_panel::PATH_INPUT),
-        "",
-        "the path field clears on success"
-    );
+    assert_eq!(path_text(&world), "", "the path field clears on success");
 }
 
 // A story markdown resolves to a StoryImport; a colliding name is uniquified
@@ -150,11 +158,7 @@ fn import_add_retargets_an_existing_environment_map() {
         h.import.status,
         Some(import_panel::ImportStatus::Notice(_))
     ));
-    assert_eq!(
-        widget::field_text(&world, import_panel::PATH_INPUT),
-        "",
-        "the path field clears on success"
-    );
+    assert_eq!(path_text(&world), "", "the path field clears on success");
 }
 
 // Enter in the focused path field adds, like clicking the Add button.
@@ -215,7 +219,7 @@ fn import_browse_result_fills_the_path_field_relatively() {
     h.accept_browsed_path(&mut world, &picked);
 
     assert_eq!(
-        widget::field_text(&world, import_panel::PATH_INPUT),
+        path_text(&world),
         "assets/hero.glb",
         "a file inside the project stores relatively"
     );

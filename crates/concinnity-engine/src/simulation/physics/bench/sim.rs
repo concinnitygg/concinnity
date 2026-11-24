@@ -1,26 +1,10 @@
-// Benchmarks over the rigid-body simulation. Solver cost under sustained
-// contacts, the sleeping-island idle path, contact-free integration, world
-// construction, body churn, and the query paths (raycast, shape cast,
-// character move). The stepping benches rebuild the same world and step it the
-// same fixed count every iteration, making the measured work bit-identical run
-// to run. Fixtures mirror the CPU stress world's physics axis: stacked columns
-// of bouncing cuboids that never sleep.
-//
-// `physics/step_ccd/*` is the continuous-collision stage's worst case: every
-// body in the world moving fast enough to be swept on every step, which no
-// ordinary world does. The stacked entries beside it are the control -- the
-// gate must keep them out of that path entirely, so their numbers must not
-// move when the stage changes.
-//
-// Every query is asked on a stepped world, which is the state the driver asks
-// one in: the sweep order is current, so a traversal is a window over the
-// sorted proxies rather than a walk over all of them.
-//
-// Each contact- or joint-bound stepping entry has a `_serial` twin stepped on
-// the calling thread, and the pair is the scaling report: what a split step is
-// worth on this machine, and what the split machinery costs a caller that
-// splits nothing. The two must land in the same place, which
-// `assert_deterministic` checks rather than assumes.
+// Benchmarks over the rigid-body simulation: solver cost, sleeping islands,
+// integration, construction, churn, and the queries. Each stepping bench
+// rebuilds and steps the same world a fixed count, so the work is identical run
+// to run. `physics/step_ccd/*` is the continuous-collision worst case, and the
+// stacked entries beside it must not move when that stage changes. Queries run
+// on a stepped world. Each contact- or joint-bound entry has a `_serial` twin,
+// checked deterministic by `assert_deterministic`.
 
 use alloc::format;
 use alloc::vec::Vec;
@@ -51,11 +35,8 @@ const CHARACTER_STEP: [f32; 3] = [0.05, 0.0, 0.02];
 const TICK: f32 = 1.0 / 60.0;
 const STACK: usize = 8;
 
-// The counts a pass drives, per pace. A single-run pass keeps every fixture
-// shape -- stacks, hail, sensors, joints, terrain, the query worlds and the
-// churn -- and shrinks each count to the smallest that still exercises it, so
-// an unoptimized build walks every path once instead of paying for a
-// measurement it does not take.
+// The counts a pass drives, per pace. A single run keeps every fixture shape at
+// the smallest count that still exercises it.
 struct Fixture {
     sizes: [(usize, &'static str); 2],
     joint_sizes: [(usize, &'static str); 2],
@@ -389,11 +370,8 @@ fn sensor_world(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
     (sim, handles)
 }
 
-// A grid of small bodies falling at sixty units a second onto a slab a tenth
-// of a unit thick: one unit of travel per tick against a tenth of a unit of
-// surface, so every body arms the sweep on every step of the fall. Started
-// high enough that most of the measured window is the sweep itself rather
-// than the contacts afterwards.
+// A grid of small bodies falling fast onto a thin slab, so every body arms the
+// sweep on every step of the fall.
 fn hail_world(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
     let mut sim = Simulation::new(
         SimConfig {
@@ -745,15 +723,9 @@ fn bench_sensors_and_contacts(pace: Pace, f: &Fixture) {
             regions.sensor_overlap_count()
         );
 
-        // Jostling with the contact gate armed: bouncing stacks never settle,
-        // so the measured step is a real solve with the impact pass reading
-        // what it delivered and a drain that has hits to move every tick.
-        //
-        // Both reservations are sized past the body count rather than at it.
-        // A stack of eight has more contacting pairs than bodies, and the
-        // tick a whole field of them lands on reports every one of those
-        // pairs at once, so a queue reserved from the body count alone would
-        // measure an overflow rather than the drain.
+        // Bouncing stacks never settle, so every step solves contacts. The
+        // reservations exceed the body count, since a stack has more contacting
+        // pairs than bodies.
         let (mut jostling, handles) = stacked_world(n, 0.85, 0.0, true, n);
         // Held awake rather than merely bouncy. A stack this lively still
         // settles eventually, and a fixture that falls asleep partway through

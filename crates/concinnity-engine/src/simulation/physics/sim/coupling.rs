@@ -1,27 +1,12 @@
 // A manifold's normal constraints solved together instead of one after
-// another.
+// another. An impulse at one corner of a box changes the approach speed at the
+// others, and under an impact a point-at-a-time sweep hands the first corner
+// the whole approach speed and throws the body.
 //
-// The points of one manifold are not independent. An impulse at one corner of
-// a box spins the box about that corner, so it changes the approach speed at
-// the other three, and a sweep that visits the points in turn leaves that for
-// a later iteration to notice. Under a resting load the later iterations
-// arrive in time. Under an impact they do not: the first corner alone is
-// given the whole approach speed to answer, and the impulse that takes is
-// large enough to throw the body outright, so the remaining corners spend the
-// rest of the step failing to take back what it did.
-//
-// So the coupling is written down. `Coupling` holds what a unit impulse at
-// each point does to the approach speed at every point, which turns the
-// manifold into one small system with a non-negativity condition on each
-// impulse -- a contact pushes and never pulls. Projected passes run over that
-// system alone, touching no body until the manifold agrees with itself, and
-// only the total each point settled on is applied.
-//
-// A face-on-face contact's matrix is well conditioned, so each pass takes
-// roughly an order off what is left and a handful of them answer it. What
-// decides how many run is how far the manifold is from agreeing rather than
-// how hard it was hit: a contact already holding a resting load leaves on the
-// first pass, and an impact stays for as long as it takes.
+// `Coupling` holds what a unit impulse at each point does to the approach
+// speed at every point, turning the manifold into one small system with
+// non-negative impulses. Projected passes run until the manifold agrees with
+// itself, and only the settled totals are applied.
 
 use super::contact::MAX_MANIFOLD_POINTS;
 use super::math::Vec3;
@@ -165,11 +150,8 @@ impl Coupling {
             return delta;
         }
         for _ in 1..MAX_PASSES {
-            // Re-derived from the impulses rather than carried on from what
-            // the last pass left behind: an impact's impulses are large and
-            // the speeds they cancel into are near zero, so starting each
-            // pass from the impulses is what keeps that cancellation from
-            // compounding.
+            // Re-derived from the impulses each pass so the cancellation does
+            // not compound.
             let mut asking = approach;
             for (asking, row) in asking.iter_mut().zip(&self.rows) {
                 *asking += dot(row, &delta);
@@ -294,11 +276,7 @@ mod tests {
         );
     }
 
-    // The whole reason the matrix exists: a face-on impact is answered by the
-    // patch as a whole, so it stops the body without spinning it. The
-    // point-at-a-time sweep hands the first corner the entire approach speed,
-    // and the lever arm under it turns that into thousands of radians a
-    // second no later point can take back.
+    // A face-on impact stops the body without spinning it.
     #[test]
     fn a_face_on_impact_stops_a_body_without_spinning_it() {
         let coupling = corner_coupling();

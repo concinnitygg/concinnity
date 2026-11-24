@@ -1,8 +1,7 @@
-// Each shader bucket's pipelines: the main pass that shades its draws, and the
-// G-buffer pre-pass that lays down their depth, normal, roughness and motion
-// from the same vertex hook. The main pipeline is the bucket's to have; the
-// pre-pass exists only while a G-buffer consumer is on, and a pre-pass that
-// fails to build costs that bucket its G-buffer draws, never its shading.
+// Each shader bucket's pipelines: the main pass that shades its draws and the
+// G-buffer pre-pass from the same vertex hook. The pre-pass exists only while a
+// G-buffer consumer is on, and a failed pre-pass costs only the bucket's
+// G-buffer draws.
 
 use concinnity_engine::components::ShaderPrograms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -77,11 +76,8 @@ fn bucket_context(bucket: usize) -> impl Fn(RenderError) -> RenderError {
     }
 }
 
-// Build shader bucket `bucket`'s pipelines: the engine's own programs for
-// bucket 0 of a world without a default Shader, else `world`'s, the main
-// fragment `variant`. Both opt into indirect command
-// buffers, since every bucket draws through its ICB. A pre-pass that fails to
-// build leaves the bucket without one.
+// Build bucket `bucket`'s ICB-capable pipelines from the engine's programs or
+// `world`'s. A pre-pass that fails to build leaves the bucket without one.
 pub(crate) fn build_bucket_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,

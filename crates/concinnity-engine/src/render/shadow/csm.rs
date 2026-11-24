@@ -384,13 +384,8 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
             up_hint: up_l,
         } = LightBasis::toward(l_to);
 
-        // Texel-grid snap. Quantize the cascade center along the light's right
-        // and up axes to whole shadow texels so the texel grid stays anchored in
-        // world space; the texels then stop crawling under camera translation
-        // (the shadow stops chasing the camera). The snap must happen in world
-        // space, before look_at: snapping the center's light-space xy afterwards
-        // is a no-op, because look_at always maps the center onto the optical
-        // axis (its light-space xy is identically zero).
+        // Snap the cascade center to whole texels along the light's axes in world
+        // space, before look_at, so shadows do not crawl as the camera moves.
         let texel_size = 2.0 * radius / shadow_map_size.max(1) as f32;
         let cx = dot(r, center);
         let cy = dot(u, center);
@@ -398,19 +393,10 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         let snap_dy = round(cy / texel_size) * texel_size - cy;
         let center = add(add(center, scale(r, snap_dx)), scale(u, snap_dy));
 
-        // Build the light view from the snapped center and an ortho projection
-        // enclosing the sphere. The eye sits at +radius along the light
-        // direction so the sphere center maps to the middle of the depth range.
-        //
-        // The near plane is pushed back toward the light by `caster_extent` so
-        // casters ABOVE this cascade's volume (tree canopies, tall building
-        // tops, anything between the light and the sphere) still render into the
-        // shadow map. Without it the near cascades, whose ortho boxes are only
-        // `radius` deep along the light, clip any caster taller than the cascade;
-        // as the camera moves, which casters fall inside each cascade changes,
-        // so elevated shadows pop in and out and their edges slide with the
-        // camera. The extension grows only the depth range, not the XY
-        // footprint, so shadow-map resolution is unchanged.
+        // The light view from the snapped center with an ortho box around the
+        // sphere. The near plane is pushed toward the light by `caster_extent`
+        // so tall casters above the cascade still render; only depth range
+        // grows, not resolution.
         let caster_extent = caster_extent(shadow_far);
         let light_eye = add(center, scale(l_to, radius));
         let light_view = look_at(light_eye, center, up_l);
@@ -776,13 +762,7 @@ mod tests {
 
     #[test]
     fn texels_do_not_crawl_under_camera_translation() {
-        // The chasing-shadow regression. A fixed world point must land on the
-        // SAME sub-texel of the shadow map regardless of camera position: with
-        // the texel grid anchored in world space, translating the camera shifts
-        // the projected point by a whole number of texels only, so its
-        // fractional texel position is invariant. (Before the world-space snap,
-        // the center was snapped after look_at, which is a no-op, and the grid
-        // slid continuously with the camera -- the shadow "chased" it.)
+        // A fixed world point keeps its sub-texel position as the camera moves.
         let light = [-0.4, 0.78, 0.5];
         let size = 2048u32;
         let world_p = [3.0_f32, 0.0, -5.0];
@@ -833,15 +813,8 @@ mod tests {
 
     #[test]
     fn tall_casters_above_cascade_are_not_clipped() {
-        // The disappearing-shadow regression. A caster high above the near
-        // cascade (a tree canopy, a building top) must still fall inside the
-        // cascade's light frustum so it renders into the shadow map; otherwise
-        // its shadow vanishes the moment the receiver drops into a small near
-        // cascade, and the clip boundary slides across the world as the camera
-        // moves. The ortho near plane is extended toward the light for exactly
-        // this. A caster 30m up the light from a receiver in the cascade sits
-        // well beyond the few-meter cascade-0 sphere radius, so without the
-        // extension it projects past the near plane, to ndc.z > 1 (clipped).
+        // A caster 30 m up the light from a receiver in cascade 0 must stay
+        // inside the extended near plane.
         let cam = [0.0_f32, 0.0, 0.0];
         let light = [0.0_f32, 0.85, 0.3]; // mostly overhead
         let receiver = [0.0_f32, 0.0, -2.0];

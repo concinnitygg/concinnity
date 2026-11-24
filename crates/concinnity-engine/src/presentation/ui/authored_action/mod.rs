@@ -5,7 +5,7 @@ mod schema;
 
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Scene, Screen, SettingVerb, StoryCommand};
+use crate::components::{Binding, Scene, Screen, SettingVerb, StoryCommand, UiEmit, UiValue};
 use crate::ecs::NameRef;
 use crate::ecs::asset_fields::{
     ActionField, AssetFields, FieldTable, RefField, ReferenceField, join,
@@ -30,8 +30,8 @@ use crate::settings::SettingKey;
 ///   `auto`, `skip`, `log`, `save`, `load`, `pause`, `settings`,
 ///   `settings_back`), or `{"story": {"choose": <i>}}` / `{"story": {"slot": <i>}}`
 ///
-/// Generated settings menus also emit `{"group_toggle": <i>}` and
-/// `{"setting": {"key": "<setting>", "verb": "<verb>"}}`.
+/// Generated settings menus also emit `{"setting": {"key": "<setting>", "verb":
+/// "rebind"}}` and `"open"`.
 ///
 /// `C` and `S` are how the action names its [Scene](#scene) and
 /// [Screen](#screen): by `$id` while a build reads it ([`NamedAction`]), or by
@@ -42,7 +42,7 @@ use crate::settings::SettingKey;
 /// let action: NamedAction = serde_json::from_value(serde_json::json!({"show": "pause"})).unwrap();
 /// assert_eq!(action, AuthoredAction::Show("pause".into()));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthoredAction<C, S> {
     /// Stop the application.
@@ -63,9 +63,32 @@ pub enum AuthoredAction<C, S> {
     ToggleHud,
     /// Drive the story system.
     Story(StoryCommand),
-    /// Expand or collapse a settings-screen group by index.
-    GroupToggle(usize),
-    /// Operate a settings row.
+    /// Set the value a binding names.
+    Set {
+        /// The value set.
+        binding: Binding,
+        /// What it is set to.
+        value: UiValue,
+    },
+    /// Turn the boolean a binding names over.
+    Flip(Binding),
+    /// Add to the number a binding names.
+    Add {
+        /// The number added to.
+        binding: Binding,
+        /// How much is added.
+        by: f32,
+    },
+    /// Step the setting or whole number a binding names.
+    Step {
+        /// The value stepped.
+        binding: Binding,
+        /// How many steps, negative to step back.
+        by: i32,
+    },
+    /// Tell the app's own systems, which read it as a `UiEvent`.
+    Emit(UiEmit),
+    /// Capture a rebind setting's key or button, or open a setting's dropdown.
     Setting {
         /// The setting the row edits.
         key: SettingKey,

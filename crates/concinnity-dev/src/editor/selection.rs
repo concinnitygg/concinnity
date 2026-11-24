@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use crate::editor::asset_handle::AssetHandle;
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Selection {
     members: Vec<AssetHandle>,
 }

@@ -1,27 +1,16 @@
-//! The viewport selection highlight: a pool of border-only sprites (transparent
-//! fill, accent ring), one placed over each selected asset's projected world
-//! AABB every frame. The active (most recently picked) member's ring draws in
-//! the full accent; the rest a dimmed step. Window-space like the rest of the
-//! editor HUD, injected hidden alongside it, and drawn under the floating
-//! panels (the ids are absent from the `HudLayers` map, so they sit at layer 0
-//! below every focused panel).
+//! The viewport selection highlight: a border-only ring (transparent fill,
+//! accent outline) over each selected asset's projected world AABB every frame,
+//! on the viewport's marks canvas under the floating panels. The active (most
+//! recently picked) member's ring draws in the full accent; the rest a dimmed
+//! step.
 
-use concinnity_engine::components::Sprite;
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
-
-use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::theme;
+use crate::editor::ui::shapes::{Shape, Shapes};
 
-// Ring pool size, bounding the per-frame sprite cost; a selection larger than
+// The most rings drawn, bounding the per-frame cost; a selection larger than
 // this keeps every member (gizmo and commit included) but only rings the
 // first `MAX_RINGS`.
 pub(crate) const MAX_RINGS: usize = 32;
-
-hud_ids! {
-    base: family_base(Family::Highlight);
-    sprites: [ring_id[MAX_RINGS]];
-}
 
 const BORDER_W: f32 = 2.0;
 // Breathing room so the ring does not sit flush on the object's silhouette.
@@ -31,30 +20,9 @@ const PAD_PX: f32 = 3.0;
 // glance.
 const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 
-// The injected pool: invisible until the tick places them, transparent fill,
-// accent border rings.
-pub(crate) fn outline_sprites() -> Vec<(AssetId, Sprite)> {
-    ids()
-        .sprites
-        .iter()
-        .map(|&id| {
-            let ring = Sprite {
-                tint: [0.0, 0.0, 0.0, 0.0],
-                border_width: BORDER_W,
-                border_color: theme::ACCENT_TINT,
-                visible: false,
-                ..Default::default()
-            };
-            (id, ring)
-        })
-        .collect()
-}
-
-// Project a world AABB to its enclosing screen rect `[x, y, w, h]` for the
-// `view_matrix`-convention camera, padded and clamped to the viewport. `None`
-// when there is nothing to draw: a non-finite box, a degenerate viewport, any
-// corner at or behind the camera plane (only possible with the camera inside
-// or against the box), or a projection entirely off screen.
+// Project a world AABB to a padded screen rect `[x, y, w, h]`. `None` for a
+// non-finite box, a degenerate viewport, a corner behind the camera, or an
+// off-screen projection.
 pub(crate) fn screen_rect(
     view: &[[f32; 4]; 4],
     fov_y_radians: f32,
@@ -124,37 +92,18 @@ pub(crate) fn screen_rect(
     Some([x0, y0, x1 - x0, y1 - y0])
 }
 
-// Show one ring per `(rect, is_active)` entry (rects past the pool are
-// dropped) and hide the rest of the pool.
-pub(crate) fn place_all(world: &mut World, rects: &[([f32; 4], bool)]) {
-    for (i, &id) in ids().sprites.iter().enumerate() {
-        let Some(s) = sprite_mut(world, id) else {
-            continue;
-        };
-        match rects.get(i) {
-            Some((rect, active)) => {
-                s.x = rect[0];
-                s.y = rect[1];
-                s.width = rect[2];
-                s.height = rect[3];
-                s.border_color = if *active {
-                    theme::ACCENT_TINT
-                } else {
-                    MEMBER_TINT
-                };
-                s.visible = true;
-            }
-            None => s.visible = false,
-        }
-    }
-}
-
-pub(crate) fn hide(world: &mut World) {
-    place_all(world, &[]);
-}
-
-fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
-    world.get_mut_by_id::<Sprite>(id)
+// The ring over `rect`, in the full accent for the active member.
+pub(crate) fn push(shapes: &mut Shapes<'_>, rect: [f32; 4], active: bool) {
+    shapes.push(Shape {
+        rect,
+        border: if active {
+            theme::ACCENT_TINT
+        } else {
+            MEMBER_TINT
+        },
+        border_width: BORDER_W,
+        ..Shape::default()
+    });
 }
 
 #[cfg(test)]

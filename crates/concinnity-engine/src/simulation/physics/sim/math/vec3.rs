@@ -1,8 +1,5 @@
-// The simulation's 3-vector. It exists rather than a general math crate being
-// pulled in because the simulation needs exactly one guarantee from its
-// arithmetic: that the same inputs produce the same bits on every platform.
-// Every operation here is plain f32 add/sub/mul/div or a `libm` call, both of
-// which are specified exactly.
+// The simulation's 3-vector: plain f32 arithmetic and `libm`, so results are
+// bit-identical across platforms.
 
 use concinnity_core::math::sqrt;
 use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};

@@ -1,5 +1,4 @@
-// Measures light packing for the clustered forward pass: a thousand mixed
-// point, spot and rect-area lights drained into the GPU light block.
+// Light packing for a thousand mixed lights.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_light_pack

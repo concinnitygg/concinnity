@@ -102,11 +102,8 @@ pub(in crate::vulkan) fn compile_rt_shaders(
     })
 }
 
-// RT-reflection resources held by `VkContext` when `ray_traced_reflections` is
-// on AND the GPU exposes the ray-query extensions AND the pass built; otherwise
-// the context leaves this `None` and the graph falls back to `SsrResolve`. The
-// pass outlives the scene acceleration structure, which comes and goes with the
-// geometry it covers. All `vk::*` handles are owned here and freed on `destroy`.
+// RT reflection resources, `Some` when RT is on, the GPU can ray query, and the
+// pass built; otherwise the graph uses `SsrResolve`. Outlives the BVH.
 pub(in crate::vulkan) struct RtReflectionsResources {
     // Resolved authored tunables; turned into a per-frame `RtParams` push.
     pub(in crate::vulkan) settings: RtReflectionSettings,
@@ -156,11 +153,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // written into every resolve set once at construction.
     _sampler: OwnedSampler,
 
-    // A 1-element dummy storage buffer bound to the skinned-index SSBO (binding
-    // 10) when the scene carries no skinned geometry (the accel data's skinned
-    // index handle is then `vk::Buffer::null()`). Keeps the descriptor always
-    // valid; the deformed-verts SSBO (binding 9) needs no dummy because the accel
-    // data always holds a valid 1-element deformed buffer.
+    // A 1-element SSBO bound at binding 10 while there are no skinned indices.
     dummy_ssbo: PooledBuffer,
 
     // Bindless texture-pool length, kept for the hot-reload recompile of the
@@ -175,13 +168,11 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     wired_pyramid: WireCache<vk::ImageView>,
 }
 
-// Set 0 of the RT kernels: the RtParams UBO (0), TLAS (1), geometry table (2),
-// static verts and indices (3, 4), scene, G-buffer and roughness (5-7), the
-// deformed skinned verts and skinned indices (9, 10), for skinned hits, the
-// three images' samplers (11-13), the classify's pyramid, the output and
-// the ray list and arguments (16-19), the waves' slopes and their sampler
-// (20, 21), the sky's listed rays and their arguments (22, 23), and the hits
-// the denoiser reads (24).
+// Set 0 of the RT kernels: RtParams (0), TLAS (1), geometry table (2), static
+// verts and indices (3, 4), scene, G-buffer and roughness (5-7), skinned verts
+// and indices (9, 10), samplers (11-13), the classify pyramid, output, ray list
+// and arguments (16-19), wave slopes and sampler (20, 21), the sky's rays and
+// arguments (22, 23), and the denoiser's hits (24).
 fn resolve_set_bindings() -> [Binding; 22] {
     use vk::DescriptorType as T;
     let cs = vk::ShaderStageFlags::COMPUTE;
@@ -295,11 +286,8 @@ pub(in crate::vulkan) struct RtStaticInputs<'a> {
     pub roughness_views: &'a [vk::ImageView],
 }
 
-// The live acceleration-structure handles the trace binds per frame: the TLAS,
-// the geometry table (buffer + byte size), the deformed skinned vertex buffer,
-// and the skinned index buffer. All re-pointed each frame by `wire_dynamic`
-// because a dynamic rebuild fresh-allocates them. Compared frame to frame so a
-// frame that rebuilt nothing rewrites nothing.
+// The handles the trace binds per frame, re-pointed whenever a rebuild moves
+// them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vulkan) struct RtAccelHandles {
     pub tlas: vk::AccelerationStructureKHR,
@@ -325,11 +313,8 @@ pub(in crate::vulkan) struct RtLayoutConfig {
 }
 
 impl RtReflectionsResources {
-    // Build every RT-reflection resource. Returns `Err` when a kernel fails to
-    // compile (the caller then falls back to SSR). The acceleration-structure
-    // bindings are wired by `wire_dynamic` on each frame that has a BVH to
-    // trace; `layout.bindless_set_layout` + `layout.pool_size` enable the
-    // textured variant.
+    // Build every RT reflection resource; `Err` when a kernel fails to compile, and
+    // the caller falls back to SSR.
     pub(in crate::vulkan) fn new(
         build: RtBuild<'_>,
         settings: RtReflectionSettings,
@@ -567,12 +552,8 @@ impl RtReflectionsResources {
         }
     }
 
-    // Wire the static per-frame bindings (UBO, verts, indices, scene, gbuffer,
-    // roughness). The TLAS + geom table (bindings 1/2) are wired by
-    // `wire_dynamic`. Called at init + on swapchain resize.
-    //
-    // `gbuffer_views` / `roughness_views` carry the unified G-buffer pre-pass's
-    // per-frame normal+depth / roughness views; resolve set `i` binds slot `i`.
+    // Wire the per-frame static bindings, at init and on resize; set `i` binds the
+    // G-buffer's slot `i`.
     pub(in crate::vulkan) fn wire_static(&self, device: &VkDevice, inputs: RtStaticInputs<'_>) {
         let RtStaticInputs {
             vertex_buffer,
@@ -600,19 +581,9 @@ impl RtReflectionsResources {
         }
     }
 
-    // Re-point one frame's TLAS (binding 1), geometry-table (binding 2), deformed
-    // skinned verts (binding 9), and skinned indices (binding 10) descriptors at
-    // the live handles. Called every frame because a dynamic rebuild
-    // fresh-allocates the TLAS / geom table / deformed buffer; the current frame's
-    // set is fence-gated (its previous submission completed at the top of
-    // `draw_frame`), so the update is safe. A frame that rebuilt nothing hands
-    // over the same five handles this slot already holds and writes nothing:
-    // the comparison is over the handles themselves, so any that moved still
-    // fires. `deformed` is always a valid handle
-    // (the accel data holds a 1-element dummy when there is no skinned geometry);
-    // `skinned_indices` is `vk::Buffer::null()` until the first skinned rebuild,
-    // in which case the 1-element dummy SSBO is bound so the descriptor stays
-    // valid.
+    // Re-point one frame's TLAS (1), geometry table (2), deformed verts (9) and
+    // skinned indices (10) at the live handles, writing nothing when unchanged.
+    // Null skinned indices bind the dummy SSBO.
     pub(in crate::vulkan) fn wire_dynamic(
         &mut self,
         device: &VkDevice,
@@ -765,14 +736,9 @@ impl VkContext {
         self.rt_reflections.is_some() && self.rt.accel.is_some()
     }
 
-    // True when the transparent pass should trace per-pixel RT reflections this
-    // frame: RT is live (the scene TLAS is built) AND every live producer's RT
-    // pipelines compiled at init. Single-sources the transparent encoder's
-    // RT-vs-base selection and the `graph_exec` planar skip, so the two always
-    // agree -- gating the skip on `rt_reflections_active()` alone would drop the
-    // planar re-render even when a producer's RT pipelines failed to build,
-    // leaving its fallback sampling a stale resolve. Mirrors
-    // `DxContext::rt_transparent_active`.
+    // True when the transparent pass traces this frame: the TLAS is built and every
+    // live producer's RT pipelines compiled. The graph's planar skip uses the same
+    // test, so a producer still on its fallback keeps its mirror.
     pub(in crate::vulkan) fn rt_transparent_active(&self) -> bool {
         self.rt_reflections_active()
             && self
@@ -781,19 +747,9 @@ impl VkContext {
                 .is_some_and(super::super::transparent::TransparentResources::rt_pipelines_ready)
     }
 
-    // Run the per-frame dynamic acceleration-structure update on `cmd` (the
-    // frame's "start" command buffer, submitted before every per-pass trace),
-    // then re-point this frame's RT descriptor set at the live TLAS + geometry
-    // table. A no-op when RT reflections are off. The descriptor rewrite happens
-    // every frame (not only on a rebuild) so a frame that did not rebuild still
-    // binds the current handles rather than a stale / retired one.
-    //
-    // Follows the shared BVH lifetime: a pass with no BVH seeds one once
-    // participating geometry appears or skinned geometry is present
-    // (`seed_wanted`), and this frame's update then runs over it. A BVH with
-    // nothing left to trace and nothing that could rejoin it is dropped
-    // (`is_spent`), held until the frames in flight have finished tracing it.
-    // The trace skips while there is none.
+    // Update the acceleration structure on the start buffer, then re-point this
+    // frame's RT set every frame. Seeds a BVH when geometry appears and drops a
+    // spent one behind the frames in flight; the trace skips without one.
     pub(in crate::vulkan) fn rt_dynamic_update(&mut self, rec: &Recorder<'_>, frame_idx: usize) {
         // Consumed by the accel's `dynamic_update`, which folds a runtime draw-set
         // change (cloned prop, streamed chunk added/removed) into the BLAS head,
@@ -940,12 +896,9 @@ impl VkContext {
         }
     }
 
-    // Encode the RT-reflection resolve: reset the ray arguments, classify every
-    // output texel, trace the listed ones, then blend the output over the scene
-    // through the reflection composite. Without a BVH the output is cleared to
-    // zero weight instead, which the composite passes the scene through
-    // unchanged for. No-op when the pass is absent (the graph only schedules it
-    // when the pass exists, so the guard is defensive).
+    // Encode the RT reflection resolve: classify, trace the listed texels, and
+    // blend through the reflection composite. Without a BVH the output is cleared
+    // to zero weight.
     pub(in crate::vulkan) fn encode_rt_reflections(
         &self,
         rec: &Recorder<'_>,

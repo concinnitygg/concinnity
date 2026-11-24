@@ -8,31 +8,39 @@
 //! log sink.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry, set_entry_id};
-use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::components::{FrameInput, InputKey, TextField};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use std::sync::atomic::Ordering;
 
 use crate::editor::build_failure;
-use crate::editor::entry_list::build_text;
-use crate::editor::hook::{EditorHook, declared_id, entry_type_name, scroll_step};
+use crate::editor::hook::{EditorHook, declared_id, entry_type_name};
 use crate::editor::panels::console;
-use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
+use crate::editor::panels::console_panel::{self, ConsoleView};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::{BuiltPanel, BuiltUi, field};
 use crate::editor::viewport::snap;
-use crate::editor::widget;
 
 impl EditorHook {
+    // The command line's id in `world`.
+    pub(in crate::editor::hook) fn console_input(world: &World) -> Option<AssetId> {
+        world
+            .resource::<BuiltUi>()
+            .and_then(|b| b.panel(PanelKey::Console))
+            .and_then(console_panel::input)
+    }
+
     // Open / close the console (the View row, the title X, and backtick all
     // funnel here). Opening focuses a cleared command line and lifts the
-    // injected form-field length cap (inline JSON runs long); closing
-    // releases focus.
+    // field's length cap (inline JSON runs long); closing releases focus.
     pub(in crate::editor::hook) fn toggle_console(&mut self, world: &mut World) {
         self.open[PanelKey::Console] = !self.open[PanelKey::Console];
         if self.open[PanelKey::Console] {
             self.console.focus = true;
             self.console.pinned = true;
-            widget::seed_field(world, console_panel::INPUT, "");
-            if let Some(t) = widget::input_mut(world, console_panel::INPUT) {
+            let input = Self::console_input(world);
+            field::set_text(world, input, "");
+            if let Some(t) = input.and_then(|id| world.get_mut_by_id::<TextField>(id)) {
                 t.max_len = 0;
             }
             self.focus_panel(PanelKey::Console);
@@ -64,77 +72,50 @@ impl EditorHook {
         }
     }
 
-    // The visible log window under the current scroll: (lines, total, first).
-    // Pinned follows the tail, so new lines auto-scroll into view. The window
-    // size tracks the panel's (possibly resized) height.
-    pub(in crate::editor::hook) fn console_window(
-        &self,
-    ) -> (Vec<console::ConsoleLine>, usize, usize) {
-        let shown = console_panel::visible_lines(self.effective_size(PanelKey::Console)[1]);
-        let total = self.console_sink.len();
-        let max_first = total.saturating_sub(shown);
-        let first = if self.console.pinned {
-            max_first
-        } else {
-            self.console.scroll.min(max_first)
-        };
-        (self.console_sink.window(first, shown), total, first)
-    }
-
-    pub(in crate::editor::hook) fn make_console_view<'a>(
-        &self,
-        lines: &'a [console::ConsoleLine],
-        total: usize,
-        first: usize,
-        ghost: &'a str,
-        mouse: [f32; 2],
-    ) -> ConsoleView<'a> {
+    // What the console shows this frame. The command line holds focus only
+    // while the console is frontmost (see the other panels' matching guard)
+    // and not in the one-frame blur after a backtick open.
+    pub(in crate::editor::hook) fn console_view<'a>(&self, ghost: &'a str) -> ConsoleView<'a> {
         ConsoleView {
-            lines,
-            total,
-            first,
-            // Focus is asserted only while frontmost (see the other panels'
-            // matching guard) and not in the one-frame blur after a backtick
-            // open.
+            pushed: self.console_sink.pushed(),
+            pinned: self.console.pinned,
             focus: self.console.focus
                 && !self.console.blur
                 && self.panel_order.last() == Some(&PanelKey::Console),
             ghost,
-            mouse,
         }
+    }
+
+    // Take in what the user did to the console since last frame: a click that
+    // focused or left the command line (its focus differs from what was last
+    // shown), and a scroll away from the log's tail or back onto it.
+    pub(in crate::editor::hook) fn observe_console(&mut self, world: &World, built: &BuiltPanel) {
+        let focused = console_panel::input(built)
+            .and_then(|id| world.get_by_id::<TextField>(id))
+            .is_some_and(|f| f.focused);
+        if focused != self.console_view("").focus {
+            self.console.focus = focused;
+        }
+        self.console.pinned = console_panel::at_tail(world, built);
+    }
+
+    // The /del completion for the command line as it stands, borrowed from the
+    // authored name it completes to.
+    pub(in crate::editor::hook) fn console_ghost_now(&self, world: &World) -> &str {
+        let line = Self::console_input(world)
+            .and_then(|id| world.get_by_id::<TextField>(id))
+            .map_or("", |f| f.content.as_str());
+        console::del_ghost(line, self.entries.iter().filter_map(declared_id)).unwrap_or_default()
     }
 
     // The /del name argument's inline completion suffix for the current input
     // text, matched against the authored entry names.
+    #[cfg(test)]
     pub(in crate::editor::hook) fn console_ghost(&self, world: &World) -> String {
-        let text = widget::field_text(world, console_panel::INPUT);
-        console::del_ghost(&text, self.entries.iter().filter_map(declared_id)).unwrap_or_default()
-    }
-
-    // Step the log window; landing on the last line re-pins it to the tail.
-    pub(in crate::editor::hook) fn scroll_console(&mut self, delta: f32) {
-        let shown = console_panel::visible_lines(self.effective_size(PanelKey::Console)[1]);
-        let max = self.console_sink.len().saturating_sub(shown);
-        let cur = if self.console.pinned {
-            max
-        } else {
-            self.console.scroll.min(max)
-        };
-        let next = scroll_step(cur, delta, max);
-        self.console.scroll = next;
-        self.console.pinned = next >= max;
-    }
-
-    pub(in crate::editor::hook) fn apply_console_action(
-        &mut self,
-        action: ConsoleAction,
-        _world: &mut World,
-    ) {
-        match action {
-            ConsoleAction::FocusInput => self.console.focus = true,
-            // A click on panel chrome blurs the command line.
-            ConsoleAction::Consume => self.console.focus = false,
-        }
+        let text = field::text(world, Self::console_input(world));
+        console::del_ghost(&text, self.entries.iter().filter_map(declared_id))
+            .unwrap_or_default()
+            .to_string()
     }
 
     // The per-frame editing keys while the command line is focused: Enter
@@ -143,12 +124,13 @@ impl EditorHook {
         if !self.console.focus {
             return;
         }
+        let field = Self::console_input(world);
         for press in input.key_presses() {
             match press.key {
                 // A held Enter submits once.
                 InputKey::Enter if !press.repeat => {
-                    let line = widget::field_text(world, console_panel::INPUT);
-                    widget::seed_field(world, console_panel::INPUT, "");
+                    let line = field::text(world, field);
+                    field::set_text(world, field, "");
                     let line = line.trim().to_string();
                     if !line.is_empty() {
                         self.run_console_line(world, &line);
@@ -156,7 +138,8 @@ impl EditorHook {
                 }
                 InputKey::Tab => self.accept_console_ghost(world),
                 InputKey::Right => {
-                    let at_end = widget::input(world, console_panel::INPUT)
+                    let at_end = field
+                        .and_then(|id| world.get_by_id::<TextField>(id))
                         .is_some_and(|t| t.caret >= t.content.chars().count());
                     if at_end {
                         self.accept_console_ghost(world);
@@ -168,10 +151,11 @@ impl EditorHook {
     }
 
     fn accept_console_ghost(&self, world: &mut World) {
-        let text = widget::field_text(world, console_panel::INPUT);
+        let field = Self::console_input(world);
+        let text = field::text(world, field);
         if let Some(ghost) = console::del_ghost(&text, self.entries.iter().filter_map(declared_id))
         {
-            widget::focus_field_with(world, console_panel::INPUT, &format!("{text}{ghost}"));
+            field::set_text(world, field, &format!("{text}{ghost}"));
         }
     }
 
@@ -198,7 +182,7 @@ impl EditorHook {
                 let moved = self.drop_selection_to_floor(world);
                 self.console_sink.info(&format!("dropped {moved}"));
             }
-            Ok(console::Command::Select(cmd)) => self.console_select(cmd, world),
+            Ok(console::Command::Select(cmd)) => self.console_select(cmd),
             Ok(console::Command::Export { name, bake }) => {
                 self.console_export(name.as_deref(), bake);
             }
@@ -303,7 +287,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match build_text(&self.entries) {
+        let content = match self.entries.build_text(self.world_origin()) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);

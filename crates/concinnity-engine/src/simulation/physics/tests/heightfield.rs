@@ -457,11 +457,7 @@ fn terrain_added_last(capacity: usize) -> (Simulation, BodyHandle) {
     (sim, ball)
 }
 
-// Which body a pair names first is an artifact of insertion order, not of the
-// scene: a grid that happens to be the second body of a pair has to produce
-// the same contact as one that is the first, normal flipped to still point up
-// out of the surface. Otherwise a world would push its props into the ground
-// depending only on the order it was built in.
+// A grid gives the same upward contact whichever side of the pair it is.
 #[test]
 fn a_body_rests_the_same_whichever_order_the_terrain_was_added_in() {
     let (mut first, _ground) = flat(2);

@@ -95,7 +95,7 @@ macro_rules! for_each_component {
                 AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank },
                 Sprite            => $crate::components::Sprite { gen, external, useful_blank, renders, live },
                 KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, consumed },
-                Screen            => $crate::components::Screen { gen, external, useful_blank, renders, consumed },
+                Screen            => $crate::components::Screen { gen, external, useful_blank, renders, consumed, ui_args: Screen },
                 Decal             => $crate::components::Decal { gen, external, useful_blank, validate: decal, consumed },
                 VolumetricFog     => $crate::components::VolumetricFog { gen, external, useful_blank, validate: volumetric_fog, consumed },
                 PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, consumed },
@@ -103,7 +103,7 @@ macro_rules! for_each_component {
                 WaterSurface      => $crate::components::WaterSurface { gen, external, useful_blank, renders, validate: water_surface, consumed },
                 SdfVolume         => $crate::components::SdfVolume { gen, external, compiled, renders, validate: sdf_volume, consumed },
                 GlassPanel        => $crate::components::GlassPanel { gen, external, useful_blank, validate: glass_panel, consumed },
-                LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
+                Layout            => $crate::components::Layout { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
                 FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank },
                 BenchmarkConfig   => $crate::components::BenchmarkConfig { gen, external, singleton },
@@ -139,9 +139,10 @@ macro_rules! for_each_component {
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
                 GroundProbes      => $crate::components::GroundProbes { runtime },
                 CameraProbe       => $crate::components::CameraProbe { runtime },
-                TextInput         => $crate::components::TextInput { gen, external, useful_blank, renders, live },
+                TextField         => $crate::components::TextField { gen, external, useful_blank, renders, live },
                 Behavior          => $crate::components::Behavior { gen, external, useful_blank, live },
                 Variables         => $crate::components::Variables { gen, external, singleton, live },
+                UiStateValues     => $crate::components::UiStateValues { gen, external, consumed },
                 TriggerVolume     => $crate::components::TriggerVolume { gen, external, useful_blank },
                 Hidden            => $crate::components::Hidden { runtime },
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders },
@@ -159,6 +160,17 @@ macro_rules! for_each_component {
                 NightSky          => $crate::components::NightSky { gen, external, singleton, renders, validate: night_sky, consumed },
                 Cloud             => $crate::components::Cloud { gen, external, useful_blank, renders, validate: cloud, consumed },
                 Weather           => $crate::components::Weather { gen, external, singleton, validate: weather, consumed },
+                List              => $crate::components::List { gen, external, useful_blank, renders, live, validate: list },
+                Grid              => $crate::components::Grid { gen, external, useful_blank, renders, live },
+                Canvas            => $crate::components::Canvas { gen, external, useful_blank, renders, live },
+                Tabs              => $crate::components::Tabs { gen, external, useful_blank, renders, live },
+                Checkbox          => $crate::components::Checkbox { gen, external, useful_blank, renders, live },
+                Button            => $crate::components::Button { gen, external, useful_blank, renders, live },
+                TextArea          => $crate::components::TextArea { gen, external, useful_blank, renders, live },
+                Menu              => $crate::components::Menu { gen, external, useful_blank, renders, live },
+                Modal             => $crate::components::Modal { gen, external, useful_blank, renders, live },
+                Toasts            => $crate::components::Toasts { gen, external, useful_blank, renders, live },
+                ValueSlider       => $crate::components::ValueSlider { gen, external, useful_blank, renders, live },
             },
 
             // Resource: declared in a world and compiled into the blob's
@@ -185,49 +197,31 @@ macro_rules! for_each_component {
 // is built from the same list in the build crate.
 crate::for_each_component!(define_components);
 
-// Generate the trivial `impl Component` blocks from the shared component list.
-//
-// The runtime trait is small: a NAME, a `from_baked` blob loader, and the
-// optional payload injection hook. Every stored component is pure data whose
-// impl is mechanical, generated here from each list entry's compact `{ ... }`
-// metadata block. Flags that only describe authoring are consumed by the
-// build-side registry in concinnity-cook.
+// Generate the trivial `impl Component` blocks from the shared component list,
+// from each entry's `{ ... }` metadata. Authoring-only flags are consumed by
+// the build-side registry in concinnity-cook.
 //
 // Metadata grammar (inside the braces):
 //   gen, <flags...>             -- generated impl:
 //     external | runtime        -- the authoring origin (world-side only)
-//     compiled                  -- an `inject_locator` that stores into
-//                                  `self.locator` (and marks the payload
-//                                  world-side)
-//     singleton                 -- at most one instance belongs to a world
+//     compiled                  -- an `inject_locator` into `self.locator`
+//     singleton                 -- at most one per world (world-side only)
+//     useful_blank              -- meaningful with only default args
 //                                  (world-side only)
-//     useful_blank              -- meaningful when declared with only default
-//                                  args, so authoring tools offer a plain add
-//                                  (world-side only)
-//     renders                   -- presence implies the world is meant to be
-//                                  seen: it resolves the run to a windowed
-//                                  one, and pulls in a Window companion at
-//                                  build time (world-side only)
-//     live                      -- the running world re-reads this column
-//                                  every frame, so overwriting a component in
-//                                  place takes effect without reloading the
-//                                  world. Carries a second obligation: no
-//                                  build-time expansion may read the type's
-//                                  args, because an in-place write skips the
-//                                  expansion entirely (world-side only)
-//     consumed [: <Type>]       -- a load-time pass drains this column during
-//                                  `World::start`, so it holds nothing from
-//                                  the first tick; `: <Type>` names the
-//                                  runtime component that survives in its
-//                                  place (world-side only)
+//     renders                   -- resolves the run to a windowed one and
+//                                  adds a Window companion (world-side only)
+//     live                      -- re-read every frame, so in-place writes
+//                                  apply; no build-time expansion may read
+//                                  its args (world-side only)
+//     consumed [: <Type>]       -- drained during `World::start`; `<Type>` is
+//                                  its runtime replacement (world-side only)
 //     validate: <fn>            -- the bake-time validator (world-side only)
-//     args: <Asset>             -- names the asset whose authored schema
-//                                  differs from the component it bakes into;
-//                                  the schema is that asset's `cook` form
-//                                  (world-side only)
-//   runtime [, build: <fn>]     -- RuntimeOnly: never authored, never in a
-//                                  blob; the impl is NAME + the default
-//                                  (rejecting) `from_baked`.
+//     args: <Asset>             -- the asset whose `cook` form is the
+//                                  authored schema (world-side only)
+//     ui_args: <Asset>          -- `args:` for a form in the cook's `ui`
+//                                  module (world-side only)
+//   runtime [, build: <fn>]     -- RuntimeOnly: never authored or in a blob;
+//                                  NAME plus the rejecting `from_baked`.
 macro_rules! cn_impl_components {
     // Entry point: one impl per stored entry. The resource group is skipped
     // whole -- a resource is never loaded from a component record.
@@ -269,6 +263,9 @@ macro_rules! cn_impl_components {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , args: $args:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , ui_args: $args:ident $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , $flag:ident $($rest:tt)*) => {

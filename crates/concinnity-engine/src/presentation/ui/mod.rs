@@ -4,6 +4,8 @@
 //! hover/click, screen overlays, and key bindings each frame.
 
 pub(crate) mod authored_action;
+pub(crate) mod binding;
+pub(crate) mod bound;
 mod capture;
 mod dropdown_list;
 mod focus;
@@ -11,9 +13,11 @@ mod focus_step;
 pub(crate) mod hit_region;
 mod intent;
 mod key_bindings;
-pub(crate) mod layout_container;
+pub(crate) mod layout;
+pub(crate) mod panel_stack;
 mod panels;
 mod region_ops;
+pub(crate) use region_ops::apply_value;
 mod regions;
 pub(crate) mod screen;
 pub(crate) mod screen_command;
@@ -23,20 +27,24 @@ mod scroll_layout;
 pub(crate) mod scroll_panel;
 mod slider;
 pub(crate) mod sprite;
-pub(crate) mod text_input;
+pub(crate) mod text_field;
 pub(crate) mod text_label;
 pub(crate) mod ui_action;
+pub(crate) mod ui_state;
+mod widget_input;
+pub(crate) mod widgets;
 
 use crate::ecs::{
     Access, EventCursor, PipelineContext, Ref, StepResult, System, World, by_asset_id,
 };
 
-use crate::protocol::{OpenDropdown, ScreenStack};
+use crate::protocol::{OpenDropdown, ScreenSpaces, ScreenStack};
 use alloc::vec::Vec;
 
 use crate::components::{
-    FrameInput, HitRegion, Identity, KeyBinding, SceneCommand, Screen, ScreenCommand, ScreenShown,
-    SettingCommand, SettingVerb, Sprite, SpriteFit, StoryCommand, TextInput, TextLabel, UiAction,
+    Button, Canvas, Checkbox, FrameInput, Grid, HitRegion, Identity, KeyBinding, Layout, List,
+    Menu, Modal, SceneCommand, Screen, ScreenCommand, ScreenShown, SettingCommand, Sprite,
+    SpriteFit, StoryCommand, Tabs, TextArea, TextField, TextLabel, Toasts, ValueSlider,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
@@ -53,6 +61,8 @@ use region_ops::{fire_action, point_in_rect, region_covers_canvas, region_rect, 
 // Per-hit-region bookkeeping stored after init().
 #[derive(Debug)]
 struct RegionEntry {
+    // The region's asset id, named in an event it emits.
+    id: Option<AssetId>,
     region: HitRegion,
     // Original TextLabel color, captured at init() for hover-out restore.
     original_color: Option<[f32; 3]>,
@@ -60,16 +70,13 @@ struct RegionEntry {
     original_scale: Option<f32>,
     // Whether this region was hovered last frame (to detect transitions).
     was_hovered: bool,
-    // The screen this region belongs to (derived from its name prefix at
-    // init()), or `None` if it belongs to no screen. Regions in a screen only
-    // fire while that screen is active; regions outside any screen only fire
-    // when no screen is active.
+    // The screen this region belongs to (its `screen` field, read at init()),
+    // or `None` if it belongs to no screen. A region fires while its screen
+    // takes input (`ScreenRegistry::receives_input`).
     screen: Option<AssetId>,
-    // For a slider drag region (a `Setting` action with the `Drag` verb), the
-    // setting key.
-    // `None` for an ordinary click region. A slider region is driven by the
-    // drag pass, not the click-to-fire path.
-    slider_key: Option<SettingKey>,
+    // Whether the region is laid out on the reference canvas (its screen's
+    // `space`), rather than in window pixels.
+    canvas: bool,
     // The scroll panel + row this region belongs to, if it sits in a panel's
     // content band (resolved by position at init). Such a region reflows with
     // its row each frame and only fires while its row is shown and inside the
@@ -81,11 +88,9 @@ struct RegionEntry {
     // Set by the scroll reflow when this region's row is hidden (its group is
     // collapsed); a hidden region never hovers or fires.
     hidden: bool,
-    // For a `follow_label` region: its label id and the captured `region.y -
-    // label.y` offset. Each frame the region's y is re-synced to the label
-    // (so a runtime-laid-out menu stays clickable) and the region is inert
-    // while the label is empty (a hidden entry catches no clicks).
-    follow: Option<(AssetId, f32)>,
+    // A `follow_label` region's label and captured offset. The region re-syncs
+    // to the label each frame and is inert while the label is empty.
+    follow: Option<(AssetId, [f32; 2])>,
     // How the region maps from the reference canvas to the window (matches the
     // sprite/label `fit`); a region spanning the whole canvas covers the full
     // window regardless.
@@ -98,22 +103,28 @@ struct RegionEntry {
 #[derive(Debug)]
 pub(crate) struct UiInputSystem {
     regions: Vec<RegionEntry>,
-    bindings: Vec<KeyBinding>,
+    // Each key binding with its asset id, named in an event it emits.
+    bindings: Vec<(Option<AssetId>, KeyBinding)>,
     screens: ScreenRegistry,
     // Asset ids of UI elements (Sprite, TextLabel) by their owning screen.
-    // Built at init() from `<screen_name>_*` name prefixes.
+    // Built at init() from each element's `screen` field.
     sprites_by_screen: HashMap<AssetId, Vec<AssetId>>,
     labels_by_screen: HashMap<AssetId, Vec<AssetId>>,
-    text_inputs_by_screen: HashMap<AssetId, Vec<AssetId>>,
-    // Index (into `regions`) of the slider currently being dragged, or `None`.
-    // Set on the press edge over a slider track, cleared on button release.
-    dragging: Option<usize>,
+    text_fields_by_screen: HashMap<AssetId, Vec<AssetId>>,
+    // Index (into `regions`) of the slider currently being dragged and the
+    // value it last set (none yet on the press frame), or `None`. Set on the
+    // press edge over a slider track, cleared on button release.
+    dragging: Option<(usize, Option<f32>)>,
     // Scroll panels in the world, drained at init. Driven each frame: collapse
     // state + scroll offset are solved into per-row positions written back onto
     // the elements + regions.
     panels: Vec<PanelState>,
     // `(panel index, grab offset)` while the scrollbar thumb is being dragged.
     // The grab offset keeps the thumb from jumping under the cursor on grab.
+    // Labels showing a bound value.
+    bound: bound::Bound,
+    // The UI state revision the bound scroll groups last followed.
+    group_state_revision: Option<u64>,
     thumb_drag: Option<(usize, f32)>,
     // A pending key rebind (a Controls-tab rebind row is capturing), or `None`.
     // While set, the menu consumes the frame for capture: the next pressed key
@@ -141,19 +152,22 @@ pub(crate) struct UiInputSystem {
     // hit-test pass resolves them in one label query instead of one full scan
     // per region.
     follow_label_ids: hashbrown::HashSet<AssetId>,
-    // Scratch: each followed label's (y, is-empty) this frame.
-    follow_labels: HashMap<AssetId, (f32, bool)>,
+    // Scratch: each followed label's (position, is-empty) this frame.
+    follow_labels: HashMap<AssetId, ([f32; 2], bool)>,
     // Scratch buffers for the scroll-layout solve/apply.
     layout: LayoutScratch,
+    // The widgets' input state.
+    widgets: widget_input::WidgetInput,
 }
 
 impl UiInputSystem {
-    /// The system for a world that declares any `HitRegion`, `Screen` or
-    /// `KeyBinding`.
+    /// The system for a world that declares any `HitRegion`, `Screen`,
+    /// `KeyBinding`, or widget.
     pub(crate) fn for_world(world: &World) -> Option<Self> {
         let needs = world.query::<HitRegion>().next().is_some()
             || world.query::<Screen>().next().is_some()
-            || world.query::<KeyBinding>().next().is_some();
+            || world.query::<KeyBinding>().next().is_some()
+            || widget_input::any_widget(world);
         needs.then(Self::new)
     }
 
@@ -166,9 +180,11 @@ impl UiInputSystem {
             screens: ScreenRegistry::default(),
             sprites_by_screen: HashMap::new(),
             labels_by_screen: HashMap::new(),
-            text_inputs_by_screen: HashMap::new(),
+            text_fields_by_screen: HashMap::new(),
             dragging: None,
             panels: Vec::new(),
+            bound: bound::Bound::default(),
+            group_state_revision: None,
             thumb_drag: None,
             capturing: None,
             open_dropdown: None,
@@ -179,6 +195,7 @@ impl UiInputSystem {
             follow_label_ids: hashbrown::HashSet::new(),
             follow_labels: HashMap::new(),
             layout: LayoutScratch::default(),
+            widgets: widget_input::WidgetInput::default(),
         }
     }
 }
@@ -193,16 +210,35 @@ impl System for UiInputSystem {
     fn access(&self) -> Access {
         Access::new()
             .reads_components(crate::component_mask![FrameInput, Identity])
-            .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
+            .writes_components(crate::component_mask![
+                TextLabel,
+                Sprite,
+                TextField,
+                Layout,
+                List,
+                Grid,
+                Canvas,
+                Tabs,
+                Checkbox,
+                Button,
+                TextArea,
+                Menu,
+                Modal,
+                Toasts,
+                ValueSlider
+            ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
                 DisabledSettingRows,
                 crate::window::display_mode::DisplayModes,
                 CompiledPlatforms,
+                crate::protocol::FrameTime,
+                crate::presentation::text_edit::KeyConvention,
             ])
             .writes_resources(crate::resource_mask![
                 OpenDropdown,
                 ScreenStack,
+                ScreenSpaces,
                 ScreenCommand,
                 ScreenShown,
                 SettingCommand,
@@ -210,6 +246,13 @@ impl System for UiInputSystem {
                 StoryCommand,
                 crate::protocol::ScreenshotRequest,
                 crate::protocol::HudHidden,
+                crate::components::UiState,
+                crate::components::UiEvent,
+                crate::settings::SettingValues,
+                crate::components::VariableCommand,
+                crate::components::VariableValues,
+                crate::components::Toast,
+                crate::presentation::text_edit::HostClipboard,
             ])
     }
 
@@ -220,20 +263,26 @@ impl System for UiInputSystem {
         for (id, s) in ctx.drain_with_ids::<Screen>() {
             let Some(id) = id else { continue };
             self.screens.register(id, ScreenMeta::from_asset(&s));
-            if s.initial && initial.is_none() {
+            if s.initial && !s.persistent && initial.is_none() {
                 initial = Some(id);
             }
         }
+        ctx.insert_resource(ScreenSpaces {
+            window: self.screens.window_screens(),
+        });
 
         // Drain KeyBindings: they aren't iterated each frame on the world,
         // we just match the pulse against this snapshot.
-        self.bindings = ctx.drain::<KeyBinding>();
+        self.bindings = ctx.drain_with_ids::<KeyBinding>();
 
         // Drain HitRegions, capture per-region hover restore state, and
-        // assign each region to a screen (or none) based on the resolved
-        // `screen` field that the build pipeline writes from the name prefix.
-        let hit_regions = ctx.drain::<HitRegion>();
-        for region in hit_regions {
+        // assign each region to a screen (or none) by its resolved `screen`
+        // field.
+        let hit_regions = ctx.drain_with_ids::<HitRegion>();
+        let mut handles = Vec::new();
+        for (id, region) in hit_regions {
+            // A disabled slider still shows its value.
+            handles.extend(bound::SliderHandle::of(&region, ctx));
             // A region SettingsSystem disabled (e.g. a capability-gated settings
             // row grayed out at init) is inert: dropping it here means it never
             // hovers, fires, drags, or reflows. Its labels are styled + reflowed
@@ -248,32 +297,26 @@ impl System for UiInputSystem {
                     .map_or((None, None), |l| (Some(l.color), Some(l.scale))),
             };
             let screen = region.screen;
-            let slider_key = match region.action {
-                Some(UiAction::Setting {
-                    key,
-                    verb: SettingVerb::Drag,
-                }) => Some(key),
-                _ => None,
-            };
             let region_base_y = region.y;
-            // A follow-label region captures the y offset to its label now, so
+            // A follow-label region captures its offset from its label now, so
             // the runtime layout can move the label and the region tracks it.
             let follow = if region.follow_label {
                 region.label.and_then(|lid| {
                     ctx.get_by_id::<TextLabel>(lid.id())
-                        .map(|l| (lid.id(), region.y - l.y))
+                        .map(|l| (lid.id(), [region.x - l.x, region.y - l.y]))
                 })
             } else {
                 None
             };
             let fit = region.fit;
             self.regions.push(RegionEntry {
+                id,
                 region,
                 original_color,
                 original_scale,
                 was_hovered: false,
                 screen: screen.map(Ref::id),
-                slider_key,
+                canvas: self.screens.on_canvas(screen.map(Ref::id)),
                 scroll_row: None,
                 region_base_y,
                 hidden: false,
@@ -287,29 +330,34 @@ impl System for UiInputSystem {
             .filter_map(|e| e.follow.map(|(id, _)| id))
             .collect();
 
-        // Build screen → UI-element maps by reading each Sprite/TextLabel's
-        // resolved `screen` field (the build pipeline writes it from the
-        // <screen>_* name prefix).
+        // Build screen → UI-element maps by reading each element's resolved
+        // `screen` field. A persistent screen never shows or hides, so its
+        // elements are left out and keep the visibility they are given.
+        let navigable = |screen: Option<Ref<Screen>>| {
+            screen
+                .map(Ref::id)
+                .filter(|id| !self.screens.is_persistent(*id))
+        };
         for (_, s, identity) in ctx.join2::<Sprite, Identity>() {
-            if let Some(screen_id) = s.screen {
+            if let Some(screen_id) = navigable(s.screen) {
                 self.sprites_by_screen
-                    .entry(screen_id.id())
+                    .entry(screen_id)
                     .or_default()
                     .push(identity.id());
             }
         }
         for (_, l, identity) in ctx.join2::<TextLabel, Identity>() {
-            if let Some(screen_id) = l.screen {
+            if let Some(screen_id) = navigable(l.screen) {
                 self.labels_by_screen
-                    .entry(screen_id.id())
+                    .entry(screen_id)
                     .or_default()
                     .push(identity.id());
             }
         }
-        for (_, t, identity) in ctx.join2::<TextInput, Identity>() {
-            if let Some(screen_id) = t.screen {
-                self.text_inputs_by_screen
-                    .entry(screen_id.id())
+        for (_, t, identity) in ctx.join2::<TextField, Identity>() {
+            if let Some(screen_id) = navigable(t.screen) {
+                self.text_fields_by_screen
+                    .entry(screen_id)
                     .or_default()
                     .push(identity.id());
             }
@@ -318,24 +366,23 @@ impl System for UiInputSystem {
         // Drain ScrollPanels into runtime state and bucket the regions into
         // their rows (uses the regions drained just above).
         self.init_panels(ctx);
+        self.bound = bound::Bound::collect(ctx, handles);
+        self.bound.refresh(ctx);
 
-        // Screens start hidden: zero out the visibility of every screen-owned
-        // Sprite and TextLabel.
+        // Stack screens start hidden: zero out the visibility of every element
+        // they own.
         for &id in self.sprites_by_screen.values().flatten() {
             by_asset_id::update::<Sprite>(ctx, Some(id), |sp| sp.visible = false);
         }
         for &id in self.labels_by_screen.values().flatten() {
             by_asset_id::update::<TextLabel>(ctx, Some(id), |l| l.visible = false);
         }
-        for &id in self.text_inputs_by_screen.values().flatten() {
-            by_asset_id::update::<TextInput>(ctx, Some(id), |ti| ti.visible = false);
+        for &id in self.text_fields_by_screen.values().flatten() {
+            by_asset_id::update::<TextField>(ctx, Some(id), |ti| ti.visible = false);
         }
 
-        // Open the initial screen (if any) through the same transition path as
-        // any navigation, so its elements show, its focus field focuses, and
-        // the activation is announced (AudioCue music fires for the first
-        // screen too). Publish the stack resource either way so the overlay
-        // reads a fresh state from frame 0.
+        // Open the initial screen through the normal transition path, and
+        // publish the stack resource either way.
         if let Some(id) = initial
             && let Some(transition) = self.screens.apply(ScreenCommand::Show(id))
         {
@@ -350,6 +397,9 @@ impl System for UiInputSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.apply_pending_screen_commands(ctx);
+        // Bound labels and handles follow the values last frame's actions and systems
+        // left, whatever this frame's input does.
+        self.bound.refresh(ctx);
 
         // Read (not drain) the latest input snapshot: Camera3DSystem queries it
         // too, and the renderer clears it before the next push.
@@ -357,10 +407,11 @@ impl System for UiInputSystem {
             return StepResult::Continue;
         };
 
-        // While any visible TextInput has keyboard focus, typed keys belong to
-        // the field: ordinary KeyBindings and the focus pulses are suspended.
-        let typing = ctx.query::<TextInput>().any(|t| t.visible && t.focused);
-        let intent = intent::frame_intent(
+        // While any visible text field or area has keyboard focus, typed keys
+        // belong to it: ordinary KeyBindings and the focus pulses are suspended.
+        let typing = ctx.query::<TextField>().any(|t| t.visible && t.focused)
+            || ctx.query::<TextArea>().any(|t| t.visible && t.focused);
+        let mut intent = intent::frame_intent(
             &input,
             typing,
             self.screens.top_capture().is_some(),
@@ -386,38 +437,62 @@ impl System for UiInputSystem {
         if self.capturing.is_some() {
             return self.step_rebind_capture(&input, ctx);
         }
-        if let Some(result) = self.dispatch_key_bindings(&intent, typing, ctx) {
+        // Canvas UI is authored in the reference canvas (crate::gfx::overlay).
+        let overlay = OverlayTransform::from_viewport(input.viewport);
+        // The widgets, popups first, take the frame's press and Escape ahead
+        // of the key bindings and the regions beneath them.
+        let (widgets, fired) = self.step_widgets(&input, &overlay, &intent, typing, ctx);
+        if let Some(result) = fired {
+            return result;
+        }
+        let key_taken = intent.pressed_key.is_some_and(|k| widgets.keys.has_name(k));
+        if widgets
+            .keys
+            .has_name(crate::components::InputKey::Enter.name())
+        {
+            intent.enter_confirm = false;
+            intent.confirm = false;
+        }
+        if !widgets.escape_taken
+            && !key_taken
+            && let Some(result) = self.dispatch_key_bindings(&intent, typing, ctx)
+        {
             return result;
         }
 
-        let active_screen = self.screens.top_capture();
-        // Screen-owned UI is authored in the reference canvas (crate::gfx::overlay).
-        let overlay = OverlayTransform::from_viewport(input.viewport);
         // A thumb drag suppresses the slider and region passes so the gutter
         // does not double as a control.
-        let thumb_active = self.handle_scroll_input(&input, active_screen, &overlay);
-        if !thumb_active {
-            self.step_slider_drag(&input, active_screen, &overlay, ctx);
-        }
+        let thumb_active = self.handle_scroll_input(&input, &overlay);
         self.refresh_disabled_rows(ctx);
-        if let Some(dir) = intent.nav {
-            self.step_focus(dir, active_screen, ctx);
+        // A press a widget took starts no slider drag; one already running
+        // carries on.
+        let slider_free = !widgets.click_taken || self.dragging.is_some();
+        if !thumb_active && slider_free {
+            self.step_slider_drag(&input, &overlay, ctx);
+        }
+        if let Some(dir) = intent.nav
+            && !widgets.keys.has_nav(dir)
+        {
+            self.step_focus(dir, ctx);
         }
 
         let bands = ctx.frame.collect(self.panels.iter().map(|p| p.band));
-        let frame = RegionFrame::new(input.viewport, active_screen, thumb_active, overlay, bands);
+        let mut frame = RegionFrame::new(input.viewport, thumb_active, overlay, bands);
+        frame.click_taken = widgets.click_taken;
         let outcome = self.hit_test_regions(&input, &intent, &frame, ctx);
         if let Some(result) = outcome.fired {
             return result;
         }
-        if let Some((setting_key, value_label)) = outcome.start_capture {
-            self.begin_capture(setting_key, value_label, ctx);
+        // A panel drag starts from a press nothing else took: no widget,
+        // region, slider, or scrollbar thumb.
+        if !widgets.click_taken && !outcome.pressed && !thumb_active && self.dragging.is_none() {
+            self.start_panel_drag(&input, &overlay, ctx);
+        }
+        if let Some(setting_key) = outcome.start_capture {
+            self.begin_capture(setting_key, ctx);
         }
         if let Some(req) = outcome.start_open {
             self.open_dropdown = Self::build_open_dropdown(&req, ctx);
-        }
-        if let Some(gid) = outcome.toggle_group {
-            self.toggle_group(active_screen, gid);
         }
         // Solve every panel so the next frame draws and hit-tests the reflowed
         // layout, then publish the dropdown state (a just-opened list, or none).

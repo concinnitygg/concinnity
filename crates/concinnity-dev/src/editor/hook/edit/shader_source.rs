@@ -7,9 +7,8 @@
 //! Leaving a file with unsaved edits asks first; a change on disk is followed
 //! while the buffer is clean.
 
-use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
-use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
+use concinnity_engine::render::shader::programs::vocabulary::{ENTRIES, Entry};
 
 use super::shaders_state::{SourceState, vocabulary_of};
 use crate::debug::hot_reload::ReloadSubject;
@@ -20,12 +19,9 @@ use crate::editor::panels::sdf;
 use crate::editor::panels::shader;
 use crate::editor::panels::shader::diagnostics::{Status, Tone};
 use crate::editor::panels::shader::reference::{RefClick, RefRow};
-use crate::editor::panels::shader::reference_panel::RefView;
 use crate::editor::panels::shader::source::{Leave, SourceKey};
 use crate::editor::panels::shader::source_panel::{SourceAction, SourceView};
-use crate::editor::text_area::clipboard;
-use crate::editor::text_area::keys::Platform;
-use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaView};
+use crate::editor::ui::BuiltPanel;
 
 impl EditorHook {
     // Open `key`'s file in the source panel, asking first when that would
@@ -52,19 +48,14 @@ impl EditorHook {
 
     // The confirmation dialog's answer: write first when `save`, and leave
     // only when that write landed.
-    pub(in crate::editor::hook) fn answer_leave_shader_source(
-        &mut self,
-        save: bool,
-        then: Leave,
-        world: &World,
-    ) {
+    pub(in crate::editor::hook) fn answer_leave_shader_source(&mut self, save: bool, then: Leave) {
         if save && !self.save_shader_source() {
             return;
         }
         let confirm = then == Leave::ConfirmForm;
         self.go_to_leave(then);
         if confirm {
-            self.confirm_form(world);
+            self.confirm_form();
         }
     }
 
@@ -181,151 +172,89 @@ impl EditorHook {
             && self.panel_order.last() == Some(&PanelKey::ShaderSource)
     }
 
-    // The text area laid out in the panel as it stands, with the view it
-    // shows pushed into the area so its scrolling keeps the caret on screen.
-    fn shader_geometry(&mut self) -> Option<Geometry> {
-        let vp = self.viewport;
-        let o = self.origin(PanelKey::ShaderSource, vp);
-        let s = self.effective_size(PanelKey::ShaderSource);
-        let reference = self.shaders.reference.open;
-        let src = self.shaders.source.as_mut()?;
-        let g = shader::source_panel::area_geometry(o, s, reference, &src.area, Metrics::code());
-        src.area.set_view(g.view());
-        Some(g)
-    }
-
-    // The wheel over the panel at `(mx, my)`: the reference column scrolls
-    // its rows, anywhere else the text.
-    pub(in crate::editor::hook) fn scroll_shader_source(&mut self, delta: f32, mx: f32, my: f32) {
-        let vp = self.viewport;
-        let o = self.origin(PanelKey::ShaderSource, vp);
-        let s = self.effective_size(PanelKey::ShaderSource);
-        if self.shaders.reference.open && shader::source_panel::cursor_over_reference(mx, my, o, s)
-        {
-            let step = if delta > 0.0 { -1 } else { 1 };
-            self.scroll_reference(step);
-            return;
-        }
-        self.shader_geometry();
-        let shift = self.shift_held;
-        if let Some(src) = self.shaders.source.as_mut() {
-            src.area.wheel(delta, shift);
-        }
-    }
-
     // The status the panel shows: its own, or a note that what reads the file
     // is not in the running world yet.
-    fn shader_status(src: &SourceState) -> Option<Status> {
-        src.status.clone().or_else(|| {
-            (src.live == Some(false)).then(|| {
-                Status::new(
+    fn shader_status(src: &SourceState) -> Option<(&str, Tone)> {
+        src.status
+            .as_ref()
+            .map(|s| (s.text.as_str(), s.tone))
+            .or_else(|| {
+                (src.live == Some(false)).then_some((
                     "Not in the running world yet; it joins when the world rebuilds",
                     Tone::Info,
-                )
+                ))
             })
-        })
     }
 
-    // The reference column's rows as they stand, for the open file's kind.
-    fn reference_rows(&self) -> Vec<RefRow<'static>> {
-        let entries = self
-            .shaders
+    // The vocabulary the open file's reference column lists.
+    fn reference_entries(&self) -> &'static [Entry] {
+        self.shaders
             .source
             .as_ref()
-            .map_or(ENTRIES, |s| vocabulary_of(&s.key));
-        self.shaders.reference.rows(entries)
+            .map_or(ENTRIES, |s| vocabulary_of(&s.key))
     }
 
-    // Move the reference column by `step` rows, within its rows.
-    fn scroll_reference(&mut self, step: isize) {
-        let vp = self.viewport;
-        let o = self.origin(PanelKey::ShaderSource, vp);
-        let s = self.effective_size(PanelKey::ShaderSource);
-        let shown = shader::reference_panel::rows_shown(shader::source_panel::reference_rect(o, s));
-        let total = self.reference_rows().len();
-        self.shaders.reference.scroll_by(step, total, shown);
+    // A key that changes whenever the reference column's rows do: the open
+    // file's kind and the folded groups.
+    fn reference_key(&self) -> i32 {
+        let kind = match self.shaders.source.as_ref().map(|s| &s.key) {
+            Some(SourceKey::Shader { stage, .. }) => *stage as i32 + 1,
+            Some(SourceKey::Field { .. }) => 16,
+            None => 0,
+        };
+        kind << 8 | i32::from(self.shaders.reference.folds())
     }
 
-    // The panel's view, with its title, status and reference rows owned by
-    // the caller.
-    pub(in crate::editor::hook) fn make_source_view<'a>(
-        &'a self,
-        src: &'a SourceState,
-        title: &'a str,
-        status: Option<&'a Status>,
-        rows: &'a [RefRow<'a>],
-        mouse: [f32; 2],
-    ) -> SourceView<'a> {
+    // Show the panel, reading the reference column's rows only when they
+    // changed.
+    pub(in crate::editor::hook) fn sync_shader_source(
+        &self,
+        world: &mut World,
+        built: &BuiltPanel,
+    ) {
+        let Some(src) = &self.shaders.source else {
+            return;
+        };
         let reference = &self.shaders.reference;
-        SourceView {
-            title,
+        let entries = self.reference_entries();
+        // A hovered reference name says what it is on the status line.
+        let hover = shader::source_panel::reference_hovered(world, built)
+            .filter(|_| reference.open)
+            .and_then(|i| match reference.row_at(entries, i)? {
+                RefRow::Name(e) => Some([e.signature, e.summary]),
+                RefRow::Heading { .. } => None,
+            });
+        let view = SourceView {
+            title: src.title_parts(),
             path: &src.path,
-            area: &src.area,
+            dirty: src.area.is_dirty(),
             focus: self.shader_typing(),
-            status,
+            hover,
+            status: Self::shader_status(src),
             markers: &src.markers,
-            mouse,
-            reference: reference.open.then_some(RefView {
-                rows,
-                scroll: reference.scroll,
-                mouse,
-            }),
+            reference: reference.open.then(|| self.reference_key()),
+        };
+        shader::source_panel::sync(&view, || reference.rows(entries), world, built);
+    }
+
+    // Take in a press that focused the text area, or left it.
+    pub(in crate::editor::hook) fn observe_shader_source(
+        &mut self,
+        world: &World,
+        built: &BuiltPanel,
+    ) {
+        let focused = shader::source_panel::area_focused(world, built);
+        let shown = self.shader_typing();
+        if focused != shown
+            && let Some(src) = self.shaders.source.as_mut()
+        {
+            src.focus = focused;
         }
     }
 
-    pub(in crate::editor::hook) fn draw_shader_source(
-        &self,
-        world: &mut World,
-        o: [f32; 2],
-        mouse: [f32; 2],
-    ) {
-        let Some(src) = &self.shaders.source else {
-            shader::source_panel::ids().hide(world);
-            return;
-        };
-        let s = self.effective_size(PanelKey::ShaderSource);
-        let title = src.title();
-        let status = Self::shader_status(src);
-        let rows = self.reference_rows();
-        let view = self.make_source_view(src, &title, status.as_ref(), &rows, mouse);
-        shader::source_panel::place(world, Some(&view), o, s, Metrics::code());
-    }
-
-    // Route a resolved source-panel click at `(mx, my)`. A press on a gutter
-    // marker jumps to where its diagnostic points.
-    pub(in crate::editor::hook) fn apply_source_action(
-        &mut self,
-        action: SourceAction,
-        mx: f32,
-        my: f32,
-    ) {
+    // Act on what the user asked of the panel.
+    pub(in crate::editor::hook) fn apply_source_action(&mut self, action: SourceAction) {
         match action {
-            SourceAction::Text => {
-                let Some(g) = self.shader_geometry() else {
-                    return;
-                };
-                let now = self.clock.elapsed().as_secs_f64();
-                let shift = self.shift_held;
-                let Some(src) = self.shaders.source.as_mut() else {
-                    return;
-                };
-                let marker = {
-                    let view = TextAreaView {
-                        area: &src.area,
-                        focused: true,
-                        markers: &src.markers,
-                        mouse: [mx, my],
-                    };
-                    layout::hovered_marker(&view, &g).map(|m| (m.line, m.column))
-                };
-                match marker {
-                    Some((line, column)) => src.area.go_to(line, column),
-                    None => {
-                        src.area.press_at(&g, mx, my, shift, now);
-                    }
-                }
-                src.focus = true;
-            }
             SourceAction::Save => {
                 self.save_shader_source();
             }
@@ -340,65 +269,25 @@ impl EditorHook {
             SourceAction::ToggleReference => {
                 self.shaders.reference.open ^= true;
             }
-            SourceAction::Reference(slot) => self.press_reference(slot),
-            // A click on panel chrome blurs the text area.
-            SourceAction::Consume => {
-                if let Some(src) = self.shaders.source.as_mut() {
-                    src.focus = false;
-                }
-            }
+            SourceAction::Reference(i) => self.press_reference(i),
         }
     }
 
-    // A press on the reference column's `slot`-th shown row: a heading folds
-    // its group, a name goes in at the caret and the text takes the keyboard.
-    fn press_reference(&mut self, slot: usize) {
-        let rows = self.reference_rows();
-        let Some(row) = rows.get(self.shaders.reference.scroll + slot) else {
+    // A press on the reference column's row `i`: a heading folds its group, a
+    // name goes in at the caret and the text takes the keyboard.
+    fn press_reference(&mut self, i: usize) {
+        let entries = self.reference_entries();
+        let Some(row) = self.shaders.reference.row_at(entries, i) else {
             return;
         };
-        match shader::reference::click(row) {
-            RefClick::Fold(group) => {
-                self.shaders.reference.toggle(group);
-                self.scroll_reference(0);
-            }
+        match shader::reference::click(&row) {
+            RefClick::Fold(group) => self.shaders.reference.toggle(group),
             RefClick::Insert(text) => {
                 if let Some(src) = self.shaders.source.as_mut() {
                     src.area.insert(&text);
                     src.focus = true;
                 }
             }
-        }
-    }
-
-    // The per-frame input while the panel is frontmost: a held press keeps
-    // dragging, and while the area holds the keyboard every key event of the
-    // frame edits it, in order. The save shortcut saves.
-    pub(in crate::editor::hook) fn shader_source_keys(
-        &mut self,
-        world: &mut World,
-        input: &FrameInput,
-    ) {
-        let Some(g) = self.shader_geometry() else {
-            return;
-        };
-        let typing = self.shader_typing();
-        let Some(src) = self.shaders.source.as_mut() else {
-            return;
-        };
-        if src.area.pointer_busy() {
-            src.area
-                .pointer(&g, input.mouse_x, input.mouse_y, input.left_button_down);
-        }
-        if !typing || input.key_events.is_empty() {
-            return;
-        }
-        let clipboard = clipboard::system_or(world, &mut self.text_clipboard);
-        let response = src
-            .area
-            .handle_events(&input.key_events, Platform::current(), clipboard);
-        if response.save {
-            self.save_shader_source();
         }
     }
 }

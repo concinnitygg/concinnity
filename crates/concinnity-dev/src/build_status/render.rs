@@ -376,14 +376,14 @@ mod tests {
         board.end(
             Outcome::Built {
                 written: 3 * 1024 * 1024,
-                data_dir: ".concinnity/data".into(),
+                data_dir: "data".into(),
             },
             None,
             t0 + Duration::from_millis(1_500),
         );
         assert_eq!(
             footer(&board).unwrap().plain_text(),
-            "Finished in 1.5s · 3.0 MiB written to .concinnity/data · 1 warning"
+            "Finished in 1.5s · 3.0 MiB written to data · 1 warning"
         );
     }
 

@@ -36,6 +36,7 @@ pub(in crate::vulkan) use concinnity_engine::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::transparent::producer::{
     self, TransparentProducers, WaterParamsSink,
 };
@@ -53,7 +54,7 @@ use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
     GpuImage, GpuUploadContext, ImageSpec, create_hdr_snapshot, create_image, create_image_view,
-    upload_texture,
+    upload_color_lut, upload_texture,
 };
 use super::water_sim::OceanViews;
 use super::wire_cache::WireCache;
@@ -64,11 +65,8 @@ use crate::vulkan::owned::{
 };
 use crate::vulkan::record::Recorder;
 
-// The live acceleration-structure handles wired into the transparent RT
-// descriptor ring. Passed once at init (`None` when RT is not live at launch)
-// and re-pointed every frame thereafter by `VkContext::rt_dynamic_update`, so
-// the ring tracks dynamic TLAS / geometry-table / deformed-buffer rebuilds.
-// Mirrors the per-frame inputs `post::rt_reflections::wire_dynamic` takes.
+// The live acceleration-structure handles for the transparent RT descriptor
+// ring: `None` at init when RT is off, then re-pointed each frame.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TransparentRtInputs {
     pub tlas: vk::AccelerationStructureKHR,
@@ -78,12 +76,9 @@ pub(in crate::vulkan) struct TransparentRtInputs {
     pub skinned_indices: vk::Buffer,
 }
 
-// The live acceleration-structure handles re-pointed into one frame's
-// transparent RT descriptor set every frame by `wire_dynamic` /
-// `wire_rt_dynamic`. Same handles the RT-reflection pass rewires; the deformed
-// buffer is always valid while `skinned_indices` is null until the first skinned
-// rebuild. Compared frame to frame so a frame that rebuilt nothing rewrites
-// nothing.
+// The handles re-pointed into one frame's transparent RT set. Compared frame to
+// frame so a frame that rebuilt nothing rewrites nothing; `skinned_indices` is
+// null until the first skinned rebuild.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vulkan) struct TransparentRtDynamic {
     pub tlas: vk::AccelerationStructureKHR,
@@ -147,11 +142,9 @@ pub(in crate::vulkan) struct RecordDescriptors<'a> {
     pub ocean: Option<OceanViews>,
 }
 
-// Upload one record's static geometry (device-local, staged once) and its
-// params into every frame slot's UBO, then allocate + write one descriptor
-// set per slot. The geometry must not stay in host-visible memory: on a
-// discrete GPU that is system RAM, and an ocean grid's few MB would cross
-// the bus on every draw.
+// Upload one record's static geometry, device-local and staged once (host-visible
+// is system RAM on a discrete GPU, crossed every draw), and its params into every
+// frame's UBO, then write one descriptor set per frame.
 pub(in crate::vulkan) fn upload_record(
     gpu: &GpuUploadContext<'_>,
     descriptors: RecordDescriptors<'_>,
@@ -214,15 +207,10 @@ pub(in crate::vulkan) fn upload_record(
     })
 }
 
-// The see-through glass MESH producer. Ray-traced only: what makes the mesh
-// see-through rather than the opaque reflective glass of the main pass is a real
-// per-pixel reflection ray, so there is no probe-path pipeline and the whole
-// producer is inert while RT is off (those meshes then render opaque).
-//
-// It holds no `TransparentRecord`s. A mesh draws from the shared scene vertex /
-// index buffers at its `DrawObject`'s offsets, and both those offsets (LOD picks
-// per frame) and its params change at runtime, so the encoder rebuilds the list
-// every frame and writes each mesh's params into this frame's slice of the ring.
+// The see-through glass mesh producer, ray-traced only and inert while RT is
+// off (those meshes then render opaque). Its meshes draw from the shared scene
+// buffers with per-frame LOD and params, so the encoder rebuilds the list and
+// writes each mesh's params into this frame's slice of the ring every frame.
 pub(in crate::vulkan) struct GlassMeshProducer {
     pipeline_flat: OwnedPipeline,
     // `Some` only when the bindless pool is live, matching the other producers.
@@ -257,15 +245,9 @@ struct GlassMeshDraw {
 }
 
 impl GlassMeshProducer {
-    // Allocate the per-frame params ring and one descriptor set per (frame,
-    // mesh) pointing at that mesh's block of it, then take ownership of the
-    // pipelines. The sets come from a pool of this producer's own rather than the
-    // pass's, whose size is fixed to the pane + water record count.
-    //
-    // Each set reuses the shared params layout, so its planar binding (1) is
-    // written with the 1x1 stand-in: a mesh never samples a planar reflection,
-    // but the layout the pipeline was built against still declares the
-    // binding.
+    // Allocate the params ring and one set per (frame, mesh) from this producer's
+    // own pool. The planar binding gets the 1x1 stand-in: meshes never sample it,
+    // but the shared layout declares it.
     pub(in crate::vulkan) fn new(
         ctx: &ProducerCtx<'_>,
         pipelines: TracedGlassPipelines,
@@ -371,11 +353,8 @@ pub(in crate::vulkan) struct TracedGlassPipelines {
     pub reflection_textured: Option<OwnedPipeline>,
 }
 
-// Per-pixel ray-traced reflection state shared by both producers: the two
-// pipeline layouts (flat material-tint + textured bindless), the per-frame
-// RtParams UBO ring, and the per-frame RT descriptor ring (set 3: TLAS +
-// geometry table + the static + skinned vertex/index buffers). Mirrors the RT
-// half of `directx::transparent::TransparentResources`.
+// Per-pixel RT reflection state shared by both producers: the flat and
+// textured pipeline layouts, the `RtParams` ring, and the set-3 RT descriptors.
 struct TransparentRt {
     _set_layout: OwnedSetLayout,
     layout_flat: OwnedPipelineLayout,
@@ -453,6 +432,11 @@ pub(in crate::vulkan) struct TransparentResources {
     // past its own fence.
     reflection_divisor: u32,
     wired_reflection: WireCache<ReflectionWire>,
+    // What each frame slot's view sets' air bindings name.
+    wired_air: WireCache<AirWire>,
+    air_stand_in: AirStandIn,
+    // The snapshot's sampler, which the air stand-in reads through as well.
+    scene_sampler: vk::Sampler,
     empty_layer: GpuImage,
 }
 
@@ -500,15 +484,10 @@ impl TransparentRt {
         }
     }
 
-    // Re-point one frame's TLAS (1), geometry table (2), deformed skinned verts
-    // (5), and skinned indices (6) at the live handles. Called every frame from
-    // `VkContext::rt_dynamic_update` (the current frame's set is fence-gated). A
-    // frame that rebuilt nothing hands over the same five handles this slot
-    // already holds and writes nothing. The deformed buffer is always a valid
-    // handle (the accel data holds a 1-element
-    // dummy when there is no skinned geometry); `skinned_indices` is null until the
-    // first skinned rebuild, in which case the 1-element dummy SSBO binds so the
-    // descriptor stays valid. Mirrors `post::rt_reflections::wire_dynamic`.
+    // Re-point one frame's TLAS (1), geometry table (2), deformed verts (5) and
+    // skinned indices (6) at the live handles; this frame's set is fence-gated,
+    // and nothing is written when they are unchanged. Null skinned indices bind
+    // the 1-element dummy.
     fn wire_dynamic(&mut self, device: &VkDevice, frame_idx: usize, dynamic: TransparentRtDynamic) {
         if !self.wired_accel.changed(frame_idx, dynamic) {
             return;
@@ -550,11 +529,9 @@ struct RtSetLayouts {
     bindless: Option<vk::DescriptorSetLayout>,
 }
 
-// Build the shared RT pipeline layouts + descriptor ring. Called from
-// `TransparentResources::new` when the device is RT-capable. The two layouts
-// share the view / params / global set layouts (sets 0/1/2) so the same
-// descriptor sets the base path binds carry over; the RT geometry rides a
-// dedicated set 3 (bindless pool on set 4 for the textured variant).
+// Build the RT pipeline layouts and descriptor ring when the device can trace.
+// Sets 0-2 match the base path; the RT geometry rides set 3 and the textured
+// variant's bindless pool set 4.
 fn build_transparent_rt(
     alloc: &DeviceAllocator,
     instance: &ash::Instance,
@@ -575,12 +552,8 @@ fn build_transparent_rt(
     let layout_flat = device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts))
         .map_err(|e| super::error::map_vk_result(e, "transparent rt flat pipeline layout"))?;
-    // The textured variant binds 5 sets (view / params / global / rt-geom / bindless
-    // pool); the flat variant binds 4. The Vulkan spec only guarantees
-    // `maxBoundDescriptorSets >= 4`, so on a device that reports exactly 4 fall back
-    // to the flat trace (the bindless pool is unreachable there). Every RT-capable
-    // desktop GPU reports >= 8; this mirrors the `rt_capable -> flat -> base`
-    // degradation ladder.
+    // The textured variant binds five sets, but Vulkan only guarantees four, so a
+    // device reporting exactly four falls back to the flat trace.
     // SAFETY: a property query on a live handle; it only reads.
     let max_bound_sets = unsafe { instance.get_physical_device_properties(physical_device) }
         .limits
@@ -720,11 +693,9 @@ fn create_transparent_render_pass(
         .map_err(|e| super::error::map_vk_result(e, "transparent render pass"))
 }
 
-// The glass reflection pre-pass: one reduced layer (CLEAR, left
-// SHADER_READ_ONLY for the next layer and the scene pass to read) over a depth
-// attachment the pass clears and tests against. The incoming dependency orders
-// the clears after the previous layer's depth writes and after the prior frame's
-// reads of the layer; the outgoing one publishes the layer to fragment reads.
+// The glass reflection pre-pass: one cleared reduced layer, left
+// SHADER_READ_ONLY for the next layer and the scene pass, over a depth target
+// it clears and tests.
 fn create_reflection_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
     let color = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
@@ -889,13 +860,11 @@ impl FrameViewSets {
     const COUNT: usize = 3;
 }
 
-// Set 0: the per-frame view UBO (0), the scene snapshot (1), this frame's main
-// depth (2), the two glass reflection layers (3, 4), and the sampler the
-// snapshot is read through (5). The sky prefilter cube and its sampler are the
-// global set's (set 2). The view UBO is
-// visible to the vertex stage as well: both producers project through `vp`, and
-// water reads `time` there for its wave phase.
-fn view_set_bindings() -> [Binding; 6] {
+// Set 0: view UBO (0), scene snapshot (1), main depth (2), the glass reflection
+// layers (3, 4) and the snapshot sampler (5); then the atmosphere block (7),
+// its transmittance and multiple-scattering tables (8, 9), aerial volume (10)
+// and sampler (11). The view UBO is also vertex-visible.
+fn view_set_bindings() -> [Binding; 11] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
     [
@@ -905,15 +874,48 @@ fn view_set_bindings() -> [Binding; 6] {
         (3, T::SAMPLED_IMAGE, frag),
         (4, T::SAMPLED_IMAGE, frag),
         (5, T::SAMPLER, frag),
+        (7, T::UNIFORM_BUFFER, frag),
+        (8, T::SAMPLED_IMAGE, frag),
+        (9, T::SAMPLED_IMAGE, frag),
+        (10, T::SAMPLED_IMAGE, frag),
+        (11, T::SAMPLER, frag),
     ]
 }
 
-// Set 1: one record's params UBO (0), the planar reflection target it samples
-// (1) and that target's sampler (2), then the simulated oceans' displacement
-// and slope arrays (3, 4) and their sampler (5), and a planet sea's wake (6).
-// The UBO is visible to the vertex stage because the water vertex stage reads
-// its wave table out of it, and the oceans' arrays and the wake because it
-// displaces by them; only water reads 3..6.
+/// What the view sets' air bindings (7..11) name: the atmosphere's block, its
+/// two tables and aerial volume in `layout`, and their sampler.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::vulkan) struct AirWire {
+    pub(in crate::vulkan) block: vk::Buffer,
+    pub(in crate::vulkan) transmittance: vk::ImageView,
+    pub(in crate::vulkan) multiscatter: vk::ImageView,
+    pub(in crate::vulkan) aerial: vk::ImageView,
+    pub(in crate::vulkan) layout: vk::ImageLayout,
+    pub(in crate::vulkan) sampler: vk::Sampler,
+}
+
+// Point a view set's air bindings at `air`.
+fn write_view_set_air(device: &VkDevice, set: vk::DescriptorSet, air: AirWire) {
+    SetWrites::new(set)
+        .uniform_buffer(7, air.block, size_of::<AtmosphereParams>() as u64)
+        .sampled_image_in(8, air.transmittance, air.layout)
+        .sampled_image_in(9, air.multiscatter, air.layout)
+        .sampled_image_in(10, air.aerial, air.layout)
+        .sampler(11, air.sampler)
+        .apply(device);
+}
+
+// What the air bindings hold in a world without an atmosphere, where the
+// view's air flag is off and nothing reads them: a zeroed block, the empty
+// layer for the tables and a one-texel volume.
+struct AirStandIn {
+    block: PooledBuffer,
+    volume: GpuImage,
+}
+
+// Set 1: the record's params UBO (0), its planar target and sampler (1, 2), the
+// oceans' displacement and slope arrays and sampler (3-5), and a sea's wake (6).
+// Water's vertex stage reads the UBO and 3-6.
 fn params_set_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
@@ -983,12 +985,9 @@ fn write_view_set_images(device: &VkDevice, set: vk::DescriptorSet, inputs: View
         .apply(device);
 }
 
-// What one params set points at: a uniform block (binding 0) at `offset` into
-// `buffer`, the planar reflection target the record samples (binding 1) -- its
-// slot's mirror render, or the 1x1 stand-in for a slotless record (the shaders
-// gate on the `planar` flag) -- with the sampler it is read through (binding
-// 2), and the oceans' arrays and the wake (bindings 3..6) where the world has
-// water.
+// What one params set points at: the uniform block at `offset` in `buffer`, the
+// planar target (or the 1x1 stand-in) and its sampler, and the oceans' arrays
+// and wake where the world has water.
 #[derive(Clone, Copy)]
 struct ParamsSetTargets {
     buffer: vk::Buffer,
@@ -1021,11 +1020,6 @@ fn write_params_set(device: &VkDevice, set: vk::DescriptorSet, t: ParamsSetTarge
     writes.apply(device);
 }
 
-// Point a params set's planar binding (1) at `view`.
-fn write_planar_view(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    SetWrites::new(set).sampled_image(1, view).apply(device);
-}
-
 // Which attributes of the standard engine `Vertex` a transparent vertex stage
 // fetches. Panes are pre-transformed into world space and water grids carry
 // their frame in the wave sum, so neither reads anything but the position; a
@@ -1036,11 +1030,8 @@ pub(in crate::vulkan) enum TransparentVertexInput {
     PositionAndNormal,
 }
 
-// Build one transparent graphics pipeline. No face culling (the shaders are
-// two-sided), no depth attachment / test (the fragments do the manual occlusion
-// test), and SRC_ALPHA / ONE_MINUS_SRC_ALPHA blending into the single-sample
-// scene target. The standard engine `Vertex` stride is bound with the attributes
-// `vertex_input` names. Negative-height viewport applied dynamically at encode.
+// Build one transparent pipeline: two-sided, no depth attachment (the fragments
+// test occlusion themselves), alpha blended into the scene target.
 pub(in crate::vulkan) fn create_transparent_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -1184,11 +1175,8 @@ pub(in crate::vulkan) struct TransparentBuildConfig {
     pub reflection_divisor: u32,
 }
 
-// The post-SSR scene target per frame slot plus the per-frame main-depth views.
-// `scene_views` / `scene_images` are the post-SSR scene target per frame slot
-// (SSR output repeated, or `hdr_resolve_images[i]`); `depth_views` are the main-
-// depth views the manual occlusion test samples. `sampler` is the linear sampler
-// the snapshot and the planar targets are read through.
+// The post-SSR scene target and main-depth views per frame slot, and the linear
+// sampler the snapshot and planar targets are read through.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
     pub scene_views: &'a [vk::ImageView],
@@ -1198,12 +1186,9 @@ pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
     pub sampler: vk::Sampler,
 }
 
-// The world's transparent content, each producer's per-record planar slot
-// assignment (aligned with its slice; `None` records keep the probe cube), and
-// the per-distinct-plane mirror target views the assigned records sample. A
-// slotless record (or an empty `planar_target_views`) binds the snapshot as a
-// valid stand-in and never samples it (the shaders gate on the flag). From
-// `assign_planar_slots`, which numbers water first.
+// The world's transparent content, each record's planar slot (`None` keeps the
+// probe cube), and the mirror target views; a slotless record binds the
+// snapshot as a stand-in it never samples.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
@@ -1218,12 +1203,9 @@ pub(in crate::vulkan) struct TransparentContent<'a> {
     pub seethrough_mesh_indices: &'a [usize],
 }
 
-// Per-pixel RT reflection inputs, built whenever the device is RT-capable (so a
-// live quality toggle can bring RT up), independent of whether RT is on at launch.
-// `vertex_buffer` / `index_buffer` are the shared static geometry the trace reads;
-// `rt_inputs` is the initial acceleration-structure handles (`None` when RT is off
-// at launch, then filled per frame by `rt_dynamic_update`); `bindless_set_layout` +
-// pool size enable the textured hit-shading variant.
+// RT reflection inputs, built whenever the device can trace so RT can be turned
+// on later: the shared geometry, the initial handles (`None` when RT is off at
+// launch), and the bindless layout for textured hit shading.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TransparentRtSetup {
     pub rt_capable: bool,
@@ -1460,17 +1442,24 @@ impl TransparentResources {
                     layers: [sets[1], sets[2]],
                 })
                 .collect();
-        let empty_layer = upload_texture(
-            &GpuUploadContext {
-                alloc,
-                device,
-                command_pool,
-                queue,
-            },
-            1,
-            1,
-            &[0u8; 4],
-        )?;
+        let upload = GpuUploadContext {
+            alloc,
+            device,
+            command_pool,
+            queue,
+        };
+        let empty_layer = upload_texture(&upload, 1, 1, &[0u8; 4])?;
+        let air_stand_in = AirStandIn {
+            block: alloc.create_buffer(
+                size_of::<AtmosphereParams>() as u64,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?,
+            volume: upload_color_lut(&upload, 1, &[0u8; 4])?,
+        };
+        air_stand_in
+            .block
+            .write_val(0, &<AtmosphereParams as bytemuck::Zeroable>::zeroed());
 
         // Per-frame framebuffers targeting the scene image and reactive mask
         // for that slot.
@@ -1532,11 +1521,8 @@ impl TransparentResources {
             )?)
         };
 
-        // The see-through mesh producer, built only when a material opted in AND
-        // the pass has RT pipeline layouts: the trace is the whole feature, so
-        // without them there is nothing to build and those meshes stay opaque. A
-        // shader-compile failure is non-fatal for the same reason -- it is logged
-        // and the meshes keep the Layer 1 opaque-reflective look.
+        // The see-through mesh producer, built when a material opts in and the RT
+        // layouts exist. A compile failure is logged and the meshes stay opaque.
         let glass_mesh = match (
             content.seethrough_mesh_indices.is_empty(),
             producer_ctx.rt_layout_flat,
@@ -1576,6 +1562,9 @@ impl TransparentResources {
             reflection: None,
             reflection_divisor,
             wired_reflection: WireCache::new(frames),
+            wired_air: WireCache::new(frames),
+            air_stand_in,
+            scene_sampler: sampler,
             empty_layer,
         };
         me.reflection =
@@ -1586,7 +1575,37 @@ impl TransparentResources {
             }
         }
         me.write_view_sets(device, depth_views);
+        for frame in 0..frames {
+            me.wire_air(device, frame, None);
+        }
         Ok(me)
+    }
+
+    // Point frame slot `frame`'s view sets' air bindings at `air`, the
+    // atmosphere's for this frame, or the stand-ins without one, when they
+    // moved since that slot was last written. The slot's fence has passed.
+    pub(in crate::vulkan) fn wire_air(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        air: Option<AirWire>,
+    ) {
+        let air = air.unwrap_or_else(|| AirWire {
+            block: self.air_stand_in.block.buffer(),
+            transmittance: self.empty_layer.view,
+            multiscatter: self.empty_layer.view,
+            aerial: self.air_stand_in.volume.view,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler: self.scene_sampler,
+        });
+        if !self.wired_air.changed(frame, air) {
+            return;
+        }
+        if let Some(sets) = self.view_sets.get(frame) {
+            for set in [sets.scene, sets.layers[0], sets.layers[1]] {
+                write_view_set_air(device, set, air);
+            }
+        }
     }
 
     // The reduced reflection layers for a `width` x `height` render at
@@ -1666,13 +1685,9 @@ impl TransparentResources {
         write_view_set_images(device, sets.layers[1], inputs([wire.first, empty]));
     }
 
-    // True when the per-pixel RT pipelines are built (RT-capable device + the
-    // shader compile + descriptor setup succeeded) for every live producer.
-    // Single-sources the "the transparent pass can trace" half of
-    // `VkContext::rt_transparent_active`: gating on the whole set is what keeps
-    // the RT choice a per-frame one rather than a per-producer one, so the planar
-    // mirror render the graph skips is never one a producer still needs. Mirrors
-    // DirectX's `rt_pipelines_ready`.
+    // True when every live producer built its RT pipelines, so the RT choice is per
+    // frame rather than per producer and the planar mirrors it skips are never
+    // still needed.
     pub(in crate::vulkan) fn rt_pipelines_ready(&self) -> bool {
         self.rt.is_some() && self.producers.traces(false)
     }
@@ -1694,11 +1709,8 @@ impl TransparentResources {
         self.glass_mesh.is_some()
     }
 
-    // True when the textured RT layout exists AND every live producer built its
-    // textured pipeline, so the whole pass can take the bindless hit-shading
-    // variant. All-or-nothing across producers: the encoder binds one pipeline
-    // layout for the pass, so a per-producer split would leave one drawing with
-    // sets bound under an incompatible layout.
+    // True when every live producer built its textured pipeline. All or nothing:
+    // the encoder binds one pipeline layout for the whole pass.
     fn rt_textured_ready(&self) -> bool {
         self.rt
             .as_ref()
@@ -1756,11 +1768,8 @@ impl TransparentResources {
         self.producers.water_planar_slot_live()
     }
 
-    // True when any record of the pane or water producer is currently visible.
-    // The mesh producer is not covered here: its visibility is per-frame state
-    // that lives in `draw.objects`, so `VkContext::transparent_enabled` asks it
-    // separately. Together they drive `FrameGraphInputs::transparent_enabled` and
-    // the encoder early-out.
+    // True when any pane or water record is visible. Mesh visibility is asked
+    // separately by `VkContext::transparent_enabled`.
     pub(in crate::vulkan) fn any_visible(&self) -> bool {
         self.producers.any_visible()
     }
@@ -1773,12 +1782,8 @@ impl TransparentResources {
             .expect("the draw order only names live static producers")
     }
 
-    // Recreate the scene snapshot + per-frame framebuffers at new render dims +
-    // re-point the snapshot (binding 1) and per-frame depth (binding 2) of every
-    // view set. The pipelines, layouts, UBOs, record buffers, and render pass all
-    // survive. Called from the swapchain-resize handler after the SSR / HDR
-    // resolve targets have been rebuilt (so `scene_views` / `scene_images` carry
-    // the new handles).
+    // Recreate the snapshot and framebuffers at new render dims and re-point every
+    // view set's snapshot (1) and depth (2), after the resize rebuilt the targets.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         ctx: TransparentDeviceCtx<'_>,
@@ -1833,7 +1838,7 @@ impl TransparentResources {
             for r in &producer.records {
                 if let Some(&view) = r.planar_slot.and_then(|s| planar_target_views.get(s)) {
                     for &set in &r.gpu.params_sets {
-                        write_planar_view(device, set, view);
+                        SetWrites::new(set).sampled_image(1, view).apply(device);
                     }
                 }
             }
@@ -1921,6 +1926,7 @@ impl TransparentResources {
         self.glass_mesh = None;
         self.reflection = None;
         self.empty_layer = GpuImage::null();
+        self.air_stand_in.volume = GpuImage::null();
         self.view_ubos.clear();
         self.snapshot = GpuImage::null();
         self.framebuffers.clear();
@@ -1956,25 +1962,17 @@ fn create_framebuffers(
 }
 
 impl VkContext {
-    // Whether a material opted into Layer 2 see-through glass AND the device can
-    // drive it (the mesh pipelines built). Independent of `rt.accel`, so it
-    // answers "would the see-through path run if RT is on" -- used at the RT-BLAS
-    // build, which must exclude the meshes it will reroute before the
-    // acceleration structure it gates on exists. Data-driven: see-through is
-    // opt-in per `Material::see_through`, so a scene with no see-through material
-    // never engages Layer 2 and its transparent glass stays Layer 1 (opaque, low
-    // roughness, reflective).
+    // Whether a material opts into see-through glass and the mesh pipelines built,
+    // regardless of RT being live: the BLAS build must exclude these meshes before
+    // the acceleration structure exists.
     pub(in crate::vulkan) fn seethrough_meshes_enabled(&self) -> bool {
         self.transparent
             .as_ref()
             .is_some_and(TransparentResources::mesh_pipelines_ready)
     }
 
-    // Whether the see-through mesh (Layer 2) path is live this frame: the
-    // pipelines built AND the pass can trace (`rt_transparent_active`, which needs
-    // the TLAS). When false, those meshes render opaque + reflective in the main
-    // pass (Layer 1) and the producer / opaque-skip / BLAS-exclude all stay inert.
-    // Mirrors `DxContext::mesh_glass_active`.
+    // Whether see-through meshes draw here this frame: pipelines built and the pass
+    // can trace. Otherwise they render opaque in the main pass.
     pub(in crate::vulkan) fn mesh_glass_active(&self) -> bool {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
@@ -1996,12 +1994,8 @@ impl VkContext {
             })
     }
 
-    // Build this frame's see-through mesh draw list and write each mesh's params
-    // into its block of the producer's ring. Only called while RT is live.
-    //
-    // Each mesh resolves its own LOD slice by camera distance exactly as the
-    // opaque passes do, so a mesh rerouted here rasterizes the same triangles it
-    // would have rasterized opaque.
+    // Build this frame's see-through mesh draws and write their params. Each mesh
+    // picks its LOD slice by camera distance exactly as the opaque passes do.
     fn collect_mesh_draws(
         &self,
         transparent: &TransparentResources,
@@ -2058,16 +2052,12 @@ impl VkContext {
             self.state.lights.uniforms(),
             &self.state.view.daylight,
         )
+        .with_air(self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()))
     }
 
-    // Encode the transparent pass. Runs after `SsrResolve` and before
-    // `TaaResolve` / `Upscale`. Snapshots the post-SSR scene into `snapshot` for
-    // refractive taps, then draws every visible glass pane and water surface
-    // back-to-front into the scene image with SRC_ALPHA blending; the manual
-    // occlusion test samples the main depth. No-op when the world has no
-    // transparent content or nothing is visible. Leaves the scene image
-    // SHADER_READ_ONLY and the main depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the
-    // downstream stack.
+    // Encode the transparent pass between `SsrResolve` and `TaaResolve`: snapshot
+    // the scene for refraction, then draw every visible pane and surface
+    // back-to-front. Leaves the scene SHADER_READ_ONLY and the depth an attachment.
     pub(in crate::vulkan) fn encode_transparent(
         &self,
         rec: &Recorder<'_>,
@@ -2083,12 +2073,8 @@ impl VkContext {
         };
         let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
 
-        // Per-pixel RT reflection is selected over the probe / planar path when RT
-        // is live (the scene TLAS is built) AND every live producer's RT pipelines
-        // compiled -- single-sourced via `rt_transparent_active`, the same predicate
-        // `graph_exec` uses to skip the planar mirror re-render, so the two always
-        // agree. The textured variant additionally needs the bindless albedo/normal
-        // pool the GPU-cull path populates; without it the flat-tint trace runs.
+        // Trace per pixel when `rt_transparent_active`, the same predicate the graph
+        // uses to skip planar mirrors. The textured variant also needs the bindless pool.
         let rt_live = self.rt_transparent_active();
         let textured =
             rt_live && self.cull.bindless_pipeline.is_some() && transparent.rt_textured_ready();

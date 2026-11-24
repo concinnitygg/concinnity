@@ -1,13 +1,7 @@
-// Benchmarks over a pen of balls under hanging chains with regions over it,
-// the shape of the benchmark world's physics station.
-//
-// `physics/step_pen/*` is the pile held awake: every ball touches its
-// neighbors, so the whole pile is one island and the solve cannot be split.
-// What its `_serial` twin shows is what a pool costs a world like that, which
-// the fan-out gate is meant to keep at nothing.
-//
-// `physics/step_pen_settled/*` is the same pen asleep under its regions: the
-// idle path, where nothing moves and so nothing needs measuring or solving.
+// Benchmarks over a pen of balls under hanging chains with regions over it.
+// `physics/step_pen/*` holds the pile awake as one unsplittable island, its
+// `_serial` twin showing the pool's cost; `physics/step_pen_settled/*` is the
+// idle path.
 
 use alloc::format;
 use alloc::vec::Vec;

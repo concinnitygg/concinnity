@@ -72,8 +72,8 @@ pub(crate) fn require() -> std::io::Result<StateTree> {
     })
 }
 
-/// The `assets/` a bare source filename is resolved against: the open
-/// project's, or `None` for a session with no project, which resolves nothing.
+/// The open project's `assets/`, where the editor writes new source files and
+/// presets are looked up by name, or `None` for a session with no project.
 pub(crate) fn assets_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.assets_dir())
 }
@@ -83,10 +83,17 @@ pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.data_dir())
 }
 
-/// The project root authored content sits directly under: its world files, with
-/// `assets/` beside them.
+/// The project root authored content sits directly under: its .jsonl files, with
+/// `assets/` beside them, and what a world's relative `Include` paths resolve
+/// against.
 pub(crate) fn content_root() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.content_root().to_path_buf())
+}
+
+/// The open project's content root, or the working directory for a session
+/// with no project.
+pub(crate) fn root_or_cwd() -> std::path::PathBuf {
+    content_root().unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 #[cfg(test)]

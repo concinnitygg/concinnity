@@ -23,6 +23,7 @@ use alloc::string::String;
 #[derive(Default)]
 pub struct AudioClip {
     /// Path to the source audio file.
+    #[asset(file)]
     pub source: String,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]

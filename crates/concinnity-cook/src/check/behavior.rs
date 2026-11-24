@@ -62,6 +62,21 @@ pub(crate) struct DeclaredVars {
 }
 
 impl DeclaredVars {
+    // Whether the world declares a `Variables` table; without one every
+    // variable is implicit and an integer.
+    pub(crate) fn is_declared(&self) -> bool {
+        self.declared
+    }
+
+    // The type of the declared variable `name` ("bool", "int", "float",
+    // "vec3"), or `None` when the table declares no such variable.
+    pub(crate) fn type_name(&self, name: &str) -> Option<&'static str> {
+        self.types
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, ty)| ty.name())
+    }
+
     // Read the world's `Variables` asset args. Malformed entries are skipped;
     // the asset's own check reports them.
     pub(crate) fn from_args(args: &Value) -> Self {
@@ -143,7 +158,9 @@ pub fn check_with_variables(
     variables: Option<&Value>,
 ) -> Result<(), Fault> {
     let declared = variables.map(DeclaredVars::from_args).unwrap_or_default();
-    locate(name, args, &declared)
+    // Every complaint reads "Behavior '<name>': ...", so the label is attached
+    // once here rather than at each return in `body`.
+    body(args, &declared).map_err(|f| f.about(&format!("Behavior '{name}':")))
 }
 
 /// Validate the world's `Variables` asset: every declaration needs a name and a
@@ -214,12 +231,6 @@ pub(crate) fn check_with_vars(
     body(args, vars).map_err(|f| Diagnostic::asset("Behavior", name, f.message))
 }
 
-// Every complaint reads "Behavior '<name>': ..." whoever asked, so the asset's
-// own label is attached once here rather than at each of the returns below.
-fn locate(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
-    body(args, vars).map_err(|f| f.about(&format!("Behavior '{name}':")))
-}
-
 fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
     let scope_names = str_array(args, "scope");
     for component in &scope_names {
@@ -284,7 +295,7 @@ fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
     // A variable source must name a variable that exists.
     if let Some(watched) = args.get("on").and_then(|v| v.get("variable")) {
         let watched = watched.as_str().unwrap_or("");
-        if scope_ty(vars, watched).is_none() {
+        if watched.is_empty() || vars.ty(watched).is_none() {
             return Err(Fault::new(format!(
                 "`variable` source watches undeclared variable '{watched}'; add it to the \
                  world's Variables"
@@ -294,7 +305,7 @@ fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
         }
     }
 
-    if source_is(args, "spawned") && !entity_scoped {
+    if args.get("on").and_then(Value::as_str) == Some("spawned") && !entity_scoped {
         return Err(Fault::new(
             "`spawned` source needs a `scope`: it fires on the entity that spawned",
         )
@@ -459,14 +470,6 @@ fn check_verb<'a>(verb: &str, body: &'a Value, scope: &mut Scope<'a>) -> Result<
         other => return Err(Fault::new(format!("unknown node `{other}`"))),
     }
     Ok(())
-}
-
-// A variable's declared type, for checks made before the scope exists.
-fn scope_ty(vars: &DeclaredVars, name: &str) -> Option<Ty> {
-    if name.is_empty() {
-        return None;
-    }
-    vars.ty(name)
 }
 
 // Check an expression against an expected type.
@@ -705,11 +708,6 @@ fn array<'a>(args: &'a Value, key: &str) -> &'a [Value] {
 
 fn str_array<'a>(args: &'a Value, key: &str) -> Vec<&'a str> {
     array(args, key).iter().filter_map(|v| v.as_str()).collect()
-}
-
-// Whether `on` is the named unit source.
-fn source_is(args: &Value, word: &str) -> bool {
-    args.get("on").and_then(|v| v.as_str()) == Some(word)
 }
 
 #[cfg(test)]

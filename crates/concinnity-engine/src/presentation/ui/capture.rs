@@ -2,14 +2,13 @@
 
 use alloc::string::String;
 
-use crate::components::{FrameInput, SettingCommand, SettingOp, TextLabel};
-use crate::ecs::asset_id::AssetId;
+use crate::components::{FrameInput, SettingCommand, SettingOp};
 use crate::ecs::{PipelineContext, StepResult};
-use crate::settings::SettingKey;
+use crate::settings::{SettingKey, SettingValues};
 
 use super::UiInputSystem;
 
-// Shown in a rebind row's value label while it waits for the user to press a key.
+// Shown as a rebind row's value while it waits for the user to press a key.
 pub(super) const REBIND_PROMPT: &str = "Press a key...";
 const PAD_REBIND_PROMPT: &str = "Press a button...";
 
@@ -18,18 +17,23 @@ const PAD_REBIND_PROMPT: &str = "Press a button...";
 // it; Escape cancels and restores the row's previous value text.
 #[derive(Debug)]
 pub(super) struct Capture {
-    // The rebind setting.
+    // The rebind setting, whose shown value is the prompt while capturing.
     setting_key: SettingKey,
-    // The value `TextLabel` showing the bound key (set to a prompt while
-    // capturing; the renderer rewrites it after the bind).
-    value_label: Option<AssetId>,
-    // The label's text before capture began, restored if the user cancels.
+    // The setting's shown value before capture began, restored if the user
+    // cancels.
     prev_text: String,
 }
 
 // Whether a rebind setting binds a gamepad button rather than a key.
 fn captures_button(setting_key: SettingKey) -> bool {
     matches!(setting_key, SettingKey::PadRebind(_))
+}
+
+// Show `text` as `key`'s value.
+fn show(ctx: &mut PipelineContext<'_>, key: SettingKey, text: &str) {
+    if let Some(values) = ctx.resource_mut::<SettingValues>() {
+        values.set_text(key, text);
+    }
 }
 
 impl UiInputSystem {
@@ -55,51 +59,42 @@ impl UiInputSystem {
         } else if let Some(op) = op
             && let Some(cap) = self.capturing.take()
         {
-            // The renderer rewrites the value label to the new binding when it
-            // reads the command next tick; the prompt shows until then.
+            // The settings system shows the new binding when it applies the
+            // command; the prompt shows until then.
             ctx.events_mut::<SettingCommand>().send(SettingCommand {
                 setting: cap.setting_key,
                 op,
-                value_label: cap.value_label,
                 persist: true,
             });
         }
         StepResult::Continue
     }
 
-    // Begin a rebind capture for a clicked rebind row: stash the value label's
-    // current text (to restore on cancel) and show the prompt for the input
+    // Begin a rebind capture for a clicked rebind row: stash the setting's
+    // shown value (to restore on cancel) and show the prompt for the input
     // kind the row captures.
-    pub(super) fn begin_capture(
-        &mut self,
-        setting_key: SettingKey,
-        value_label: Option<AssetId>,
-        ctx: &mut PipelineContext<'_>,
-    ) {
-        let prev_text = value_label
-            .and_then(|id| ctx.get_by_id::<TextLabel>(id).map(|l| l.content.clone()))
+    pub(super) fn begin_capture(&mut self, setting_key: SettingKey, ctx: &mut PipelineContext<'_>) {
+        let prev_text = ctx
+            .resource::<SettingValues>()
+            .and_then(|v| v.text(setting_key))
+            .map(String::from)
             .unwrap_or_default();
-        if let Some(id) = value_label {
-            let prompt = if captures_button(setting_key) {
-                PAD_REBIND_PROMPT
-            } else {
-                REBIND_PROMPT
-            };
-            crate::ecs::by_asset_id::set_text(ctx, id, prompt);
-        }
+        let prompt = if captures_button(setting_key) {
+            PAD_REBIND_PROMPT
+        } else {
+            REBIND_PROMPT
+        };
+        show(ctx, setting_key, prompt);
         self.capturing = Some(Capture {
             setting_key,
-            value_label,
             prev_text,
         });
     }
 
     // Cancel a pending rebind capture, restoring the row's previous value text.
     pub(super) fn cancel_capture(&mut self, ctx: &mut PipelineContext<'_>) {
-        if let Some(cap) = self.capturing.take()
-            && let Some(id) = cap.value_label
-        {
-            crate::ecs::by_asset_id::set_text(ctx, id, &cap.prev_text);
+        if let Some(cap) = self.capturing.take() {
+            show(ctx, cap.setting_key, &cap.prev_text);
         }
     }
 }

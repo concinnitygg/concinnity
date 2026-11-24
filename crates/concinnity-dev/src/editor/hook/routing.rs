@@ -1,74 +1,29 @@
-//! `EditorHook`: per-frame pointer routing -- the scroll steps behind each panel's
-//! wheel region, title-bar dragging, and click hit-testing across the top bar and
-//! the registered panels (front-to-back).
+//! `EditorHook`: per-frame pointer routing -- the in-flight viewport gestures,
+//! the press that reaches the world once the top bar and the panels (which take
+//! their own) leave it, and the editor's keyboard shortcuts.
 
-use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::components::{FrameInput, Identity, InputKey, Layout};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
-use super::{Drag, EditorHook, bookmarks, scroll_step};
+use super::{EditorHook, bookmarks};
 use crate::editor::hud::{self, HudState};
-use crate::editor::panels::form_panel::{self, FormFocus};
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::template_panel;
-use crate::editor::viewport::{gizmo, resize};
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::BuiltUi;
+use crate::editor::ui::rect::point_in;
+use crate::editor::viewport::gizmo;
 
 impl EditorHook {
-    // Scroll the edit form: an open value dropdown scrolls its own option list;
-    // otherwise the field window moves (folding the visible controls into the
-    // working args first, so no in-progress edit is lost).
-    pub(super) fn scroll_form(&mut self, delta: f32, world: &mut World) {
-        if let Some(open) = self.form.field_dropdown {
-            let total = self.form.fields.get(open).map_or(0, |f| f.variants.len());
-            let max = total.saturating_sub(form_panel::MAX_DROP_ROWS);
-            self.form.field_dropdown_scroll =
-                scroll_step(self.form.field_dropdown_scroll, delta, max);
-        } else {
-            // The same capture / refresh cycle an array add / remove uses.
-            let max = self.form_row_count().saturating_sub(self.form_window());
-            let next = scroll_step(self.form.scroll, delta, max);
-            if next == self.form.scroll {
-                return;
-            }
-            self.capture_controls(world);
-            self.form.scroll = next;
-            self.form.focus = FormFocus::Name;
-            self.refresh_form(world);
-        }
-    }
-
-    // Scroll the Template detail panel's asset list.
-    pub(super) fn scroll_template_list(&mut self, delta: f32) {
-        if let Some(i) = self.templates.detail {
-            let window =
-                template_panel::rows_for_height(self.effective_size(PanelKey::TemplateDetail)[1]);
-            let max = Self::template_rows(i).len().saturating_sub(window);
-            self.templates.detail_scroll = scroll_step(self.templates.detail_scroll, delta, max);
-        }
-    }
-
-    // Everything a frame's input drives while a world is open: the
-    // in-flight drags, the press and wheel routing across the top bar and
-    // the panels, and the editor's keyboard shortcuts. The start screen
-    // takes `drive_start_input` instead, which routes nothing else.
+    // Everything a frame's input drives while a world is open: the in-flight
+    // viewport gestures, the press that reaches the world once the top bar and
+    // the panels (which take their own) leave it, and the editor's keyboard
+    // shortcuts. The start screen routes none of it: its panel drives itself.
     pub(super) fn drive_session_input(
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
         world: &mut World,
     ) {
-        // An active title-bar drag follows the cursor; a fresh press (only
-        // when no drag is running -- the press that starts one must not
-        // also resolve to a control) routes to the bar and the panels.
-        self.drive_drag(input, vp);
-        // An active edge / corner resize follows the cursor the same way.
-        self.drive_resize(input, vp);
-        // A chart pan does too, so the canvas tracks the cursor.
-        self.drive_behavior_pan(input);
-        self.drive_map_pan(input);
-        // And once it is not being dragged, the canvas follows what the rest of
-        // the editor is looking at.
-        self.drive_map();
         // An in-flight gizmo drag follows the cursor, cancels on
         // Escape, and commits on release, before any new press routes.
         if self.gizmo_drag.is_some() {
@@ -97,8 +52,6 @@ impl EditorHook {
         // its stroke on.
         self.drive_planet_tool(input, vp, world);
         if input.left_click
-            && self.drag.is_none()
-            && self.resize.is_none()
             && self.gizmo_drag.is_none()
             && self.shape.drag.is_none()
             && self.marquee.is_none()
@@ -106,27 +59,29 @@ impl EditorHook {
             && self.orbit.is_none()
             && !self.planet_tool.busy()
         {
-            // The confirmation dialog swallows every press first.
-            // Behind it, an open Display or create menu is modal: it
-            // takes the press (a row acts, anything else dismisses)
-            // before normal routing. An Alt+press over the viewport
-            // starts an orbit tumble instead of a pick.
-            let claimed = self.route_modal_click(input, vp, world)
-                || self.route_display_menu_click(input, vp)
-                || self.route_create_menu_click(input, vp)
-                || self.route_palette_dismiss(input, vp)
-                || (input.alt && self.try_begin_orbit(input, vp, world));
-            if !claimed {
-                self.route_click(input, vp, world);
+            // An open dialog or menu takes the press itself, so nothing here
+            // routes it. Otherwise an Alt+press over the viewport starts an
+            // orbit tumble, and anything else routes to the bar, the panels,
+            // and the world.
+            let overlay_open =
+                self.modal.is_some() || self.display_menu_open || self.create_menu.is_some();
+            // A press away from an open transient layout (a palette) is the
+            // engine's to dismiss it with, so it reaches nothing here.
+            if !overlay_open && !self.press_dismisses(world, input) {
+                if input.alt && self.try_begin_orbit(input, vp, world) {
+                    self.editor_took_press = true;
+                } else {
+                    self.route_click(input, vp, world);
+                }
             }
         }
         // An unclaimed viewport right press opens the create menu at
         // the cursor, under the same not-mid-gesture guards; the
-        // confirmation dialog swallows it like every other press.
+        // confirmation dialog swallows it like every other press, and one
+        // away from an open palette only dismisses it.
         if input.right_click
             && self.modal.is_none()
-            && self.drag.is_none()
-            && self.resize.is_none()
+            && !self.press_dismisses(world, input)
             && self.gizmo_drag.is_none()
             && self.shape.drag.is_none()
             && self.marquee.is_none()
@@ -183,14 +138,10 @@ impl EditorHook {
         self.drive_console_toggle(input, world);
         // Ctrl+K toggles the palette, with the same one-frame blur.
         self.palette.blur = false;
-        self.drive_palette_toggle(input, world);
-        // Ctrl+Z / Ctrl+Y step the entry list through the history,
-        // unless the world owns the keyboard (play mode), a text
-        // field does (its own editing keys must win), or a gizmo drag
-        // is mid-flight (its commit has not landed yet). Ctrl+D
-        // duplicates the selection and Ctrl+Down drops it to the
-        // floor, under the same guards; a frontmost Behavior panel
-        // keeps its own Ctrl+D (row duplicate, via frame_keys below).
+        self.drive_palette_toggle(input);
+        // Undo/redo, duplicate and drop-to-floor, unless the world, a text field
+        // or a gizmo drag owns the input. A frontmost Behavior panel keeps its
+        // own Ctrl+D.
         if input.ctrl
             && !self.sim.playing()
             && !self.text_focus_active()
@@ -199,8 +150,8 @@ impl EditorHook {
         {
             for key in input.pressed_keys() {
                 match key {
-                    InputKey::Z => self.undo(world),
-                    InputKey::Y => self.redo(world),
+                    InputKey::Z => self.undo(),
+                    InputKey::Y => self.redo(),
                     InputKey::D if self.frontmost_open_panel() != Some(PanelKey::Behavior) => {
                         self.duplicate_selection();
                     }
@@ -225,31 +176,6 @@ impl EditorHook {
         if let Some(key) = self.frontmost_open_panel() {
             registry::panel(key).frame_keys(self, world, input);
         }
-        // Wheel routing: the frontmost scrollable panel under the cursor
-        // takes the wheel. An open confirmation dialog swallows it with
-        // the rest of the pointer. An open value dropdown is modal and
-        // can extend past the form panel, so it scrolls the form from
-        // anywhere while open.
-        if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
-            let (mx, my) = (input.mouse_x, input.mouse_y);
-            let form_shown = registry::panel(PanelKey::Edit).is_open(self);
-            if form_shown && self.form.field_dropdown.is_some() {
-                self.scroll_form(input.scroll_delta, world);
-            } else {
-                let front_to_back: Vec<PanelKey> = self.panel_order.iter().rev().copied().collect();
-                for key in front_to_back {
-                    let p = registry::panel(key);
-                    if !self.panel_shown(key) {
-                        continue;
-                    }
-                    let o = self.origin(key, vp);
-                    if p.wheel_over(self, world, mx, my, o) {
-                        p.scroll_at(self, world, input.scroll_delta, mx, my);
-                        break;
-                    }
-                }
-            }
-        }
     }
 
     pub(super) fn hud_state(&self) -> HudState {
@@ -266,56 +192,18 @@ impl EditorHook {
         }
     }
 
-    // While a title-bar drag is active, follow the cursor (clamped fully on
-    // screen at the panel's current footprint); releasing the button ends the
-    // drag.
-    pub(super) fn drive_drag(&mut self, input: &FrameInput, vp: [f32; 2]) {
-        let Some(drag) = self.drag else {
-            return;
-        };
-        if !input.left_button_down {
-            self.drag = None;
-            return;
-        }
-        let pos = [input.mouse_x - drag.grab[0], input.mouse_y - drag.grab[1]];
-        let size = self.effective_size(drag.key);
-        self.positions[drag.key] = Some(widget::clamp_origin(pos, size, vp, hud::BAR_H));
-    }
-
-    // While an edge / corner resize is active, grow the panel from the press
-    // anchor (clamped at its minimum and fully on screen); releasing the button
-    // ends the resize.
-    pub(super) fn drive_resize(&mut self, input: &FrameInput, vp: [f32; 2]) {
-        let Some(r) = self.resize else {
-            return;
-        };
-        if !input.left_button_down {
-            self.resize = None;
-            return;
-        }
-        let min = self.default_size(r.key);
-        let max = registry::panel(r.key).max_size(self);
-        let (o, s) = resize::apply(&r, [input.mouse_x, input.mouse_y], min, max, vp, hud::BAR_H);
-        self.positions[r.key] = Some(o);
-        self.sizes[r.key] = Some(s);
-    }
-
     // Route a press: the top bar first (it draws over the panels), then the panels
     // front-to-back so the frontmost claims a press in an overlap. Whichever panel
-    // claims it comes to the front. A press on a panel's title bar starts a drag.
-    pub(super) fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
+    // claims it comes to the front.
+    pub(super) fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
-        // The toast stack draws above everything, so it claims its presses
-        // first (rect-guarded: a miss falls straight through).
-        if self.try_toast_press(mx, my, vp, world) {
+        // The toast stack draws above everything and takes its own presses.
+        if Self::over_toasts(world, mx, my, vp) {
             return;
         }
-        if let Some(a) = hud::hit_test(mx, my, true, self.hud_state(), vp[0]) {
-            // SAVE only writes world.jsonl; it neither rebuilds nor re-injects
-            // the world, so an open form is left intact (no blank-field risk).
-            self.apply_top(a, world);
-            self.assets.picker_open = false;
-            self.assets.row_menu = None;
+        // The top bar takes its own presses, and one between its chips
+        // reaches nothing behind it.
+        if my < hud::BAR_H && mx >= 0.0 && mx < vp[0] {
             return;
         }
         // Front-to-back: the frontmost shown panel to claim the press handles it and
@@ -323,16 +211,12 @@ impl EditorHook {
         // it forward). `panel_order`'s tail is frontmost.
         let front_to_back: Vec<PanelKey> = self.panel_order.iter().rev().copied().collect();
         for key in front_to_back {
-            if self.try_panel_press(key, mx, my, vp, world) {
+            if self.try_panel_press(key, mx, my, world) {
                 return;
             }
         }
-        // Nothing claimed the press: a picked Planet tool takes it, else the
-        // gizmo's tip handles get it first (grabbing a handle must not re-pick
-        // the object behind it), then the billboard icons (which arbitrate
-        // against the mesh AABBs by camera distance), then the 3D view as a
-        // pick. Only edit mode gets here (`left_click` stays false while the
-        // world holds the cursor in play mode).
+        // An unclaimed press goes to the Planet tool, then gizmo handles, then
+        // billboards, then the 3D pick. Edit mode only.
         if self.try_planet_tool_press(world) {
             return;
         }
@@ -345,59 +229,80 @@ impl EditorHook {
         self.click_world(input, world);
     }
 
-    // Try to resolve a press against the panel registered at `key`: `false` when
-    // it is hidden or the press misses it (the caller tries the next panel back).
-    // A hit brings the panel to the front; the close button closes it, a
-    // title-bar press starts a drag, and a body press resolves through the
-    // panel's own hit test.
+    // Whether the shown panel registered at `key` lies under a press, which
+    // brings it to the front: `false` sends the caller on to the next panel back.
     pub(super) fn try_panel_press(
         &mut self,
         key: PanelKey,
         mx: f32,
         my: f32,
-        vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) -> bool {
-        let p = registry::panel(key);
         if !self.panel_shown(key) {
             return false;
         }
-        let o = self.origin(key, vp);
-        let s = self.effective_size(key);
-        let title = [o[0], o[1], s[0], widget::TITLE_H];
-        // The X is checked before the title bar so it never starts a drag instead.
-        if point_in(mx, my, widget::close_rect(title)) {
+        // The panel takes its own presses: the hook only keeps them from
+        // reaching what is behind it.
+        let hit = Self::built_rect(world, key).is_some_and(|r| point_in(mx, my, r));
+        if hit {
             self.focus_panel(key);
-            p.close(self, world);
-            return true;
         }
-        // An edge / corner press starts a resize, checked after the close button
-        // (which sits in a corner) but before the title-bar drag and the body.
-        if p.resizable()
-            && let Some(edges) = self.resize_edges(key, o, s, mx, my)
-        {
-            self.focus_panel(key);
-            self.resize = Some(resize::Resize {
-                key,
-                edges,
-                grab_mouse: [mx, my],
-                start_origin: o,
-                start_size: s,
-            });
-            return true;
+        hit
+    }
+
+    // Whether a press lands outside every shown layout of the editor's that
+    // names an `on_dismiss` event, where each was last laid out: the press the
+    // engine takes to dismiss them, so it reaches nothing here. As in the
+    // engine, a press on a panel shown in front of a layout's own is outside it.
+    pub(super) fn press_dismisses(&self, world: &World, input: &FrameInput) -> bool {
+        let Some(built) = world.resource::<BuiltUi>() else {
+            return false;
+        };
+        let Some(screen) = built.panels_iter().find_map(|p| p.screen) else {
+            return false;
+        };
+        let (mx, my) = (input.mouse_x, input.mouse_y);
+        let mut any = false;
+        for (entity, layout) in world.query_with_entity::<Layout>() {
+            let ours = layout.screen.is_some_and(|s| s.id() == screen);
+            let Some(rect) = layout
+                .rect
+                .filter(|_| ours && layout.visible && !layout.on_dismiss.is_empty())
+            else {
+                continue;
+            };
+            any = true;
+            let id = world.get::<Identity>(entity).map(|i| i.id());
+            if point_in(mx, my, rect) && !self.covered_in_front(world, built, id, mx, my) {
+                return false;
+            }
         }
-        if point_in(mx, my, title) {
-            self.focus_panel(key);
-            self.drag = Some(Drag {
-                key,
-                grab: [mx - o[0], my - o[1]],
-            });
-            return true;
-        }
-        if p.press(self, world, mx, my, o) {
-            self.focus_panel(key);
-            return true;
-        }
-        false
+        any
+    }
+
+    // Whether a panel shown in front of the one holding `id` lies under the
+    // press; nothing covers a layout no panel holds.
+    fn covered_in_front(
+        &self,
+        world: &World,
+        built: &BuiltUi,
+        id: Option<AssetId>,
+        mx: f32,
+        my: f32,
+    ) -> bool {
+        let owner = id.and_then(|id| {
+            PanelKey::ALL.into_iter().find(|&k| {
+                built
+                    .panel(k)
+                    .is_some_and(|p| p.root == id || p.elements.contains(&id))
+            })
+        });
+        let Some(at) = owner.and_then(|k| self.panel_order.iter().position(|&o| o == k)) else {
+            return false;
+        };
+        self.panel_order[at + 1..].iter().any(|&front| {
+            self.panel_shown(front)
+                && Self::built_rect(world, front).is_some_and(|r| point_in(mx, my, r))
+        })
     }
 }

@@ -9,12 +9,12 @@
 use concinnity_cook::authoring::world::replace_args;
 use concinnity_engine::ecs::World;
 
-use crate::editor::hook::{EditorHook, LightingData, declared_id, entry_type_name, short_status};
+use crate::editor::hook::{EditorHook, declared_id, entry_type_name, short_status};
 use crate::editor::panels::form::{self, FormField};
 use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel::{self, LightingAction, LightingView};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::ui::BuiltPanel;
 
 impl EditorHook {
     // The `entries` index of the first entry of type `ty` (the lighting assets
@@ -65,21 +65,38 @@ impl EditorHook {
         out
     }
 
-    pub(in crate::editor::hook) fn lighting_data(&self) -> LightingData {
-        LightingData {
-            rows: lighting::rows(&self.lighting_present()),
-            fields: self.lighting_fields(),
+    // Bring what the panel shows up to date with the entries, and build its
+    // rows into a world that has none.
+    pub(in crate::editor::hook) fn prepare_lighting(
+        &mut self,
+        world: &mut World,
+        built: &mut BuiltPanel,
+    ) {
+        let revision = self.entries.revision();
+        if self
+            .lighting
+            .view
+            .as_ref()
+            .is_none_or(|(r, _, _)| *r != revision)
+        {
+            self.lighting.view = Some((revision, self.lighting_present(), self.lighting_fields()));
+        }
+        // A panel shown before it was ever seeded, such as one open in a fresh
+        // world, has no texts yet.
+        if self.lighting.texts.len() != lighting::binding_count() {
+            self.seed_lighting();
+        }
+        if self.lighting.shown.is_none() {
+            self.lighting.shown = Some(lighting_panel::build_rows(world, built));
         }
     }
 
-    pub(in crate::editor::hook) fn make_lighting_view<'a>(
-        &'a self,
-        d: &'a LightingData,
-        mouse: [f32; 2],
-    ) -> LightingView<'a> {
-        LightingView {
-            rows: &d.rows,
-            fields: &d.fields,
+    pub(in crate::editor::hook) fn make_lighting_view(&self) -> Option<LightingView<'_>> {
+        let (_, present, fields) = self.lighting.view.as_ref()?;
+        Some(LightingView {
+            present,
+            fields,
+            texts: &self.lighting.texts,
             // Assert keyboard focus only while the panel is frontmost, so its
             // inputs never fight another panel's focused field for typed keys.
             focus: self
@@ -88,46 +105,51 @@ impl EditorHook {
                 .filter(|_| self.panel_order.last() == Some(&PanelKey::Lighting)),
             status: self.lighting.status.as_deref(),
             dirty: self.lighting.touched,
-            mouse,
+        })
+    }
+
+    // Take in what was typed into the panel and the field holding the keyboard.
+    pub(in crate::editor::hook) fn observe_lighting(&mut self, world: &World) {
+        let Some(ids) = &self.lighting.shown else {
+            return;
+        };
+        let focus = lighting_panel::observe(world, ids, &mut self.lighting.texts);
+        let shown = self.make_lighting_view().and_then(|v| v.focus);
+        if focus != shown {
+            self.lighting.focus = focus;
         }
     }
 
     // Seed every text control from the current entries: on open, after adding a
     // section's asset, and after a successful Apply. Deliberately NOT on every
     // external entry change, so in-progress edits are never clobbered mid-type.
-    pub(in crate::editor::hook) fn seed_lighting(&mut self, world: &mut World) {
+    pub(in crate::editor::hook) fn seed_lighting(&mut self) {
         // Re-seeded controls match the committed values again, so any
         // unapplied-edit marker is stale.
         self.lighting.touched = false;
-        for (b, field) in self.lighting_fields().iter().enumerate() {
-            if let Some(f) = field
-                && f.kind.has_text_input()
-            {
-                widget::seed_field(world, lighting_panel::input(b), &f.initial);
-            }
-        }
+        self.lighting.texts = self
+            .lighting_fields()
+            .into_iter()
+            .map(|field| match field {
+                Some(f) if f.kind.has_text_field() => f.initial,
+                _ => String::new(),
+            })
+            .collect();
     }
 
     // Route a resolved Lighting-panel click.
-    pub(in crate::editor::hook) fn apply_lighting_action(
-        &mut self,
-        action: LightingAction,
-        world: &mut World,
-    ) {
+    pub(in crate::editor::hook) fn apply_lighting_action(&mut self, action: LightingAction) {
         match action {
-            LightingAction::Focus(b) => self.lighting.focus = Some(b),
             LightingAction::Toggle(b) => self.toggle_lighting_bool(b),
-            LightingAction::Add(s) => self.add_lighting_section(s, world),
-            LightingAction::Apply => self.apply_lighting(world),
-            // A click on panel chrome blurs the focused field.
-            LightingAction::Consume => self.lighting.focus = None,
+            LightingAction::Add(s) => self.add_lighting_section(s),
+            LightingAction::Apply => self.apply_lighting(),
         }
     }
 
     // Capture every present section's text controls, coerce + validate per
     // asset, and commit all of them together; the first rejection shows on the
     // status line and commits nothing.
-    pub(in crate::editor::hook) fn apply_lighting(&mut self, world: &mut World) {
+    pub(in crate::editor::hook) fn apply_lighting(&mut self) {
         self.lighting.status = None;
         let mut staged = Vec::new();
         for (si, s) in lighting::SECTIONS.iter().enumerate() {
@@ -141,8 +163,12 @@ impl EditorHook {
                 .iter()
                 .map(|f| {
                     let j = s.fields.iter().position(|(p, _)| *p == f.key).unwrap_or(0);
-                    if f.kind.has_text_input() {
-                        widget::field_text(world, lighting_panel::input(base + j))
+                    if f.kind.has_text_field() {
+                        self.lighting
+                            .texts
+                            .get(base + j)
+                            .cloned()
+                            .unwrap_or_default()
                     } else {
                         String::new()
                     }
@@ -162,7 +188,7 @@ impl EditorHook {
             }
         }
         self.mark_changed();
-        self.seed_lighting(world);
+        self.seed_lighting();
     }
 
     // Flip a checkbox binding and commit it immediately. The section's text
@@ -198,7 +224,7 @@ impl EditorHook {
 
     // Add the missing singleton asset behind section `si` with default args,
     // then seed its freshly-appeared controls.
-    pub(in crate::editor::hook) fn add_lighting_section(&mut self, si: usize, world: &mut World) {
+    pub(in crate::editor::hook) fn add_lighting_section(&mut self, si: usize) {
         let Some(s) = lighting::SECTIONS.get(si) else {
             return;
         };
@@ -210,6 +236,6 @@ impl EditorHook {
             "type": s.ty, "args": {"$id": name},
         }));
         self.mark_changed();
-        self.seed_lighting(world);
+        self.seed_lighting();
     }
 }

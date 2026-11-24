@@ -21,12 +21,9 @@ use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::texture::GpuResource;
 
-// Spot shadow map resources: one depth array slice per shadow-casting spot
-// light, plus the `SpotShadowData` buffer holding each slice's light-space
-// projection. Local lights are static, so the slice assignment and every matrix
-// are decided once at init and only the depth contents refresh. A world with no
-// shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
-// the main pass's descriptors are always valid.
+// Spot shadows: one depth slice per shadow-casting spot plus each slice's
+// projection, fixed at init since local lights are static. Without one a 1x1
+// fallback keeps the main pass's descriptors valid.
 pub(in crate::directx) struct SpotShadowState {
     pub resource: Option<GpuResource<ID3D12Resource>>,
     // One DSV per shadowed spot; empty when the world has none.
@@ -34,11 +31,8 @@ pub(in crate::directx) struct SpotShadowState {
     pub srv_gpu: SrvSlot,
     // `SpotShadowData` per slice, uploaded once at init.
     pub buffer: PooledBuffer,
-    // One `ShadowUniforms` per slice, carrying that spot's matrix in
-    // `light_vps[0]` so the shared shadow vertex shader can render a spot slice
-    // without a second pipeline or a second uniform layout. Written once at
-    // init: the projections are fixed for the world's lifetime, so unlike the
-    // cascade UBO this needs no per-frame copy.
+    // One `ShadowUniforms` per slice with its matrix in `light_vps[0]`, so the
+    // shared shadow pipeline renders it. Written once at init.
     pub ubo: PooledBuffer,
     // 256-byte-aligned distance between consecutive slices in `ubo`.
     pub ubo_stride: u64,
@@ -71,12 +65,8 @@ impl SpotShadowState {
 }
 
 impl DxContext {
-    // One depth-only render per scheduled spot slice, GPU-driven like the
-    // cascades: a per-slice cull against the spot's light frustum packs the
-    // slice's region of this frame's spot views, and the slice draws its lists
-    // through the shared bindless shadow pipeline. Slices with no
-    // records still clear, so the main pass samples valid depth.
-    // pub(in crate::directx) so the render-graph executor can dispatch this pass.
+    // One depth-only render per scheduled spot slice, culled against its
+    // frustum like the cascades. Empty slices still clear.
     pub(in crate::directx) fn encode_spot_shadow_pass(
         &self,
         cmd: &ID3D12GraphicsCommandList,

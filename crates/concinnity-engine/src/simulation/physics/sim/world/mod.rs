@@ -1,14 +1,7 @@
-// The simulation itself: body storage, and the order the stages run in.
-//
-// Bodies live in a fixed-capacity pool, so a full world declines a body rather
-// than growing under a caller's feet, and a slot's generation makes a handle
-// to a removed body read as absent. That is also what lets every other stage
-// index its own arrays by slot: the pool's slot is the one identity the whole
-// step agrees on.
-//
-// Nothing on the step path allocates, and neither does a query. Every buffer
-// is reserved when the simulation is built and reused, which is what lets the
-// step run inside a frame budget rather than at the allocator's convenience.
+// The simulation: body storage and the stage order. Bodies live in a
+// fixed-capacity pool whose slot generations make removed handles read absent,
+// and every stage indexes its arrays by slot. Nothing on the step or query path
+// allocates.
 
 use concinnity_core::math::SaturatingFrom;
 

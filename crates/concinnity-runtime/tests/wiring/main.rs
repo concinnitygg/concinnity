@@ -13,3 +13,4 @@ mod consumed_columns;
 mod controllers;
 mod determinism;
 mod systems;
+mod widgets;

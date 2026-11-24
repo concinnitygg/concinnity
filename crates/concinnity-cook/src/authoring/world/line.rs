@@ -1,10 +1,10 @@
-// The world file's line format: one `["Type", {args}]` entry per line. The
+// The file's line format: one `["Type", {args}]` entry per line. The
 // rest of the cook works on the `{"type", "args"}` object this converts each
 // line into, so the file's shape is decided here and nowhere else.
 
 use serde_json::{Map, Value};
 
-/// A world file line that does not hold an entry.
+/// A file line that does not hold an entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineError {
     /// The 1-based line number.
@@ -19,7 +19,7 @@ impl std::fmt::Display for LineError {
     }
 }
 
-/// Every line of a world file that does not hold an entry, in file order.
+/// Every line of a .jsonl file that does not hold an entry, in file order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError(pub Vec<LineError>);
 
@@ -39,7 +39,7 @@ impl std::error::Error for ParseError {}
 
 const ENTRY_SHAPE: &str = "an entry is a [\"Type\", {args}] array";
 
-/// Parse world file text into its entries, each as a `{"type", "args"}`
+/// Parse file text into its entries, each as a `{"type", "args"}`
 /// object.
 ///
 /// A line is a JSON array of `["Type"]` or `["Type", {args}]`; blank lines and
@@ -154,7 +154,7 @@ pub fn entry_line(entry: &Value) -> std::io::Result<String> {
     serde_json::to_string(&line).map_err(|e| bad(e.to_string()))
 }
 
-/// Serialize entries as world file text, one line per entry.
+/// Serialize entries as file text, one line per entry.
 ///
 /// # Errors
 ///

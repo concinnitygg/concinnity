@@ -82,22 +82,16 @@ impl FanOut for JobPool {
         self.pool.install(|| items.par_iter_mut().for_each(body));
     }
 
-    // One spawned job per item, so each starts as soon as a worker is free.
-    // Even a lone item goes to a worker: backends record passes on per-worker
-    // command pools.
+    // Split down to one item per job, so each starts as soon as a worker is
+    // free, with no job boxed on the heap. Even a lone item goes to a worker:
+    // backends record passes on per-worker command pools.
     fn spawn_each<T, F>(&self, items: &mut [T], body: F)
     where
         T: Send,
         F: Fn(&mut T) + Send + Sync,
     {
-        let body = &body;
-        self.pool.install(|| {
-            rayon::scope(|scope| {
-                for item in items {
-                    scope.spawn(move |_| body(item));
-                }
-            });
-        });
+        self.pool
+            .install(|| items.par_iter_mut().with_max_len(1).for_each(body));
     }
 
     fn clock_ns(&self) -> u64 {
@@ -291,6 +285,19 @@ mod tests {
             *ran_on.lock().unwrap() = Some(std::thread::current().id());
         });
         assert_eq!(ran_on.into_inner().unwrap(), Some(caller));
+    }
+
+    // `spawn_each` hands even a lone item to a worker, where backends keep
+    // their per-worker command pools.
+    #[test]
+    fn spawn_each_runs_a_lone_item_on_a_worker() {
+        let pool = JobPool::new(2, FramePriority::default());
+        let caller = std::thread::current().id();
+        let ran_on = std::sync::Mutex::new(None);
+        pool.spawn_each(&mut [0u32], |_| {
+            *ran_on.lock().unwrap() = Some(std::thread::current().id());
+        });
+        assert_ne!(ran_on.into_inner().unwrap(), Some(caller));
     }
 
     #[test]

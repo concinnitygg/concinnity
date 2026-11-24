@@ -8,19 +8,16 @@ use crate::ecs::PipelineContext;
 
 use super::SettingsState;
 use super::apply::RowOptions;
-use super::rows::{set_cached_row_label, set_label_content};
+use super::rows::show;
 use crate::settings::quality::{auto_upscaling, ceiling_preset, preset_label, resolve_ceiling};
 use crate::settings::rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
 use crate::settings::{self, QualityPreset, SettingKey, StoredSettings, levels, registry};
 use concinnity_core::platform::CompiledPlatforms;
 
 impl SettingsState {
-    // A preset is a performance ceiling over the world's authored look (it never
-    // enables a feature the world did not author), so picking a tier or Auto
-    // clears the per-row quality overrides and re-resolves the preset-governed
-    // group from the world's baseline under the new ceiling, exactly as the next
-    // launch will. Picking Custom keeps every value: the ceiling it left and the
-    // per-row overrides. See `crate::settings::quality`.
+    // A preset is a ceiling over the authored look, so a tier or Auto clears
+    // the per-row overrides and re-resolves the governed group as the next
+    // launch would. Custom keeps everything.
     pub(super) fn apply_quality_preset(
         &mut self,
         ctx: &mut PipelineContext<'_>,
@@ -33,9 +30,7 @@ impl SettingsState {
         let preset = levels::GRAPHICS_QUALITY.at(next);
         if preset == QualityPreset::Custom {
             self.opt_out_of_preset(ctx, cfg);
-            if let Some(id) = cmd.value_label {
-                set_label_content(ctx, id, preset.name());
-            }
+            show(ctx, cmd.setting, preset.name());
             return true;
         }
         self.quality_preset = preset;
@@ -66,9 +61,7 @@ impl SettingsState {
         self.gray_superseded_ssr_row(ctx);
         // The master row's own label carries the Auto(tier) suffix.
         let label = preset_label(preset, &self.gpu_profile);
-        if let Some(id) = cmd.value_label {
-            set_label_content(ctx, id, &label);
-        }
+        show(ctx, cmd.setting, &label);
         true
     }
 
@@ -110,17 +103,17 @@ impl SettingsState {
         }
     }
 
-    // Set a captured cycle row's value label to its option at `index`.
+    // Show cycle row `key`'s option at `index` as its value.
     fn relabel_option(&self, ctx: &mut PipelineContext<'_>, key: SettingKey, index: usize) {
         let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) else {
             return;
         };
         let compiled = ctx.resource::<CompiledPlatforms>().map_or(&[][..], |c| c.0);
         if registry::setting_available(key, &self.capabilities, self.gpu_profile.vendor, compiled) {
-            set_cached_row_label(&self.cycle_value_labels, ctx, key, text);
+            show(ctx, key, text);
         } else {
             let text = registry::unsupported_label(text);
-            set_cached_row_label(&self.cycle_value_labels, ctx, key, &text);
+            show(ctx, key, &text);
         }
     }
 
@@ -207,11 +200,6 @@ impl SettingsState {
         }
         self.quality_preset = QualityPreset::Custom;
         cfg.graphics.quality_preset = Some(self.quality_preset);
-        set_cached_row_label(
-            &self.cycle_value_labels,
-            ctx,
-            SettingKey::GraphicsQuality,
-            self.quality_preset.name(),
-        );
+        show(ctx, SettingKey::GraphicsQuality, self.quality_preset.name());
     }
 }

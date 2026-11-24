@@ -3,7 +3,7 @@
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::world::WorldJsonlAsset;
-use crate::build_only::main_menu::{generates_settings, settings_entry_screen};
+use crate::ui::{generates_settings, settings_entry_screen};
 
 /// What kind of place a world is in while it is there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

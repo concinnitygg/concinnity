@@ -43,11 +43,8 @@ pub fn cursor_root_delta<'a>(
     delta
 }
 
-// One state's displacement between two of its clock values (same units the
-// state's clock runs on), blending member root tracks by the state's
-// current weights. Members without a root track contribute nothing -- a
-// blend may mix a root-motion walk with an in-place idle and the character
-// slows down accordingly.
+// One state's root displacement between two clock values, blending member
+// tracks by weight; members without a root track contribute nothing.
 pub(crate) fn state_root_delta<'a>(
     state: &CompiledState,
     clock0: f32,

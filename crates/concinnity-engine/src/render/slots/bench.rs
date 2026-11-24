@@ -1,5 +1,4 @@
-// Measures draw-slot recycling: freeing a scattered run of slots out of a
-// full table and allocating the same count back.
+// Draw-slot recycling: free a scattered run and allocate it back.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_draw_slot_churn

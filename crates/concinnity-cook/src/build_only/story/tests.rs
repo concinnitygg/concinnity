@@ -58,7 +58,7 @@ fn action(entry: &serde_json::Value) -> serde_json::Value {
 #[test]
 fn passes_through_without_imports() {
     let mut assets = vec![serde_json::json!({"type":"Logger","args":{"$id":"x"}})];
-    expand_stories(&mut assets).unwrap();
+    expand_stories(&mut assets, None).unwrap();
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["type"], "Logger");
 }
@@ -68,7 +68,7 @@ fn missing_source_is_an_error() {
     let mut assets = vec![serde_json::json!({
         "type": "StoryImport", "args": {"$id": "story"}
     })];
-    let err = expand_stories(&mut assets).unwrap_err().to_string();
+    let err = expand_stories(&mut assets, None).unwrap_err().to_string();
     assert!(err.contains("missing `source`"));
 }
 
@@ -76,7 +76,7 @@ fn missing_source_is_an_error() {
 #[test]
 fn an_import_without_args_is_a_missing_source() {
     let mut assets = vec![serde_json::json!({"type":"StoryImport","args":{"$id":"story"}})];
-    let err = expand_stories(&mut assets).unwrap_err().to_string();
+    let err = expand_stories(&mut assets, None).unwrap_err().to_string();
     assert_eq!(err, "StoryImport 'story': missing `source`");
 }
 
@@ -86,7 +86,7 @@ fn unreadable_source_file_is_an_error() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": "/no/such/story.md"}
     })];
-    let err = expand_stories(&mut assets).unwrap_err().to_string();
+    let err = expand_stories(&mut assets, None).unwrap_err().to_string();
     assert!(err.contains("cannot read"), "{err}");
     assert!(err.contains("/no/such/story.md"), "{err}");
 }
@@ -101,7 +101,7 @@ fn parse_failure_is_wrapped_with_import_context() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": path.to_str().unwrap()}
     })];
-    let err = expand_stories(&mut assets).unwrap_err().to_string();
+    let err = expand_stories(&mut assets, None).unwrap_err().to_string();
     assert!(err.contains("StoryImport 'story'"), "{err}");
     assert!(err.contains("title"), "{err}");
 }
@@ -387,7 +387,7 @@ fn expands_from_file_and_replaces_the_import() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": path.to_str().unwrap()}
     })];
-    expand_stories(&mut assets).unwrap();
+    expand_stories(&mut assets, None).unwrap();
     assert!(
         !assets
             .iter()
@@ -428,7 +428,7 @@ fn malformed_import_fields_name_the_import_and_the_field() {
         let mut assets = vec![
             serde_json::json!({"type": "StoryImport", "args": crate::authoring::world::args_with_id(args, "tale")}),
         ];
-        let err = expand_stories(&mut assets).unwrap_err().to_string();
+        let err = expand_stories(&mut assets, None).unwrap_err().to_string();
         assert!(
             err.starts_with("StoryImport 'tale': invalid args: "),
             "{err}"
@@ -449,7 +449,7 @@ fn generated_name_collision_is_an_error() {
         }),
         serde_json::json!({"type":"Screen","args":{"$id":"story_title"}}),
     ];
-    let err = expand_stories(&mut assets).unwrap_err().to_string();
+    let err = expand_stories(&mut assets, None).unwrap_err().to_string();
     assert!(err.contains("collides"));
 }
 
@@ -986,7 +986,7 @@ fn other_assets_survive_a_story_expansion() {
             "args": {"$id": "tale", "source": path.to_str().unwrap()}
         }),
     ];
-    expand_stories(&mut assets).unwrap();
+    expand_stories(&mut assets, None).unwrap();
     assert_eq!(assets[0]["args"]["$id"], "win");
     assert!(
         !assets
@@ -1007,7 +1007,7 @@ fn import_args_reach_the_compiled_graph() {
         "type": "StoryImport",
         "args": {"$id": "tale", "source": path.to_str().unwrap(), "title_screen": false, "text_speed": 12.0}
     })];
-    expand_stories(&mut assets).unwrap();
+    expand_stories(&mut assets, None).unwrap();
     assert_eq!(find(&assets, "tale")["args"]["text_speed"], 12.0);
     assert!(!assets.iter().any(|v| asset_name(v) == "tale_title"));
     // With no title screen the stage shows at launch instead.
@@ -1029,7 +1029,7 @@ fn an_emission_failure_is_wrapped_with_import_context() {
         "type": "StoryImport",
         "args": {"$id": "tale", "source": path.to_str().unwrap()}
     })];
-    let err = expand_stories(&mut assets).unwrap_err().to_string();
+    let err = expand_stories(&mut assets, None).unwrap_err().to_string();
     assert!(err.contains("StoryImport 'tale'"), "{err}");
     assert!(err.contains("portrait.png"), "{err}");
 }

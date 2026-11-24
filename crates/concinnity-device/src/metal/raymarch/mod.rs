@@ -58,11 +58,8 @@ use super::scoped_encoder::ScopedEncoder;
 
 mod swap;
 
-// Metal buffer index for the proxy cube's vertex stream.
-//
-// Vertex streams and constant buffers share one index space on Metal, and the
-// shader's buffers sit at their `register()` numbers, b0..b4, so the stream
-// sits past all of them.
+// The proxy cube's vertex stream index, past the shader's b0..b4, since
+// streams and constant buffers share one index space.
 const RAYMARCH_VERTEX_BUFFER: usize = 5;
 
 // `RaymarchLights` mirror of `concinnity_engine::gfx::render_types::LightUniforms`.
@@ -80,13 +77,10 @@ type RaymarchLightsGpu = LightUniforms;
 pub(in crate::metal) struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     pub(in crate::metal) label: String,
-    // The volume's draw pipeline. Compiled as the opaque surface variant
-    // (cone-marched SDF, depth write) for a normal volume, or the alpha-blended
-    // volumetric variant (Beer-Lambert march, no depth write) when the asset's
-    // `volumetric` flag is set. A volume is one or the other, never both: a
-    // volumetric shader provides `sampleVolume` instead of `map`/`shade`, so
-    // the surface template would not link against it. A surface's is the
-    // back-face variant; `front_pipeline` is the other.
+    // The volume's draw pipeline: the opaque surface variant (back faces;
+    // `front_pipeline` is the other), or the alpha-blended volumetric one when
+    // `volumetric` is set. A volume is never both, since the templates link
+    // different entry points.
     pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     // The surface's front-face pipeline; `None` for a medium.
     pub(in crate::metal) front_pipeline:
@@ -183,12 +177,8 @@ impl RaymarchVolumeRecord {
     }
 }
 
-// One entry point of a volume's field, out of the library its MSL builds.
-//
-// Each entry is its own artifact: the cook stores one MSL translation per entry,
-// and `msl_cache` turns that text into a metallib where a Metal toolchain exists
-// and hands it to `newLibraryWithSource` where none does, which is every player
-// machine. A missing function names the volume rather than the engine.
+// One entry point of a volume's field, out of the library its MSL builds. A
+// missing function names the volume.
 fn entry_function(
     device: &ProtocolObject<dyn MTLDevice>,
     programs: &SdfPrograms,
@@ -211,12 +201,8 @@ fn entry_function(
     super::msl_cache::cooked_function(device, &msl, entry, &format!("SdfVolume '{asset_label}'"))
 }
 
-// Compile + link a per-volume raymarch pipeline from the vertex entry of the
-// volume's surface family and the fragment entry for `faces` (see
-// `entry_function`).
-//
-// `asset_label` is included in error messages so a malformed user
-// shader points at the right SdfVolume in the world.jsonl.
+// Build a per-volume raymarch pipeline for `faces`. `asset_label` names the
+// SdfVolume in errors.
 pub(in crate::metal) fn build_raymarch_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     programs: &SdfPrograms,
@@ -284,12 +270,8 @@ pub(in crate::metal) fn build_raymarch_pipeline(
         })
 }
 
-// Compile a per-volume depth-only shadow-caster pipeline. Wraps the user
-// source between the helpers and the shadow template (the main template is
-// *not* included: this library defines only `raymarch_shadow_vertex` /
-// `raymarch_shadow_fragment`), then builds a render pipeline with no color
-// attachment and a `Depth32Float` depth attachment matching the CSM
-// `shadow_map`. Mirrors `directx::raymarch::compile_volume_shadow_pso`.
+// Build a per-volume depth-only shadow pipeline matching the CSM's
+// `Depth32Float` map.
 pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     programs: &SdfPrograms,
@@ -572,7 +554,7 @@ pub(in crate::metal) fn build_raymarch_volume_record(
         front_pipeline,
         shadow_pipeline,
         prepass_pipelines,
-        uniforms: volume_uniforms_from(volume),
+        uniforms: RaymarchVolumeUniforms::from(volume),
         visible: volume.visible,
         volumetric: volume.volumetric,
         cast_shadows: volume.cast_shadows,
@@ -582,26 +564,8 @@ pub(in crate::metal) fn build_raymarch_volume_record(
     })
 }
 
-fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
-    RaymarchVolumeUniforms {
-        center: volume.center,
-        _pad0: 0.0,
-        extent: volume.extent,
-        _pad1: 0.0,
-        cone_ratio: volume.cone_ratio(),
-        max_distance: volume.max_distance,
-        max_steps: i32::saturating_from(volume.max_steps),
-        receive_shadows: i32::from(volume.receive_shadows),
-        params: volume.params,
-    }
-}
-
-// Build the shared unit-cube proxy geometry buffers. The vertices ride
-// in `Vertex` shape so the proxy works through the engine's standard
-// vertex descriptor (the same five-attribute layout the main pass and
-// every custom mesh shader expect). 8 corners at `±1`; the
-// vertex shader scales by `vol.extent` and translates by `vol.center`.
-// Indices wind 36 CCW triangles; the encoder culls one face set per volume.
+// The shared unit-cube proxy: 8 `Vertex` corners at ±1 and 36 CCW indices,
+// scaled and placed by the vertex shader.
 type RaymarchCubeBuffers = (
     Retained<ProtocolObject<dyn MTLBuffer>>,
     Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -651,12 +615,8 @@ fn v(pos: [f32; 3]) -> Vertex {
 }
 
 impl MtlContext {
-    // Encode the raymarched SDF volume pass. Caller has ended the main
-    // pass (so `targets.hdr.depth_resolve` carries scene depth) and the
-    // post-Main hdr_resolve writes from Decals / Fog / ParticlesDraw
-    // have not yet fired. Each visible `SdfVolume` issues one indexed
-    // draw of the proxy cube; the user's `map` + `shade` run per
-    // fragment.
+    // Encode the raymarch pass, after Main resolved scene depth and before the
+    // later passes write `hdr_resolve`. One proxy-cube draw per visible volume.
     pub(in crate::metal) fn encode_raymarch(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -686,18 +646,8 @@ impl MtlContext {
         let lights_gpu: RaymarchLightsGpu = *self.state.lights.uniforms();
         let shadow_uniforms = self.state.planner.shadow.uniforms;
 
-        // Refraction support: snapshot the pre-raymarch
-        // `hdr_resolve` into `hdr_resolve_copy` so user SDF shaders can
-        // sample the scene below the surface without violating Metal's
-        // attachment-aliasing rule (the same `hdr_resolve` we'd want to
-        // read is also the color attachment we're about to write).
-        // Single full-screen blit per frame; AutoExposure has already
-        // sampled `hdr_resolve_v1`, so this captures the same un-
-        // decorated scene the next post-Main pass starts with.
-        //
-        // Only a volume whose field calls the scene tap reads the result, so a
-        // frame drawing none skips the blit entirely and leaves the copy
-        // holding whatever an earlier frame put there. Nothing samples it.
+        // Snapshot `hdr_resolve` for refractive volumes, since it is also the
+        // attachment being written. Skipped when no drawn volume samples it.
         let refractive = self
             .raymarch
             .volumes
@@ -742,14 +692,8 @@ impl MtlContext {
             ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
-            // Bind the single-sample depth resolve as the
-            // writable depth attachment. `Load` keeps the rasterized
-            // depth that the Main pass resolved into it, so the
-            // hardware depth test rejects raymarched fragments behind
-            // existing geometry (and behind earlier raymarch volumes
-            // in this pass). `Store` keeps the new depth (the min of
-            // rasterized and raymarched per pixel) alive for
-            // water / decal / fog to consume.
+            // Load the resolved depth so earlier geometry rejects hidden hits,
+            // and store the combined depth for later passes.
             let da = pass_desc.depthAttachment();
             da.setTexture(Some(self.targets.hdr.depth_resolve.as_ref()));
             da.setLoadAction(MTLLoadAction::Load);
@@ -768,11 +712,8 @@ impl MtlContext {
                 })?,
             ns_string!("raymarch"),
         );
-        // The inclusive camera test with write, matching the Vulkan and
-        // DirectX surface pipelines. The fragment shader's conservative
-        // depth output further gates: even if the rasterized proxy fragment
-        // passes the depth test, the actual raymarch hit has to pass against
-        // the existing value to commit.
+        // Inclusive test with write; the fragment's conservative depth gates
+        // the actual hit.
         enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
 
         // Per-frame view at buffer(0); same value for vertex + fragment.
@@ -780,12 +721,7 @@ impl MtlContext {
         enc.set_fragment_value(view, slots::VIEW.index);
         // Lights at buffer(2); rebound once.
         enc.set_fragment_value(&lights_gpu, slots::LIGHTS.index);
-        // Cascade-shadow uniforms at buffer(3).
-        // Always bound; the helper falls back to `shadow = 1.0`
-        // when `vol.receive_shadows == 0` or when the world has no
-        // shadow stage (in which case `shadow.map` is the 1×1
-        // fallback texture and the cascade compare returns full
-        // light).
+        // Always bound; unshadowed volumes and worlds ignore it.
         enc.set_fragment_value(&shadow_uniforms, slots::SHADOW.index);
         // Proxy-cube vertices at vertex buffer(2); index buffer
         // bound per-draw. The vertex descriptor declares the full
@@ -812,13 +748,8 @@ impl MtlContext {
             self.scene.env_map.prefilter.as_ref(),
             slots::PREFILTER_CUBE.index,
         );
-        // Pre-raymarch scene snapshot for refraction
-        // sampling. The blit at the top of this function populated
-        // `hdr_resolve_copy` from `hdr_resolve` when some volume
-        // drawing this frame calls `sampleSceneRefracted`. Always
-        // bound (even when no shader uses it, and even when the blit
-        // was skipped) so the per-volume PSO doesn't need a
-        // "refraction enabled" variant.
+        // Always bound, even when the snapshot was skipped, so the PSO needs no
+        // refraction variant.
         enc.set_fragment_texture(
             self.targets.hdr.hdr_resolve_copy.as_ref(),
             slots::SCENE_COLOR.index,
@@ -843,13 +774,8 @@ impl MtlContext {
             let faces = vol.faces(view);
             enc.setCullMode(cull_mode(faces));
             enc.set_pipeline(vol.draw_pipeline(faces));
-            // Volumetric media are translucent and must not write depth, but
-            // they should still be occluded by nearer opaque geometry. Bind the
-            // read-only state (no write), matching the DirectX volumetric PSO.
-            // Passing `None` here would trip Metal's validation layer
-            // (`setDepthStencilState(nil)` is illegal). Opaque SDF surfaces keep
-            // the write-on state so they composite into the depth buffer
-            // downstream passes sample.
+            // Volumetric media test depth without writing; Metal rejects a nil
+            // depth state.
             if vol.volumetric {
                 enc.set_depth_stencil(self.targets.depth_state_read_only.as_ref());
             } else {
@@ -874,11 +800,8 @@ impl MtlContext {
         Ok(draws)
     }
 
-    // Draw every visible surface volume into the G-buffer pre-pass `enc` has
-    // open, after the rasterized surfaces and before the sky: the march writes
-    // normal, depth, roughness and motion under the same depth test, so a
-    // volume and a mesh occlude each other there as they do in the frame.
-    // Leaves the encoder's cull mode where it found it.
+    // Draw every visible surface volume into the open G-buffer pre-pass under
+    // the same depth test as the meshes. Restores the cull mode.
     pub(in crate::metal) fn encode_raymarch_prepass(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -942,16 +865,9 @@ impl MtlContext {
             .any(|v| v.visible && v.cast_shadows && v.shadow_pipeline.is_some())
     }
 
-    // Encode raymarched SDF shadow casters into the CSM cascades. Called from
-    // `encode_shadow_pass` after the rasterized + skinned casters, on the same
-    // command buffer so the writes land before the Main pass samples the
-    // shadow map. For each cascade this opens a depth-only render pass on that
-    // `shadow.map` slice with `Load` / `Store` (keeping the rasterized depth
-    // already written into the slice), then draws each caster's proxy cube
-    // drawing its back faces. The depth-only fragment cone-marches the SDF
-    // from the light side and writes the hit's NDC.z through the conservative-depth
-    // semantic; the slice's depth write test keeps the nearest caster (rasterized or
-    // raymarched) per texel. A no-op (returns 0) when no volume casts.
+    // Draw the SDF shadow casters into each cascade after the rasterized ones,
+    // on the same command buffer, keeping the nearest caster by depth test.
+    // Returns 0 when no volume casts.
     pub(in crate::metal) fn encode_sdf_shadow_casters(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

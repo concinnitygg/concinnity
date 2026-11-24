@@ -18,11 +18,8 @@ pub struct Keyframe {
     pub pose: JointPose,
 }
 
-// The authored JSON shape flattens the pose onto the keyframe object
-// (`{"time":0,"translation":[..]}`), but `serde(flatten)` needs a
-// self-describing format, which the baked postcard form is not. Serde impls
-// branch on the format: human-readable keeps the flattened schema, binary
-// nests the pose as a plain field.
+// The JSON form flattens the pose onto the keyframe, which postcard cannot
+// read, so binary nests it as a plain field.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeyframeFlat {
     time: f32,
@@ -124,6 +121,7 @@ pub struct Animation {
     /// Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the
     /// build imports `duration` + `tracks` from it; inline-authored clips
     /// leave this empty.
+    #[asset(file)]
     pub source: String,
     /// Index of the animation to import when `source` is set and the file
     /// contains several. Ignored when `animation_name` is non-empty.

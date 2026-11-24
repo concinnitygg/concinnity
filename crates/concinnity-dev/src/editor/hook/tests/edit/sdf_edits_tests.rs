@@ -5,15 +5,14 @@
 //! nothing left reads it.
 
 use concinnity_cook::build_only::include::SourcedEntry;
+use concinnity_engine::ecs::World;
 use concinnity_engine::render::shader::programs::vocabulary::sdf;
 use std::path::Path;
 
 use super::shader_fixtures::{click, message, pick, toasts};
 use crate::editor::entry_list::EntryList;
 use crate::editor::hook::EditorHook;
-use crate::editor::hook::tests::fixtures::{
-    hook, press_modal, press_modal_check, selected, world_with_name_field,
-};
+use crate::editor::hook::tests::fixtures::{hook, press_modal, press_modal_check, selected};
 use crate::editor::panels::shader::list::{MenuItem, RowKind};
 use crate::editor::panels::shader::source::SourceKey;
 use crate::editor::panels::shader::source_panel::SourceAction;
@@ -55,11 +54,11 @@ fn session(dir: &Path) -> EditorHook {
 fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
-    click(&mut h, &mut world, &RowKind::Field(0));
+    let world = World::new();
+    click(&mut h, &world, &RowKind::Field(0));
     let src = h.shaders.source.as_ref().expect("the field is open");
     assert!(matches!(&src.key, SourceKey::Field { path } if path.ends_with("blob.hlsl")));
-    assert_eq!(src.title(), "blob.hlsl SDF field");
+    assert_eq!(src.title_parts(), ["blob.hlsl", "SDF field"]);
     let rows = h.shader_rows().to_vec();
     assert!(
         rows.iter()
@@ -71,7 +70,7 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     let slot = rows.iter().position(|r| r.text() == "map()").unwrap();
     let src = h.shaders.source.as_mut().unwrap();
     src.area.go_to(0, 0);
-    h.apply_source_action(SourceAction::Reference(slot), 0.0, 0.0);
+    h.apply_source_action(SourceAction::Reference(slot));
     let text = h.shaders.source.as_ref().unwrap().area.text();
     assert!(
         text.starts_with("float map(float3 p, SdfParams params, float time)float map"),
@@ -83,13 +82,8 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
 fn select_volumes_selects_every_volume_reading_the_field() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
-    pick(
-        &mut h,
-        &mut world,
-        &RowKind::Field(0),
-        MenuItem::SelectVolumes,
-    );
+    let world = World::new();
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::SelectVolumes);
     assert_eq!(selected(&h), ["left", "right"]);
 }
 
@@ -100,10 +94,10 @@ fn select_volumes_selects_every_volume_reading_the_field() {
 fn a_field_delete_removes_its_volumes_in_one_step() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let blob = dir.path().join("blob.hlsl");
 
-    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     let text = message(&h);
     assert!(
         text.contains("Its volumes 'left' and 'right' are deleted."),
@@ -114,17 +108,17 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     press_modal(&mut h, &mut world, "Delete");
     assert_eq!(volume_names(&h), ["cloud"]);
     assert!(blob.exists(), "unchecked: the file stays");
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
     assert!(!h.can_undo(), "the delete was one step");
 
-    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     press_modal_check(&mut h, &mut world);
     press_modal(&mut h, &mut world, "Delete");
     assert_eq!(volume_names(&h), ["cloud"]);
     assert!(!blob.exists(), "checked: the file goes");
-    assert!(toasts(&h).iter().any(|t| t.ends_with("not the file")));
-    h.undo(&mut world);
+    assert!(toasts(&mut h).iter().any(|t| t.ends_with("not the file")));
+    h.undo();
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
 }
 
@@ -133,10 +127,10 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
 fn deleting_the_open_field_closes_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
-    click(&mut h, &mut world, &RowKind::Field(1));
+    let mut world = World::new();
+    click(&mut h, &world, &RowKind::Field(1));
     assert!(h.shaders.source.is_some());
-    pick(&mut h, &mut world, &RowKind::Field(1), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(1), MenuItem::Delete);
     press_modal(&mut h, &mut world, "Delete");
     assert!(h.shaders.source.is_none());
     assert_eq!(volume_names(&h), ["left", "right"]);
@@ -150,10 +144,22 @@ fn a_read_only_volume_keeps_the_file() {
     let blob = dir.path().join("blob.hlsl");
     std::fs::write(&blob, "blob").unwrap();
     let mut h = hook(Vec::new());
-    let own = |entry| SourcedEntry { entry, file: None };
+    h.content_root = dir.path().to_path_buf();
+    h.world_path = dir
+        .path()
+        .join("world.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    let own = |entry| SourcedEntry {
+        entry,
+        file: None,
+        root: None,
+    };
+    let lib = h.content_root.join("lib.jsonl");
     let shared = || SourcedEntry {
         entry: volume("shared", &blob),
-        file: Some("lib.jsonl".into()),
+        file: Some(lib.clone()),
+        root: None,
     };
     let include = serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}});
     h.entries = EntryList::with_includes(
@@ -164,11 +170,11 @@ fn a_read_only_volume_keeps_the_file() {
             own(include),
             shared(),
         ],
-        Path::new(&h.world_path),
+        h.world_origin(),
     );
     h.baseline = h.entries.clone();
-    let mut world = world_with_name_field();
-    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
+    let mut world = World::new();
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     let check = h.modal.as_ref().unwrap().check.clone().unwrap();
     assert!(!check.enabled);
     assert_eq!(

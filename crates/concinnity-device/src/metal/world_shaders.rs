@@ -1,9 +1,6 @@
-// Runtime residency of the material-referenced world shader pipelines.
-//
-// Init builds a pipeline for every world Shader whose payload it decoded and
-// leaves a `None` in `world_pipelines` for each one it deferred (a Shader owned
-// by a scene other than the start scene). The streaming pump calls in here as
-// those scenes pin and unpin, handing over a pipeline its worker already built.
+// Runtime residency of the material-referenced world shader pipelines: init
+// leaves `None` for Shaders owned by scenes other than the start scene, and the
+// streaming pump installs them as their scenes pin.
 
 use concinnity_engine::render::backend::WorldShaders;
 use concinnity_engine::render::backend::error::RenderResult;
@@ -16,11 +13,8 @@ use super::init::pipelines::make_vertex_descriptor;
 use super::pipeline_builder::{MtlPipelineBuilder, world_shader_for};
 
 impl MtlContext {
-    // Shader `shader`'s grass variants built from its fresh programs, when it
-    // has them: every one when `install`ing, else those already resident.
-    // Built here rather than on a worker: only a pin or a hot reload of the
-    // Shader reaches them. All are built before any is installed, so a
-    // failure keeps the live family whole.
+    // The grass variants of `shader` built from its fresh programs, all before
+    // any is installed so a failure keeps the live family whole.
     fn build_family(
         &self,
         shader: u32,
@@ -86,11 +80,8 @@ impl WorldShaders for MtlContext {
         self.install_family(family)
     }
 
-    // Release one bucket's pipeline. A Metal command buffer retains the
-    // pipelines encoded into it, so dropping this reference mid-frame is safe
-    // and the next frame's main pass simply skips the bucket. That retention is
-    // Metal's alone: DirectX and Vulkan command lists do NOT keep a pipeline
-    // alive, so their evict drains the device first.
+    // Release one bucket's pipeline. Command buffers retain what they encoded,
+    // so this is safe mid-frame; the next main pass skips the bucket.
     fn evict_world_shader(&mut self, bucket: u32) {
         let family = self.cull.world_pipelines.family(bucket);
         for b in family {
@@ -99,11 +90,8 @@ impl WorldShaders for MtlContext {
         self.cull.world_pipelines.evict(bucket);
     }
 
-    // Rebuild one world Shader's pipelines from hot-reloaded programs, or swap
-    // in `prepared` when they were built for this context's targets. Bucket 0
-    // is the main pipeline pair; another bucket is rebuilt only while
-    // installed. Both halves are built before they replace the live pair, so
-    // a failed build of either leaves the live pipelines bound.
+    // Rebuild one world Shader's pipelines from hot-reloaded programs, or
+    // install `prepared`. Both halves build before the live pair is replaced.
     fn update_world_shader(
         &mut self,
         bucket: u32,

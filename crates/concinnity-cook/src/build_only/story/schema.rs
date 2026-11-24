@@ -6,7 +6,7 @@
 /// visual-novel flow). The build parses the Markdown and expands the import
 /// into the UI assets that play it: a [Screen](#screen) per page with a backdrop
 /// [Sprite](#sprite), [`TextLabel`](#textlabel)s for narration and speaker
-/// names, and [`HitRegion`](#hitregion)s wiring page to page, so `world.jsonl`
+/// names, and [`HitRegion`](#hitregion)s wiring page to page, so the `.jsonl` file
 /// stays a single readable line while the story lives in the Markdown file.
 ///
 /// The `source` file is `CommonMark` Markdown opening with a YAML frontmatter
@@ -110,7 +110,8 @@
 )]
 #[serde(default)]
 pub struct StoryImport {
-    /// Path to the Markdown story file, relative to the project root.
+    /// Path to the Markdown story file, relative to the root of the file
+    /// holding the line.
     #[asset(owned_file)]
     pub source: String,
     /// Whether to generate a title screen (story title, Start and Quit

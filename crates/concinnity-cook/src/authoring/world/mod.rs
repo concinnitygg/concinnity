@@ -1,19 +1,19 @@
-//! The authored world model: world.jsonl I/O (`WorldJsonlAsset`, the
+//! The authored model: `.jsonl` file I/O (`WorldJsonlAsset`, the
 //! `["Type", {args}]` line format, `parse/write_world_jsonl`,
-//! `patch_world_jsonl_to`, `find_world_jsonl`, the path consts) and structural
+//! `patch_world_jsonl_to`, the application a file declares) and structural
 //! validation (`load_world`), which resolves `Include` lines first. What sits
 //! on top of this -- expansion passes, injection, and `prepare_world` -- is
 //! `crate::build_only`; the shipped runtime plays compiled blobs and never
 //! sees any of this.
+mod app;
 mod entry_check;
-mod find;
 mod identity;
 mod io;
 mod line;
 mod source;
 
+pub use app::{APP_JSONL, declared_app_name};
 pub use entry_check::entry_errors;
-pub use find::{WORLD_JSONL, find_world_jsonl};
 pub use identity::{
     ID_KEY, anonymous_label, args_with_id, args_without_id, entry_handle, entry_handles, entry_id,
     entry_type, entry_type_name, find_entry, is_label_of, replace_args, set_entry_id,
@@ -63,8 +63,8 @@ pub fn load_world(source: WorldSource<'_>) -> Result<Vec<serde_json::Value>, Vec
             .map(|l| format!("syntax error: {l}"))
             .collect::<Vec<_>>()
     })?;
-    let mut raw =
-        crate::build_only::include::resolve_includes(parsed, source.file).map_err(|e| vec![e])?;
+    let mut raw = crate::build_only::include::resolve_includes(parsed, source.file, source.root)
+        .map_err(|e| vec![e])?;
 
     let mut errors: Vec<String> = Vec::new();
     let mut seen_ids: HashMap<&str, usize> = HashMap::default();
@@ -149,10 +149,10 @@ mod tests {
     #[test]
     fn load_world_labels_after_resolving_includes() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("world.jsonl");
+        let world = dir.path().join("world.jsonl");
         std::fs::write(dir.path().join("props.jsonl"), "[\"Prop\"]\n[\"Prop\"]\n").unwrap();
         let text = "[\"Prop\",{\"mesh\":\"first\"}]\n[\"Include\",{\"path\":\"props.jsonl\"}]\n[\"Prop\",{\"mesh\":\"last\"}]\n";
-        let raw = load_world(WorldSource::file(text, &root)).unwrap();
+        let raw = load_world(WorldSource::file(text, &world, Some(dir.path()))).unwrap();
         let ids: Vec<Option<&str>> = raw.iter().map(entry_id).collect();
         assert_eq!(
             ids,
@@ -169,10 +169,11 @@ mod tests {
     #[test]
     fn load_world_reports_an_include_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("world.jsonl");
+        let world = dir.path().join("world.jsonl");
         let errs = load_world(WorldSource::file(
             "[\"Include\",{\"path\":\"missing.jsonl\"}]\n",
-            &root,
+            &world,
+            Some(dir.path()),
         ))
         .unwrap_err();
         assert!(errs[0].contains("missing.jsonl"), "{errs:?}");
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn load_world_rejects_runtime_only_type() {
         // Transform is pushed by a system at runtime (RuntimeOnly), so it may
-        // not be authored in the world file.
+        // not be authored in the file.
         let errs = load(r#"["Transform",{"$id":"t"}]"#).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("RuntimeOnly")));
     }

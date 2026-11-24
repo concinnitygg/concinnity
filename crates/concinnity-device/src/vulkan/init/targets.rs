@@ -61,13 +61,9 @@ pub(super) fn build_render_targets(
         msaa_samples,
     )?;
 
-    // Transient image pool: the graph-owned transients (`ao_output`,
-    // `bloom_top`, and the three G-buffer color channels), planned for every
-    // feature a settings change can turn on so a toggle never repacks it.
-    // Built before the
-    // composite and the main pass bind its `bloom_top` and `ao_output`, and
-    // before the G-buffer pre-pass so its framebuffers bind the pooled MRT
-    // channels.
+    // The transient image pool (`ao_output`, `bloom_top`, the G-buffer channels),
+    // planned for every feature a setting can enable, and built before its
+    // consumers bind it.
     let transient_pool = crate::vulkan::transient_pool::TransientImagePool::build(
         &crate::vulkan::transient_pool::TransientPoolGpu {
             instance: &hw.instance,

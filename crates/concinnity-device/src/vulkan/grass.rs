@@ -583,12 +583,9 @@ impl GrassResources {
         })
     }
 
-    // Size the visible-blade buffers for render targets `size` pixels across
-    // and down, making them again when the blades they hold changed; the
-    // field takes its new sizing only once both are made. A replaced buffer
-    // is dropped into the allocator, which destroys it only once no frame in
-    // flight can read it, and each frame's sets are pointed at the new ones
-    // when that frame next runs.
+    // Size the visible-blade buffers for `size` and rebuild them when their blades
+    // changed. Replaced buffers retire through the allocator, and each frame's sets
+    // are re-pointed when that frame next runs.
     fn resize(
         &mut self,
         alloc: &super::allocator::DeviceAllocator,

@@ -10,7 +10,6 @@
 // binary, which the segment's header carries once for every entry it holds
 // (see `identity`), so a key covers the inputs and the header covers the code.
 
-use concinnity_host::store::source::find_in;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -106,11 +105,7 @@ pub(crate) fn payload_key(
 // `payload_key` this is platform-independent: the entries are plain JSON with
 // no per-backend branching. The two share one segment, and it is the entry
 // kind that keeps their key spaces apart rather than anything in the preimage.
-pub(crate) fn expand_key(
-    source: &str,
-    args: &serde_json::Value,
-    assets_dir: Option<&Path>,
-) -> String {
+pub(crate) fn expand_key(source: &str, args: &serde_json::Value, root: Option<&Path>) -> String {
     let mut hasher = Sha256::new();
     if let Some(h) = file_content_hash(source) {
         hasher.update(h);
@@ -119,7 +114,7 @@ pub(crate) fn expand_key(
     // hash alone cannot see; fold their contents in so editing a referenced
     // `.bin` or image re-expands the import.
     if source.to_lowercase().ends_with(".gltf") {
-        for path in crate::import::gltf_source::referenced_files(source, assets_dir) {
+        for path in crate::import::gltf_source::referenced_files(source, root) {
             if let Some(h) = file_content_hash(&path) {
                 hasher.update(h);
             }
@@ -195,11 +190,9 @@ fn key_from_parts(
 
 // Collect (path, content-hash) for every source file the args reference.
 // Walks the args JSON for string leaves and resolves each one to a file using
-// the same lookup rules the asset compilers use: a bare filename is searched
-// under the build's asset search root and a relative or absolute path is used
-// directly. Strings that do not
-// resolve to a file (asset names, generator keywords, colors) contribute
-// nothing.
+// the same rule the asset compilers use: a path under the build's content root.
+// Strings that do not resolve to a file (asset names, generator keywords,
+// colors) contribute nothing.
 fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(PathBuf, [u8; 32])> {
     let mut strings = Vec::new();
     collect_strings(args, &mut strings);
@@ -233,12 +226,7 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<PathBuf> {
     if !looks_like_file {
         return None;
     }
-    // Direct path (absolute, or relative to the build working directory).
-    if Path::new(s).is_file() {
-        return Some(PathBuf::from(s));
-    }
-    // Bare filename searched recursively under the asset search root.
-    ctx.assets_dir.and_then(|dir| find_in(dir, s))
+    concinnity_host::store::source::find_existing(s, ctx.root).filter(|p| p.is_file())
 }
 
 #[cfg(test)]
@@ -251,7 +239,7 @@ mod tests {
         BuildCtx {
             name: "test",
             targets: PlatformSet::single(Platform::Metal),
-            assets_dir: None,
+            root: None,
             all_assets: &[],
         }
     }
@@ -601,10 +589,10 @@ mod tests {
         assert_eq!(out, vec!["x".to_string(), "y".to_string()]);
     }
 
-    // A bare filename that does not exist directly is searched recursively
-    // under the build's asset search root, including inside nested args.
+    // A relative path is found under the build's root, including inside nested
+    // args.
     #[test]
-    fn resolve_source_finds_a_bare_filename_under_the_assets_tree() {
+    fn resolve_source_finds_a_relative_path_under_the_root() {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("hdri");
         std::fs::create_dir_all(&nested).expect("assets tree");
@@ -612,17 +600,20 @@ mod tests {
         let assets_ctx = BuildCtx {
             name: "test",
             targets: PlatformSet::single(Platform::Metal),
-            assets_dir: Some(dir.path()),
+            root: Some(dir.path()),
             all_assets: &[],
         };
 
-        let found = resolve_source("sky.hdr", &assets_ctx).expect("bare filename resolves");
+        let found = resolve_source("hdri/sky.hdr", &assets_ctx).expect("relative path resolves");
         assert!(found.ends_with("sky.hdr"), "got: {}", found.display());
-        assert_eq!(resolve_source("missing.hdr", &assets_ctx), None);
-        // Without a search root the same bare filename resolves nothing.
-        assert_eq!(resolve_source("sky.hdr", &ctx()), None);
+        assert_eq!(
+            resolve_source("sky.hdr", &assets_ctx),
+            None,
+            "no search by name"
+        );
+        assert_eq!(resolve_source("hdri/missing.hdr", &assets_ctx), None);
 
-        let args = json!({"maps": [{"source": "sky.hdr"}]});
+        let args = json!({"maps": [{"source": "hdri/sky.hdr"}]});
         let files = referenced_files(&args, &assets_ctx);
         assert_eq!(files.len(), 1);
         assert!(files[0].0.ends_with("sky.hdr"));
@@ -638,7 +629,7 @@ mod tests {
         let assets_ctx = BuildCtx {
             name: "test",
             targets: PlatformSet::single(Platform::Metal),
-            assets_dir: Some(dir.path()),
+            root: Some(dir.path()),
             all_assets: &[],
         };
         assert_eq!(resolve_source("chrome", &assets_ctx), None);

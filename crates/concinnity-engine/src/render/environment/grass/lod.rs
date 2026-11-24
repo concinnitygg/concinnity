@@ -591,12 +591,9 @@ fn cone_share(cone: f32, e: f32) -> f32 {
     acos(sqrt(c2)) / core::f32::consts::PI
 }
 
-// The blades `view` keeps of `field` at distances in `[inner, outer)` of the
-// camera: the alive fraction at `max(d, inner)`, times the share of each ring
-// a view cone of half-angle `cone` sees from `height` over the ground (or all
-// of it), integrated over the disc of the outer radius, bounded by the whole
-// ground at the inner radius's alive fraction, plus a tile of slack for the
-// cells the boundary cuts.
+// The blades `view` keeps of `field` between `inner` and `outer`: the alive
+// fraction times the share of each ring the view cone sees, integrated over the
+// disc, bounded by the whole ground, plus a tile of slack.
 fn band_capacity(
     field: &CapacityField<'_>,
     view: &GrassLodView,

@@ -1,19 +1,18 @@
-//! `EditorHook`: the confirmation dialog's open state, click routing, and draw.
-//! The geometry lives in `editor/modal.rs`. While open the dialog is
-//! screen-modal: every press and wheel is swallowed before any other routing
-//! (`tick` checks it first), and only a button press closes it -- a click-away
-//! is not a cancel, since the dialog guards destructive actions.
+//! `EditorHook`: the confirmation dialog's open state and what its controls
+//! report. The dialog (`editor/modal.rs`) is a modal panel: while it is open
+//! it takes every press and the wheel, so the hook routes none of them, and
+//! only a button press closes it -- a click away is not a cancel, since the
+//! dialog guards destructive actions.
 
-use concinnity_engine::components::FrameInput;
+use concinnity_engine::components::UiEvent;
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::modal::{self, Dialog};
-use crate::editor::widget;
-use crate::editor::widget_check::Check;
+use crate::editor::modal::{self, Check, Dialog, DialogEvent};
+use crate::editor::ui::BuiltUi;
 
 impl EditorHook {
-    // Open the dialog. Buttons past the widget's pool are dropped.
+    // Open the dialog. Buttons past the dialog's few are dropped.
     pub(in crate::editor::hook) fn open_modal(
         &mut self,
         message: &str,
@@ -32,9 +31,8 @@ impl EditorHook {
         self.set_modal(message, buttons, false, Some(check));
     }
 
-    // The same, with a name field to type into. The field is empty unless the
-    // caller seeds it. A prompt owns the keyboard while it is open, so the
-    // editor's shortcuts stand down.
+    // The same, with a name field to type into. A prompt owns the keyboard
+    // while it is open, so the editor's shortcuts stand down.
     pub(in crate::editor::hook) fn open_prompt(
         &mut self,
         message: &str,
@@ -51,11 +49,17 @@ impl EditorHook {
         check: Option<Check>,
     ) {
         buttons.truncate(modal::MAX_BUTTONS);
+        // A menu is a popup, which would draw over the dialog and offer
+        // choices it shuts out, so the dialog closes them.
+        self.display_menu_open = false;
+        self.create_menu = None;
         self.modal = Some(Dialog {
             message: message.to_string(),
             buttons,
             field,
+            text: String::new(),
             check,
+            shown: false,
         });
     }
 
@@ -65,38 +69,55 @@ impl EditorHook {
         self.modal.as_ref().is_some_and(|m| m.field)
     }
 
-    // Resolve a press while the dialog is open: a button runs its action and
-    // closes the dialog, and the checkbox flips; anywhere else -- the dialog's
-    // own chrome or the dimmed screen behind it -- is swallowed. Returns
-    // whether the dialog was open (the press is consumed either way).
-    pub(in crate::editor::hook) fn route_modal_click(
-        &mut self,
-        input: &FrameInput,
-        vp: [f32; 2],
-        world: &mut World,
-    ) -> bool {
-        let Some(state) = &mut self.modal else {
-            return false;
+    // Take in what was typed into the prompt's field, once the world's
+    // dialog shows it.
+    pub(in crate::editor::hook) fn observe_dialog(&mut self, world: &World) {
+        let Some(dialog) = self.modal.as_mut().filter(|d| d.field && d.shown) else {
+            return;
         };
-        let c = state.controls();
-        let (mx, my) = (input.mouse_x, input.mouse_y);
-        if modal::hit_check(mx, my, vp, c) {
-            if let Some(check) = &mut state.check {
-                check.toggle();
+        let typed = world
+            .resource::<BuiltUi>()
+            .and_then(|b| b.dialog.as_ref())
+            .and_then(|built| modal::typed(world, built));
+        if let Some(text) = typed
+            && dialog.text != text
+        {
+            dialog.text = text.to_string();
+        }
+    }
+
+    // Act on what the dialog reported; whether `event` was one.
+    pub(in crate::editor::hook) fn on_dialog_event(
+        &mut self,
+        world: &mut World,
+        event: &UiEvent,
+    ) -> bool {
+        match modal::event(event) {
+            Some(DialogEvent::Press(i)) => {
+                self.press_dialog_button(i, world);
+                true
             }
-            return true;
+            Some(DialogEvent::Check) => {
+                if let Some(check) = self.modal.as_mut().and_then(|d| d.check.as_mut()) {
+                    check.toggle();
+                }
+                true
+            }
+            None => false,
         }
-        if let Some(i) = modal::hit_button(mx, my, vp, state.buttons.len(), c) {
-            let action = state.buttons[i].action.clone();
-            let checked = state.check.as_ref().is_some_and(|k| k.on);
-            // Read the field before the dialog closes: reopening it (a rejected
-            // name) seeds a fresh one, so the typed text has to be taken here.
-            let typed = widget::field_text(world, modal::NAME_INPUT);
-            self.modal = None;
-            widget::seed_field(world, modal::NAME_INPUT, "");
-            self.run_modal_action(action, &typed, checked, world);
-        }
-        true
+    }
+
+    // Press the open dialog's button `i`: it closes, and its action runs.
+    pub(in crate::editor::hook) fn press_dialog_button(&mut self, i: usize, world: &mut World) {
+        let Some(dialog) = self.modal.take() else {
+            return;
+        };
+        let Some(button) = dialog.buttons.get(i) else {
+            self.modal = Some(dialog);
+            return;
+        };
+        let checked = dialog.check.as_ref().is_some_and(|k| k.on);
+        self.run_modal_action(button.action.clone(), &dialog.text, checked, world);
     }
 
     fn run_modal_action(
@@ -111,24 +132,10 @@ impl EditorHook {
             modal::Action::Worlds(confirm) => self.apply_worlds_confirm(confirm, world),
             modal::Action::NameWorld => self.name_untitled_world(typed),
             modal::Action::LeaveShaderSource { save, then } => {
-                self.answer_leave_shader_source(save, then, world);
+                self.answer_leave_shader_source(save, then);
             }
             modal::Action::DeleteShader(name) => self.delete_shader(&name, checked),
             modal::Action::DeleteSdfField(path) => self.delete_sdf_field(&path, checked),
-        }
-    }
-
-    // Lay out (or hide) the dialog this frame.
-    pub(in crate::editor::hook) fn drive_modal_draw(
-        &self,
-        world: &mut World,
-        vp: [f32; 2],
-        shown: bool,
-        mouse: [f32; 2],
-    ) {
-        match (&self.modal, shown) {
-            (Some(dialog), true) => modal::place(world, vp, dialog, mouse),
-            _ => modal::hide(world),
         }
     }
 }

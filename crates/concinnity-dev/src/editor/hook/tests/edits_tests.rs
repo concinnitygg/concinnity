@@ -6,10 +6,9 @@
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_engine::components::{FrameInput, KeyEvent, KeyMods, KeyPress, TextLabel};
-use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 
-use super::fixtures::{entry, hook, set_field, world_with_fields, world_with_input};
+use super::fixtures::{entry, hook, world_with_fields, world_with_input};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::entry_home::EntryHome;
 use crate::editor::hook::{EditorHook, FormTarget};
@@ -17,9 +16,7 @@ use crate::frame_hook::FrameHook;
 
 use crate::editor::hud::HudAction;
 
-use crate::editor::panels::form_panel::{self, FormAction};
-
-use crate::editor::panels::template_panel::TemplateAction;
+use crate::editor::panels::form_panel::FormAction;
 
 use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::panels::registry::PanelKey;
@@ -31,14 +28,14 @@ use crate::test_support::isolate_state_dir;
 #[test]
 fn entry_changes_request_a_preview_rebuild() {
     let mut h = hook(Vec::new());
-    h.apply_top(HudAction::ToggleView, &mut World::new());
+    h.apply_top(HudAction::ToggleView);
     assert!(
         !h.rebuild_preview && !h.dirty,
         "a view toggle is not an entry change"
     );
     // Applying a template layers assets: preview rebuild requested + dirty.
     h.open_template_detail(0);
-    h.apply_template_detail(TemplateAction::Apply);
+    h.apply_open_template();
     assert!(
         h.rebuild_preview && h.dirty,
         "applying a template updates the live preview and marks unsaved"
@@ -130,10 +127,10 @@ fn write_jsonl_persists_entries_atomically() {
         "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path_str.clone();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     h.form.selected_type = Some("PointLight".to_string());
-    set_field(&mut world, form_panel::NAME_INPUT, "lamp");
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.form.name = "lamp".to_string();
+    h.apply_form(FormAction::Confirm, &world);
     h.write_files().unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
@@ -181,7 +178,6 @@ fn a_broken_world_reports_its_error_in_the_status_line() {
 // clears dirty when that list matches the on-disk state), redo replays it.
 #[test]
 fn undo_reverts_a_committed_edit_and_redo_replays_it() {
-    let mut world = World::new();
     let mut h = hook(vec![entry("a", "Sprite")]);
     assert!(!h.hud_state().undo && !h.hud_state().redo);
 
@@ -189,7 +185,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
     h.mark_changed();
     assert!(h.dirty && h.hud_state().undo);
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(*h.entries, [entry("a", "Sprite")]);
     assert!(!h.dirty, "back at the on-disk list: Save chip clears");
     assert!(
@@ -198,7 +194,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
     );
     assert!(h.hud_state().redo);
 
-    h.redo(&mut world);
+    h.redo();
     assert_eq!(*h.entries, [entry("a", "Sprite"), entry("b", "Sprite")]);
     assert!(h.dirty, "the replayed edit is unsaved again");
 }
@@ -206,17 +202,16 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
 // Editing from an undone state forks the timeline: the redo branch is gone.
 #[test]
 fn an_edit_after_undo_drops_the_redo_branch() {
-    let mut world = World::new();
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
-    h.undo(&mut world);
+    h.undo();
     assert!(h.hud_state().redo);
 
     h.entries.push(entry("c", "Sprite"));
     h.mark_changed();
     assert!(!h.hud_state().redo, "the new edit invalidates redo");
-    h.undo(&mut world);
+    h.undo();
     assert!(h.entries.is_empty());
 }
 
@@ -233,7 +228,6 @@ fn a_no_change_mark_records_no_undo_step() {
 // they can never point at a removed or shifted row.
 #[test]
 fn undo_drops_entry_indexed_ui_state() {
-    let mut world = World::new();
     let mut h = hook(vec![entry("a", "Sprite")]);
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -242,7 +236,7 @@ fn undo_drops_entry_indexed_ui_state() {
     h.form.target = target;
     h.assets.row_menu = Some(h.handle_for("b"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         h.form.target,
         FormTarget::New,
@@ -298,8 +292,7 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
 fn save_writes_the_world_file_and_no_build_output() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
-    let build_root = dir.path().join(".concinnity");
-    crate::project::open(StateTree::at(dir.path()).with_build(&build_root));
+    crate::project::open(StateTree::at(dir.path()));
 
     let world_path = dir.path().join("world.jsonl");
     let entries = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}})];
@@ -318,8 +311,8 @@ fn save_writes_the_world_file_and_no_build_output() {
     assert!(!h.dirty, "a written save clears the unsaved chip");
     assert_eq!(h.saved, h.entries, "and re-baselines dirty tracking");
     assert!(
-        !build_root.exists(),
-        "no blobs, no lock, no build root at all"
+        !dir.path().join("data").exists() && !StateTree::at(dir.path()).cook_lock_path().exists(),
+        "no blobs and no lock"
     );
 
     isolate_state_dir();
@@ -348,7 +341,6 @@ fn a_failed_save_leaves_the_world_dirty() {
 // redoing back to the saved list cleans the chip again.
 #[test]
 fn dirty_tracks_the_saved_list_across_history_jumps() {
-    let mut world = World::new();
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -356,15 +348,15 @@ fn dirty_tracks_the_saved_list_across_history_jumps() {
     h.dirty = false;
     h.saved = h.entries.clone();
 
-    h.undo(&mut world);
+    h.undo();
     assert!(h.dirty, "behind the saved list is an unsaved state");
-    h.redo(&mut world);
+    h.redo();
     assert!(!h.dirty, "redo back to the saved list clears the chip");
 }
 
-// A world whose middle line includes `lights.jsonl` beside it, opened the way
-// the editor opens any world: the included entries sit in place of the line
-// that brings them in, after it.
+// A world whose middle line includes `lights.jsonl` from the tree's root,
+// opened the way the editor opens any world: the included entries sit in place
+// of the line that brings them in, after it.
 fn hook_with_an_include(tree: &concinnity_testing::TempTree) -> EditorHook {
     tree.write(
         "lights.jsonl",
@@ -374,8 +366,11 @@ fn hook_with_an_include(tree: &concinnity_testing::TempTree) -> EditorHook {
         "world.jsonl",
         "[\"PointLight\"]\n[\"Include\",{\"path\":\"lights.jsonl\"}]\n[\"Camera3D\",{\"$id\":\"mine\"}]\n",
     );
-    let entries = crate::editor::worlds::files::read_entries(&world).expect("the world reads");
-    EditorHook::new(world.to_str().unwrap().to_string(), entries)
+    let entries =
+        crate::editor::worlds::files::read_entries(&world, tree.path()).expect("the world reads");
+    let mut hook = EditorHook::new(world.to_str().unwrap().to_string(), entries);
+    hook.content_root = tree.path().to_path_buf();
+    hook
 }
 
 // Labels count the included entries where they land, as the build does.
@@ -477,7 +472,8 @@ fn an_entry_added_to_a_new_file_saves_into_it_and_reads_back() {
         world.ends_with("[\"Include\",{\"path\":\"assets/ground/a.jsonl\"}]\n"),
         "{world}"
     );
-    let reread = crate::editor::worlds::files::read_entries(&tree.join("world.jsonl")).unwrap();
+    let reread =
+        crate::editor::worlds::files::read_entries(&tree.join("world.jsonl"), tree.path()).unwrap();
     assert_eq!(
         reread, h.entries,
         "the files read back as the session held them"
@@ -490,20 +486,19 @@ fn an_entry_added_to_a_new_file_saves_into_it_and_reads_back() {
 fn undo_steps_back_across_files() {
     let tree = concinnity_testing::TempTree::new();
     let mut h = hook_with_an_include(&tree);
-    let mut world = World::new();
     let saved = h.entries.clone();
     h.entries[2]["args"]["intensity"] = serde_json::json!(5.0);
     h.mark_changed();
     h.entries[4]["args"]["fov_y_degrees"] = serde_json::json!(60.0);
     h.mark_changed();
 
-    h.undo(&mut world);
+    h.undo();
     assert!(h.entries[4]["args"].get("fov_y_degrees").is_none());
     assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries, saved);
     assert!(!h.dirty, "back at what both files hold");
-    h.redo(&mut world);
+    h.redo();
     assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
     assert!(h.dirty);
 }
@@ -541,25 +536,57 @@ fn a_duplicate_stays_in_its_originals_file() {
     assert_eq!(h.entries.included_from(4), h.entries.included_from(2));
 }
 
+// A duplicate of an entry from a file included twice lands in the world file,
+// with its paths rebased from the library it came from onto the world's root.
+#[test]
+fn a_duplicate_moved_to_the_world_file_keeps_naming_its_files() {
+    let tree = concinnity_testing::TempTree::new();
+    std::fs::create_dir_all(
+        tree.path()
+            .join("lib")
+            .join(concinnity_host::store::source::LIBRARY_MARKER),
+    )
+    .unwrap();
+    tree.write(
+        "lib/kit.jsonl",
+        "[\"Texture\",{\"$id\":\"bark\",\"source\":\"tex/bark.png\"}]\n",
+    );
+    let world = tree.write(
+        "world.jsonl",
+        "[\"Include\",{\"path\":\"lib/kit.jsonl\"}]\n[\"Include\",{\"path\":\"lib/kit.jsonl\"}]\n",
+    );
+    let entries = crate::editor::worlds::files::read_entries(&world, tree.path()).unwrap();
+    let mut h = EditorHook::new(world.to_str().unwrap().to_string(), entries);
+    h.content_root = tree.path().to_path_buf();
+    let bark = h.entries.key_at(1).unwrap();
+    assert!(
+        h.entries.is_read_only(1),
+        "a file included twice is read-only"
+    );
+    assert_eq!(h.duplicate(vec![AssetHandle::Entry(bark)]), 1);
+    let copy = h.entries.len() - 1;
+    assert_eq!(
+        h.entries.included_from(copy),
+        None,
+        "the copy is the world's own"
+    );
+    assert_eq!(h.entries[copy]["args"]["source"], "lib/tex/bark.png");
+}
+
 // The form on an included entry names the file it lives in.
 #[test]
 fn the_form_title_names_an_included_entrys_file() {
     let tree = concinnity_testing::TempTree::new();
     let mut h = hook_with_an_include(&tree);
-    let mut world = world_with_fields();
     let lamp = h.entries.key_at(2).unwrap();
-    h.open_form(
-        &mut world,
-        "PointLight".to_string(),
-        FormTarget::Entry(lamp),
-    );
-    let title = h.panel_data(&world).form_title;
+    h.open_form("PointLight".to_string(), FormTarget::Entry(lamp));
+    let title = h.form_data().title;
     assert!(title.starts_with("Edit PointLight ("), "{title}");
     assert!(title.ends_with("lights.jsonl)"), "{title}");
 
     let mine = h.entries.key_at(4).unwrap();
-    h.open_form(&mut world, "Camera3D".to_string(), FormTarget::Entry(mine));
-    assert_eq!(h.panel_data(&world).form_title, "Edit Camera3D");
+    h.open_form("Camera3D".to_string(), FormTarget::Entry(mine));
+    assert_eq!(h.form_data().title, "Edit Camera3D");
 }
 
 // The preview compiles the included entries from the list, without reading the

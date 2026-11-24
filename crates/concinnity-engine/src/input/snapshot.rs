@@ -101,13 +101,8 @@ impl InputPacket {
     }
 }
 
-// Scroll units emitted per physical wheel notch on backends whose wheel events
-// arrive as discrete notches (DirectX WM_MOUSEWHEEL, GLFW Scroll). macOS reports
-// precise (often large) scroll deltas directly, so Metal feeds scrollingDeltaY
-// raw and does not use this. The shared UI multiplies scroll_delta by its own
-// WHEEL_SCROLL_SPEED (see ui.rs), so this is scroll-delta units per notch.
-// Consumed by DirectX (WM_MOUSEWHEEL) and Vulkan (GLFW Scroll); dead on a Metal
-// build, which feeds scrollingDeltaY raw.
+// Scroll units per wheel notch for DirectX and Vulkan, whose wheels report
+// notches; macOS reports precise deltas directly.
 pub(crate) const WHEEL_NOTCH_SCROLL_UNITS: f32 = 20.0;
 
 /// Convert a signed wheel rotation in notches (positive = rotated away from the

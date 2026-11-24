@@ -1,15 +1,6 @@
-// The linear algebra a joint row is solved through, with no joint in sight.
-//
-// Every joint kind reduces to the same two effective-mass blocks: one for a
-// point held between two bodies, one for their relative rotation. A row is
-// then that block read along one direction, two of them, or all three, which
-// is why the kinds share this module rather than each carrying their own
-// arithmetic. Splitting it out is also what makes the blocks testable against
-// hand-worked answers instead of only through a swinging pendulum.
-//
-// The two scalar solves at the bottom mirror the contact solver's: an
-// inequality row pushes softly once it is passed and speculatively while it is
-// being approached, and a motor row is an equality row with a ceiling.
+// The linear algebra joint rows solve through: the point and rotation
+// effective-mass blocks, read along one, two or three directions, plus the
+// inequality and motor scalar solves mirroring the contact solver's.
 
 use crate::simulation::physics::sim::config::Softness;
 use crate::simulation::physics::sim::math::{Mat3, Vec3};

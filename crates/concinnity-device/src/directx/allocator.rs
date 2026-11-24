@@ -194,12 +194,8 @@ struct Reservation {
     recycled: bool,
 }
 
-// A pooled range's claim on its block. Returns the range when the last holder
-// drops, which is what lets a pooled resource be replaced by plain assignment.
-// Shared, because D3D12 code hands the same resource to several owners (a ring
-// slot plus the live field that reads it, a deduplicated morph buffer shared by
-// every draw that sources it); a cloned handle therefore keeps the range alive
-// rather than outliving it.
+// A pooled range's claim on its block, returning the range when the last
+// holder drops. Shared, since one resource can have several owners.
 struct Lease {
     owner: Weak<RefCell<Inner>>,
     key: PoolKey,

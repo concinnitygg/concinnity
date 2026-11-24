@@ -113,13 +113,8 @@ mod tests {
         );
     }
 
-    // The lobe widens with roughness, so the transform's scale must grow along the
-    // head-on roughness axis. This is the strongest single check that the fit
-    // converged: a table that fell back to its identity seed would be flat here.
-    //
-    // The scale lives in entry 3, not entry 0. At normal incidence the two
-    // in-plane axes are equal by isotropy, and entry 0 is their ratio, so it is
-    // legitimately 1.0 at every roughness.
+    // The fit's scale (entry 3) grows with roughness head-on; an identity
+    // fallback would be flat. Entry 0 stays 1.0 by isotropy.
     #[test]
     fn the_transform_scale_grows_with_roughness_head_on() {
         let m = matrix_texels();

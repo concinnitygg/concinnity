@@ -62,7 +62,7 @@ fn run(pace: Pace) {
             &format!("cook/prepare_world/{label}"),
             n as u64,
             || {
-                let loaded = prepare_world(&content, None).expect("bench world validates");
+                let loaded = prepare_world(&content).expect("bench world validates");
                 loaded.assets.len()
             },
         );

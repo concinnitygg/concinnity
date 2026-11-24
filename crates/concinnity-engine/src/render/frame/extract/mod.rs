@@ -326,13 +326,9 @@ impl FrameExtractor {
         });
     }
 
-    // Updated model matrices for every entity whose transform changed since
-    // last frame, queued for its draw slots, plus what follows the same
-    // transforms: grass benders, the floating bodies' stirs, the particle
-    // bursts asked for and the editor's pick index. The cached
-    // propagation skips the resolve when no Transform / Parent changed; the
-    // push gate drops slots whose matrix is unchanged, so a static scene sends
-    // nothing.
+    // Queue model matrices for every entity whose transform changed, plus
+    // grass benders, float stirs, particle bursts and the pick index. A static
+    // scene sends nothing.
     fn push_models(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
         propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
         for (_entity, global, handle) in ctx.join2::<GlobalTransform, RenderHandle>() {
@@ -589,11 +585,8 @@ impl FrameExtractor {
         }
     }
 
-    // Refresh the editor's viewport-pick index from the freshly propagated
-    // transforms, refilling the published index in place. Editor-session
-    // hidden objects get the degenerate model matrix (nothing draws) and stay
-    // out of the index; re-derived every frame, so un-hiding shows up as a
-    // changed matrix and is re-sent.
+    // Refresh the editor's pick index in place from the propagated
+    // transforms. Hidden objects get the degenerate matrix and stay out.
     fn refresh_pick_index(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
         let mut entries = ctx
             .resources

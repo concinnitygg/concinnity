@@ -1,10 +1,6 @@
-// Per-frame render extraction: the pass that fills the
-// RenderSnapshot from world state before submission. The pairs that matter
-// are static-vs-moved: a static scene must cost only the change-gated join
-// walk and allocate nothing, and a scene where everything moved pays the
-// snapshot copy the boundary introduces. The pose row measures the one real
-// copy extraction added over the old borrow-through path (joint matrices
-// into the snapshot's span buffer).
+// Render extraction benchmarks: a static scene must cost only the gated join
+// walk and allocate nothing; a fully moved one pays the snapshot copy. The pose
+// row measures copying joint matrices into the snapshot.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 render_extraction

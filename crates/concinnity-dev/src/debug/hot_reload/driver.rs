@@ -1,4 +1,4 @@
-//! Per-frame drive of the asset / shader / world.jsonl hot-reload passes,
+//! Per-frame drive of the asset / shader / .jsonl hot-reload passes,
 //! shared by every dev session. A plain `cn edit` runs the driver as its own
 //! per-frame hook; `cn run --debug-port` (and `cn edit --debug-port`) drive it from
 //! inside `DebugServer::tick`, which layers the debug-server-only concerns
@@ -32,8 +32,8 @@ pub(crate) struct HotReloadDriver {
     // reload passes report apply results through it. `None` under a bare
     // `cn run -f`, which has no toast surface.
     notifier: Option<crate::editor::notify::Notifier>,
-    // The session's world.jsonl path, read at every arm so a world switch is
-    // watched from the next rebuild on. `None` watches no world file.
+    // The session's .jsonl path, read at every arm so a world switch is
+    // watched from the next rebuild on. `None` watches no file.
     world_path: Option<WorldPathHandle>,
     // Where each Shader's and SdfVolume's latest reload outcome is published
     // for an editor session's panels. `None` outside an editor session.
@@ -58,7 +58,7 @@ impl HotReloadDriver {
         self
     }
 
-    // Watch the world.jsonl the handle names, as of each arm.
+    // Watch the .jsonl file the handle names, as of each arm.
     pub(crate) fn with_world_path(mut self, handle: WorldPathHandle) -> Self {
         self.world_path = Some(handle);
         self

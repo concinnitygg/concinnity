@@ -1,8 +1,5 @@
-// What is left of a move once it has met something. All of it is arithmetic on
-// two vectors, with no world to ask, which is why it sits apart from the
-// resolve loop that drives it: the awkward cases -- a slope too steep to climb,
-// two walls meeting at a crease -- are the ones worth testing directly rather
-// than through a scene built to provoke them.
+// What remains of a move after it meets something, as pure vector arithmetic
+// so slopes and creases can be tested directly.
 
 use crate::simulation::physics::sim::math::{Vec3, vec3};
 

@@ -20,11 +20,8 @@ use crate::metal::post::post_device::{PostPipeline, PostTarget};
 // target handles.
 pub(crate) type MtlSsaoPass = SsaoPass<PostPipeline, PostTarget>;
 
-// All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
-// the shared pass, and the 1×1 white fallback. `settings` and `pass` are `Some`
-// only when SSAO is enabled; `white` is always present so
-// `MtlContext::ao_output_texture` can return a constant-1.0 sample when SSAO is
-// off. The blurred occlusion the main pass samples lives in the transient pool.
+// SSAO (GTAO). `settings` and `pass` are `Some` only when enabled; `white` is
+// the always-present fallback for `ao_output_texture`.
 pub(crate) struct SsaoState {
     pub settings: Option<SsaoSettings>,
     pub pass: Option<MtlSsaoPass>,

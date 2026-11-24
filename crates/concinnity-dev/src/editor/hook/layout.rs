@@ -1,24 +1,17 @@
-//! `EditorHook`: the floating panels' focus stack, published draw layers, and
-//! each panel's on-screen origin -- all derived from the panel registry.
+//! `EditorHook`: the floating panels' focus stack, which sets the ranks the
+//! engine stacks them by, the resize cursor over their edges, and each panel's
+//! on-screen origin -- all derived from the panel registry.
 
-use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{Layout, ResizeEdges};
 use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::protocol::{CursorShape, HudLayers};
+use concinnity_engine::protocol::CursorShape;
 
-use super::{EditorHook, TOP_BAR_LAYER};
+use super::EditorHook;
+use crate::editor::hud;
 use crate::editor::panels::asset_list::{self, ListRow};
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::row_list::Row;
-use crate::editor::viewport::resize;
-use crate::editor::widget::{self, point_in};
-use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, worlds};
-
-// Layers each panel's rank claims, so an overlay can draw above its own panel
-// without reaching the one in front of it.
-const PANEL_LAYER_SPAN: i32 = 10;
-// Where an open overlay sits inside its panel's band.
-const OVERLAY_LAYER: i32 = 5;
+use crate::editor::ui::BuiltUi;
+use crate::editor::ui::rect::{clamp_origin, point_in};
 
 impl EditorHook {
     // Bring a panel to the front of the focus stack (drawn on top, first to be
@@ -37,68 +30,6 @@ impl EditorHook {
         self.open[key] = open;
     }
 
-    // The per-frame HUD draw layers: each panel at its focus-stack rank (higher
-    // = more front), the top bar pinned above them all. A panel's rank is a band
-    // rather than a single layer so its overlays can sit above it.
-    pub(super) fn compute_layers(&self) -> std::collections::BTreeMap<AssetId, i32> {
-        let mut layers = std::collections::BTreeMap::new();
-        for (rank, &key) in self.panel_order.iter().enumerate() {
-            // Ranks are spaced so each panel owns a band of layers: its own
-            // elements at the bottom of the band and any open overlay above
-            // them, while the panel in front still clears the whole band.
-            let layer = (i32::saturating_from(rank) + 1) * PANEL_LAYER_SPAN;
-            for id in registry::panel(key).ids().all() {
-                layers.insert(id, layer);
-            }
-            for id in registry::panel(key).overlay_ids(self) {
-                layers.insert(id, layer + OVERLAY_LAYER);
-            }
-        }
-        // The start screen's shot fade takes the bottom of the reserved band:
-        // over the previewed world (its own screens included), under the
-        // sidebar listing, which has to stay readable across a transition. The
-        // loading cover stands one layer above it, over the same area.
-        if self.cinematic.is_some() {
-            layers.insert(worlds::cinematic::FADE, 0);
-        }
-        if self.loading_preview() {
-            for id in worlds::loading::ids().all() {
-                layers.insert(id, 1);
-            }
-        }
-        for id in hud::ids().all() {
-            layers.insert(id, TOP_BAR_LAYER);
-        }
-        // The create and Display menus are modal while open, so they clear
-        // everything -- panels and top bar included (their ids are hidden
-        // otherwise).
-        for id in create_menu::ids().all().chain(view_menu::ids().all()) {
-            layers.insert(id, TOP_BAR_LAYER + PANEL_LAYER_SPAN);
-        }
-        // The toast stack floats above even the modal menus. Its ids join the
-        // map only while a toast is live, so an idle stack adds nothing.
-        if !self.notifier.is_empty() {
-            for id in toast_overlay::ids().all() {
-                layers.insert(id, TOP_BAR_LAYER + 2 * PANEL_LAYER_SPAN);
-            }
-        }
-        // The confirmation dialog is screen-modal while open: routing swallows
-        // every press for it, so it draws above everything -- toasts included.
-        if self.modal.is_some() {
-            for id in modal::ids().all() {
-                layers.insert(id, TOP_BAR_LAYER + 3 * PANEL_LAYER_SPAN);
-            }
-        }
-        layers
-    }
-
-    // Publish the draw layers for the renderer's overlay sort, so a dragged /
-    // clicked panel occludes the rest instead of its text bleeding through their
-    // backgrounds.
-    pub(super) fn publish_layers(&self, world: &mut World) {
-        world.insert_resource(HudLayers(self.compute_layers()));
-    }
-
     // Whether the add / edit form panel is open.
     pub(super) fn form_open(&self) -> bool {
         self.form.selected_type.is_some()
@@ -109,14 +40,12 @@ impl EditorHook {
     // than torn down: its state stands, and it comes back the moment a world
     // is open.
     pub(super) fn panel_shown(&self, key: PanelKey) -> bool {
-        registry::panel(key).is_open(self) && (!self.start_mode || key == PanelKey::Worlds)
+        registry::is_open(key, self) && (!self.start_mode || key == PanelKey::Worlds)
     }
 
-    // A panel's top-left for this frame: the dragged position (or its default
-    // anchor), clamped at its current footprint so the whole panel stays on
-    // screen even after a window resize. The start screen is the one anchor the
-    // registry cannot express -- it docks to the window's left edge, never
-    // drags, and has no top bar under it to clear -- so it is resolved here.
+    // A panel's top-left this frame: its dragged position or default anchor,
+    // clamped to stay on screen. The start screen docks to the left edge, an
+    // anchor the registry cannot express.
     pub(super) fn origin(&self, key: PanelKey, vp: [f32; 2]) -> [f32; 2] {
         let (anchor, top) = match (self.start_mode, key) {
             (true, PanelKey::Worlds) => (self.worlds_layout().default_origin(), 0.0),
@@ -125,7 +54,7 @@ impl EditorHook {
                 hud::BAR_H,
             ),
         };
-        widget::clamp_origin(anchor, self.effective_size(key), vp, top)
+        clamp_origin(anchor, self.effective_size(key), vp, top)
     }
 
     // A panel's content-derived default size, which is also its minimum: the user
@@ -134,74 +63,46 @@ impl EditorHook {
         registry::panel(key).size(self)
     }
 
-    // A panel's size this frame: the user's override clamped into
-    // `[default, max]`, so content that outgrows the override still wins and the
-    // panel never exceeds its content pool (a non-resizable panel, never
-    // overridden, is always its default).
+    // A panel's size this frame: the user's override, never below the default,
+    // so content that outgrows the override still wins (a panel never sized is
+    // always its default).
     pub(super) fn effective_size(&self, key: PanelKey) -> [f32; 2] {
         let d = self.default_size(key);
         match self.sizes[key] {
-            Some(o) => {
-                let max = registry::panel(key).max_size(self);
-                [
-                    o[0].clamp(d[0], max[0].max(d[0])),
-                    o[1].clamp(d[1], max[1].max(d[1])),
-                ]
-            }
+            Some(o) => [o[0].max(d[0]), o[1].max(d[1])],
             None => d,
         }
     }
 
-    // The edges the pointer grabs on resizable panel `key` (at origin `o`, size
-    // `s`), with any axis the panel has locked (its max equals its default,
-    // e.g. a width-only panel) filtered out so it offers no grab there. `None`
-    // when no live edge is under the pointer.
-    pub(super) fn resize_edges(
-        &self,
-        key: PanelKey,
-        o: [f32; 2],
-        s: [f32; 2],
-        mx: f32,
-        my: f32,
-    ) -> Option<resize::Edges> {
-        let e = resize::hit_test(o, s, resize::BORDER, mx, my)?;
-        let d = self.default_size(key);
-        let max = registry::panel(key).max_size(self);
-        let e = resize::Edges {
-            left: e.left && max[0] > d[0],
-            right: e.right && max[0] > d[0],
-            top: e.top && max[1] > d[1],
-            bottom: e.bottom && max[1] > d[1],
-        };
-        e.any().then_some(e)
-    }
-
-    // The resize cursor for the pointer at `mouse`: the shape of the frontmost
-    // resizable open panel whose edge / corner it grabs, or the arrow when it is
-    // over no such edge. Front-to-back, so a panel's body blocks the panels
-    // behind it; the close button keeps priority over a top-corner grab.
-    pub(super) fn hover_cursor(&self, vp: [f32; 2], mouse: [f32; 2]) -> CursorShape {
+    // The resize cursor for the pointer at `mouse`: the edges a panel is being
+    // sized by while a drag holds them, else those of the frontmost shown
+    // panel's edge under the pointer, else the arrow. Front-to-back, so a
+    // panel's body blocks the panels behind it.
+    pub(super) fn hover_cursor(&self, world: &World, mouse: [f32; 2]) -> CursorShape {
         // The open confirmation dialog swallows the pointer, so no panel edge
         // offers a resize grab under it.
         if self.modal.is_some() {
             return CursorShape::Default;
         }
-        let (mx, my) = (mouse[0], mouse[1]);
-        for &key in self.panel_order.iter().rev() {
-            let p = registry::panel(key);
-            if !p.resizable() || !self.panel_shown(key) {
-                continue;
+        let Some(built) = world.resource::<BuiltUi>() else {
+            return CursorShape::Default;
+        };
+        let roots = || {
+            self.panel_order.iter().rev().filter_map(|&key| {
+                built
+                    .panel(key)
+                    .and_then(|p| world.get_by_id::<Layout>(p.root))
+                    .filter(|l| l.visible)
+            })
+        };
+        if let Some(edges) = roots().find_map(|l| l.resizing) {
+            return resize_cursor(edges);
+        }
+        for layout in roots() {
+            if let Some(edges) = layout.resize_grip(mouse[0], mouse[1]) {
+                return resize_cursor(edges);
             }
-            let o = self.origin(key, vp);
-            let s = self.effective_size(key);
-            let title = [o[0], o[1], s[0], widget::TITLE_H];
-            if point_in(mx, my, widget::close_rect(title)) {
-                return CursorShape::Default;
-            }
-            if let Some(edges) = self.resize_edges(key, o, s, mx, my) {
-                return resize::cursor_shape(edges);
-            }
-            if point_in(mx, my, [o[0], o[1], s[0], s[1]]) {
+            if layout.rect.is_some_and(|r| point_in(mouse[0], mouse[1], r)) {
                 return CursorShape::Default;
             }
         }
@@ -222,19 +123,19 @@ impl EditorHook {
         asset_list::grouped_rows(&Self::template_entries(i), None)
     }
 
-    // The View panel's toggle rows: one checkbox per `registry::VIEW_ROWS`
-    // entry, reflecting its panel's shown state.
-    pub(super) fn view_rows(&self) -> Vec<Row> {
-        registry::VIEW_ROWS
-            .iter()
-            .map(|&(key, caption)| Row::checkbox(caption, registry::panel(key).is_open(self)))
-            .collect()
-    }
-
     // Flip the panel behind View-panel toggle row `i`.
     pub(super) fn toggle_view_row(&mut self, i: usize, world: &mut World) {
-        if let Some(p) = registry::view_toggles().nth(i) {
-            p.toggle(self, world);
+        if let Some(key) = registry::view_toggles().nth(i) {
+            registry::toggle(key, self, world);
         }
+    }
+}
+
+// The cursor for sizing a panel by `edges`.
+fn resize_cursor(edges: ResizeEdges) -> CursorShape {
+    match (edges.right, edges.bottom) {
+        (true, true) => CursorShape::ResizeNWSE,
+        (true, false) => CursorShape::ResizeEW,
+        _ => CursorShape::ResizeNS,
     }
 }

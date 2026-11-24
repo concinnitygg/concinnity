@@ -72,7 +72,7 @@ light multiplies, and `emission`.
 
 - `center`: An array of 3 floats. World-space center of the bounding box. Defaults to `[0.0, 0.0, 0.0]`.
 - `extent`: An array of 3 floats. XYZ half-widths of the bounding box. The raymarch is clipped to the box, so the SDF only has to be well-defined inside this region. Defaults to `[1.0, 1.0, 1.0]`.
-- `fragment_shader`: A string. Distance-field source path (e.g. `"shaders/chrome_blob.hlsl"`), resolved relative to the project's `assets/` at build time. The file defines `map` and `shade`, or `sampleVolume` for a volumetric volume. Defaults to `""`.
+- `fragment_shader`: A string. Distance-field source path (e.g. `"shaders/chrome_blob.hlsl"`), relative to the root of the file holding the line. The file defines `map` and `shade`, or `sampleVolume` for a volumetric volume. Defaults to `""`.
 - `max_gradient`: A float. Worst-case gradient of the SDF, used to size the cone-march step. `1.0` is correct for any well-formed SDF; higher values shorten the step but stay safe. Must be > 0. Defaults to `1.0`.
 - `max_steps`: An integer. Maximum cone-march steps per pixel. Clamped to `[8, 256]`. Defaults to `64`.
 - `max_distance`: A float. Maximum march distance in meters. Must be ≥ 0.1. Defaults to `30.0`.

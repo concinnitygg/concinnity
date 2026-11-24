@@ -1,17 +1,7 @@
-// Runtime residency of the material-referenced world shader pipelines.
-//
-// Init builds a pipeline for every world Shader whose payload it decoded and
-// leaves a `None` in `world_pipelines` for each one it deferred (a Shader owned
-// by a scene other than the start scene). The streaming pump calls in here as
-// those scenes pin and unpin, handing over a pipeline its worker already built.
-//
-// The bucket lists of the GPU-culled command buffer are issued here too: the
-// cull packed every kept record into exactly one stream's list, so each list
-// is one `ExecuteIndirect` under that bucket's pipeline. Mirrors
-// `metal/world_shaders.rs` + the bucket loop in `metal/draw/main.rs`.
-//
-// Unlike Metal there is no on-disk GPU-binary cache behind the build: the D3D12
-// equivalent (an `ID3D12PipelineLibrary`) is not implemented.
+// Runtime residency of the material-referenced world shader pipelines: init
+// leaves `None` for Shaders owned by scenes other than the start scene, and the
+// streaming pump installs them as their scenes pin. Also issues each bucket's
+// list as one `ExecuteIndirect`.
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::WorldShaders;
@@ -182,11 +172,8 @@ impl DxContext {
         }
     }
 
-    // Shader `shader`'s grass variants built from its fresh programs, when it
-    // has them: every one when `install`ing, else those already resident.
-    // Built here rather than on a worker: only a pin or a hot reload of the
-    // Shader reaches them. All are built before any is installed, so a
-    // failure keeps the live family whole.
+    // The grass variants of `shader` built from its fresh programs, all before any
+    // is installed so a failure keeps the live family whole.
     fn build_family(
         &self,
         shader: u32,
@@ -250,12 +237,8 @@ impl DxContext {
         })
     }
 
-    // Issue the bucket 1.. regions of `indirect`, each under its own material
-    // shader's pipeline. Bucket 0's region is issued by the caller (it runs under
-    // the pipeline the pass already bound), so this covers only the
-    // material-referenced shaders and grass variants. Returns the number of
-    // `ExecuteIndirect` calls issued, and leaves the last bucket's pipeline
-    // bound.
+    // Issue the bucket 1.. regions of `indirect` under their own pipelines; bucket
+    // 0 is the caller's. Returns the calls issued.
     pub(in crate::directx) fn execute_bucket_regions(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -263,9 +246,10 @@ impl DxContext {
         indirect: &ID3D12Resource,
         frame_idx: usize,
     ) -> u32 {
-        self.for_each_resident_bucket(frame_idx, |bucket| {
+        let mut issued = 0;
+        for bucket in self.drawn_buckets(frame_idx) {
             let Some(psos) = self.cull.world_pipelines.get(bucket) else {
-                return;
+                continue;
             };
             // Every bucket shares the bindless root signature, so the Wireframe
             // twin stands in for each one while that view mode is on.
@@ -274,16 +258,13 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(pso) };
             self.execute_main_stream(cmd, cull_sig, indirect, u32::saturating_from(bucket));
-        })
+            issued += 1;
+        }
+        issued
     }
 
-    // Issue the bucket 1.. regions of `indirect`, each under its shader's
-    // G-buffer pre-pass PSO, so a world Shader's vertex hook places its depth
-    // and motion as it places its shading. A non-resident bucket is skipped
-    // here as in the main pass, so the pre-pass never lays down depth and motion
-    // for geometry the color pass omits, and so is one whose pre-pass PSO
-    // failed to build. Returns the regions issued, and leaves the last
-    // bucket's PSO bound.
+    // Issue the bucket 1.. regions under each shader's pre-pass PSO, skipping the
+    // same non-resident buckets the color pass skips.
     pub(in crate::directx) fn execute_prepass_bucket_regions(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -305,19 +286,6 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(prepass) };
             self.execute_main_stream(cmd, prepass_sig, indirect, u32::saturating_from(bucket));
-            issued += 1;
-        }
-        issued
-    }
-
-    // Run `f` for every bucket past the default whose Shader is resident,
-    // returning how many ran. A bucket whose scene has not pinned yet has no
-    // pipeline: skip it until warmup builds one rather than drawing it with the
-    // wrong program.
-    fn for_each_resident_bucket(&self, frame_idx: usize, mut f: impl FnMut(usize)) -> u32 {
-        let mut issued = 0;
-        for bucket in self.drawn_buckets(frame_idx) {
-            f(bucket);
             issued += 1;
         }
         issued
@@ -386,11 +354,8 @@ impl WorldShaders for DxContext {
         }
     }
 
-    // Rebuild one world Shader's PSOs from hot-reloaded programs, or swap in
-    // `prepared` when they were built for this context's targets. Bucket 0 is
-    // the main pass's and the pre-pass's own pair; another bucket is rebuilt
-    // only while installed. Both halves are built before the old PSOs retire,
-    // so a failed build of either leaves the live ones bound.
+    // Rebuild one world Shader's PSOs from hot-reloaded programs, or install
+    // `prepared`. Both halves build before the old ones retire.
     fn update_world_shader(
         &mut self,
         bucket: u32,

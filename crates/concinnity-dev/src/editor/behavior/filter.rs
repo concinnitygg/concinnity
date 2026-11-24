@@ -3,11 +3,8 @@
 
 use super::edit::{self, Pick};
 
-// The options `query` keeps, best first, as indices into `picks`. An empty query
-// keeps every option in the vocabulary's own order. The ranking itself is the
-// shared `editor::filter`; this wrapper matches the CAPTION, not the raw verb:
-// the clear-to-unset entry draws as a word it does not carry, and matching what
-// is on screen is what the author expects.
+// The options `query` keeps, best first, matched against each caption as
+// drawn rather than the raw verb.
 pub(crate) fn matching(picks: &[Pick], query: &str) -> Vec<usize> {
     crate::editor::filter::ranked(
         picks

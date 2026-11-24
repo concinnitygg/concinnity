@@ -31,14 +31,9 @@ use crate::metal::init::{Features, InitGpu};
 use crate::metal::planar::PlanarReflectionSet;
 use crate::metal::{glass, raymarch, raytrace, water};
 
-// Projected-decal pass. The pipeline and unit cube are built only when the
-// world declares at least one decal; with none, all four resources stay `None`
-// and the pass is skipped by `draw_frame`. The first runtime
-// `RenderBackend::add_decal` for a world that started with no decals will
-// rebuild the same four resources on demand. Also returns the scene's slot
-// table: authored decals seed it in order, and a runtime add reuses whatever
-// `remove_decal` freed. Metal reserves no per-decal descriptors, so the table
-// is uncapped.
+// The projected-decal pass, built only with authored decals; a runtime
+// `add_decal` builds it on demand. Also returns the slot table, seeded by the
+// authored decals and uncapped on Metal.
 pub(in crate::metal::init) fn build_decals(
     gpu: &InitGpu<'_>,
     decals: Vec<DecalRecord>,
@@ -71,13 +66,8 @@ type DecalResources = (
     Retained<ProtocolObject<dyn MTLSamplerState>>,
 );
 
-// Build the projected-decal pipeline + the unit-cube vertex / index buffers
-// + the shared sampler. Called either at init when the world declared ≥1
-// decal, or lazily by `RenderBackend::add_decal` on the first
-// runtime add for a world that started with none. The unit cube spans
-// `[-0.5, 0.5]^3` -- the same local space the decal `inv_model` maps a
-// reconstructed world point into. 36 indices form 12 triangles wound CCW
-// outward.
+// The decal pipeline, unit cube (`[-0.5, 0.5]^3`, CCW outward) and sampler, at
+// init or on the first runtime `add_decal`.
 pub(in crate::metal) fn build_decal_resources_for_runtime(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -146,11 +136,8 @@ pub(in crate::metal::init) fn build_fog(
     })
 }
 
-// Transparent water surfaces. Built only when the world declared
-// ≥1 `WaterSurface`; the transparent-pass executor stays a no-op
-// otherwise. Per-surface tessellated grids upload once at init, each recording
-// the planar slot `PlanarReflectors::plan` gave it, beside the simulated oceans `ocean`
-// plans.
+// Water surfaces, built only with a `WaterSurface`: one tessellated grid per
+// surface with its planar slot, beside the simulated oceans.
 pub(in crate::metal::init) fn build_water(
     gpu: &InitGpu<'_>,
     water_surfaces: &[WaterBody],
@@ -174,12 +161,8 @@ pub(in crate::metal::init) fn build_water(
         (None, None, None, Vec::new())
     } else {
         let ps = water::build_water_pipeline(device, hot_reload)?;
-        // The ray-traced variants are built whenever the device can ray
-        // trace (regardless of whether RT is on at launch), so a live RT
-        // toggle can select them without a pipeline rebuild. The shader
-        // uses `metal_raytracing`, so it must not be compiled on a non-RT
-        // device. The textured variant additionally needs a bindless world
-        // at draw time; it is selected over the flat variant then.
+        // RT variants build on any RT-capable device so a live toggle needs no
+        // rebuild; the shader cannot compile without ray tracing.
         let (ps_rt, ps_rt_tex) = if raytrace::raytracing_supported(device) {
             (
                 Some(water::build_water_pipeline_rt(device, hot_reload)?),
@@ -211,7 +194,6 @@ pub(in crate::metal::init) fn build_water(
         surfaces,
         ocean,
         wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
-        wake_frame: None,
     })
 }
 
@@ -232,12 +214,8 @@ pub(in crate::metal::init) fn build_glass(
         (None, None, None, Vec::new())
     } else {
         let ps = glass::build_glass_pipeline(device, hot_reload)?;
-        // The ray-traced variants are built whenever the device can ray
-        // trace (regardless of whether RT is on at launch), so a live RT
-        // toggle can select them without a pipeline rebuild. The shader
-        // uses `metal_raytracing`, so it must not be compiled on a non-RT
-        // device. The textured variant additionally needs a bindless world
-        // at draw time; it is selected over the flat variant then.
+        // RT variants build on any RT-capable device so a live toggle needs no
+        // rebuild; the shader cannot compile without ray tracing.
         let (ps_rt, ps_rt_tex) = if raytrace::raytracing_supported(device) {
             (
                 Some(glass::build_glass_pipeline_rt(device, hot_reload)?),
@@ -255,11 +233,8 @@ pub(in crate::metal::init) fn build_glass(
         (Some(ps), ps_rt, ps_rt_tex, records)
     };
 
-    // Transparent glass MESH pipelines (Layer 2): built whenever the device can
-    // ray trace, INDEPENDENT of any `GlassPanel` -- the transparent material
-    // lives on imported meshes, not panels, and a live RT toggle then has them
-    // ready. `mesh_pipeline_rt.is_some()` gates the whole transparent-mesh
-    // reroute; `seethrough_mesh_indices` marks which `draw_objects` carry it.
+    // See-through glass mesh pipelines, built on any RT-capable device whether
+    // or not the world has panels.
     let (mesh_pipeline_rt, mesh_pipeline_rt_textured) = if raytrace::raytracing_supported(device) {
         (
             Some(glass::build_glass_mesh_pipeline_rt(device, hot_reload)?),
@@ -270,13 +245,8 @@ pub(in crate::metal::init) fn build_glass(
     } else {
         (None, None)
     };
-    // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
-    // arg, which implies `transparent`): see-through only looks right when the
-    // space behind the glass is modeled. A material that is `transparent` but
-    // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
-    // reflections) = tinted reflective glass that hides the interior. This list
-    // drives the producer + the opaque-pass skip (`mesh_glass_active`) + the
-    // RT-BLAS exclude together.
+    // See-through glass is opt-in per `Material::see_through`; this list drives
+    // the transparent producer, the opaque-pass skip and the BLAS exclusion.
     let seethrough_mesh_indices: Vec<usize> = draw_objects
         .iter()
         .enumerate()

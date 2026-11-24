@@ -1,8 +1,6 @@
-// Execution tracing: while an observer publishes a `TraceRequest` (the
-// `cn edit` Behavior panel), each simulated tick publishes which nodes ran,
-// the world variables, and the requested entity's locals as an
-// `ExecutionTrace` resource. Without a request the system does no recording
-// work, so a shipped runtime pays nothing.
+// Execution tracing: while a `TraceRequest` is published, each tick publishes
+// the nodes that ran, the world variables and the requested entity's locals as
+// an `ExecutionTrace`. Without a request nothing is recorded.
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;

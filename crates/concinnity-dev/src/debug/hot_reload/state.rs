@@ -116,8 +116,8 @@ pub(crate) struct AssetHotReloadState {
     // changes before pushing to the backend.
     pub skinned_meshes: SkinnedMeshSourceMap,
     // `ProceduralMesh` assets whose generator args can be re-applied from a
-    // live `world.jsonl`. No file watcher of their own: the trigger is the
-    // world.jsonl reload signal.
+    // live the `.jsonl` file. No file watcher of their own: the trigger is the
+    // .jsonl reload signal.
     pub procedural_meshes: ProceduralMeshSourceMap,
     // Every world `Shader`'s files, the compiles in flight, and the overrides
     // shared with the streaming pump. The asset watcher marks the Shaders a
@@ -127,10 +127,10 @@ pub(crate) struct AssetHotReloadState {
     // Every SdfVolume's field and the compiles in flight, marked by the same
     // watcher branch as the Shaders.
     pub sdf_fields: SdfReload,
-    // Path to the world.jsonl the renderer was initialized from, when
+    // Path to the .jsonl file the renderer was initialized from, when
     // known. Used both as a watch-dir source (its parent directory joins
     // the texture / model / HDRI / LUT dirs) and as the file the
-    // `world.jsonl` reload pass re-reads from disk. `None` when init came
+    // the `.jsonl` file reload pass re-reads from disk. `None` when init came
     // from a stream / blob and no on-disk path exists to watch.
     pub world_jsonl_path: Option<std::path::PathBuf>,
     // The driver's reload signals, raised by the `notify` watcher and the
@@ -217,7 +217,7 @@ impl std::fmt::Debug for AssetHotReloadState {
 
 impl AssetHotReloadState {
     // Build the state from the init-captured [`HotReloadSources`] bundle and
-    // the host's world.jsonl path, and (best-effort) spawn the `notify` watcher
+    // the host's .jsonl path, and (best-effort) spawn the `notify` watcher
     // over every unique parent directory of those paths, raising `signals`.
     // Watcher creation is best-effort: a missing path or notify error logs and
     // continues; the `reload-assets` debug tool call still raises the same
@@ -288,7 +288,7 @@ impl AssetHotReloadState {
 // ECS-side effects a single hot-reload pass produced that the caller must
 // apply to the `World` after dropping its `&mut GraphicsSystem` borrow:
 // skeleton-shape changes to splice into `SkeletonPose` components, and Props
-// a world.jsonl reload added that must enter the ECS so subsequent systems
+// a .jsonl file reload added that must enter the ECS so subsequent systems
 // see them. Returned by [`run_frame`] instead of applied in place because the
 // reload passes hold the backend + Prop-tracking borrow and have no `World`
 // access: the `FrameHook::tick` drive applies these once the
@@ -303,7 +303,7 @@ pub(crate) struct FrameHotReloadEffects {
     pub reload_reports: Vec<ReloadReport>,
 }
 
-// Run every asset / shader / world.jsonl reload pass for one frame and return
+// Run every asset / shader / .jsonl reload pass for one frame and return
 // the ECS side-effects. `state` is the debug-owned reload catalog +
 // in-flight handles; `backend` and `fog` are the world's parked backend and the
 // fog it last pushed (see `crate::debug::handoff::render_handoff`).
@@ -387,7 +387,7 @@ pub(crate) fn run_frame(
         }
     }
 
-    // world.jsonl reload poll: regenerate changed ProceduralMeshes first, then
+    // .jsonl reload poll: regenerate changed ProceduralMeshes first, then
     // re-apply VolumetricFog. Cheap when the flag is unset. (Prop diffing was
     // dropped with the positional render path; reworking it onto the per-entity
     // components is future work.)

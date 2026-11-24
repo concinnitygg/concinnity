@@ -1,35 +1,50 @@
-//! The Console panel's drive (`hook/edit/console.rs`): the log window's pinned
-//! tail and its scroll, the focus actions, the editing keys (submit and the
-//! /del ghost completion), the build command's worker handoff, and what the
-//! /add, /del, /snap and /dup commands do to the working entries. The command
-//! parsers themselves are tested beside them in `editor/panels/console.rs`.
-
-// A world holding the console's command-line field.
+//! The Console panel's drive (`hook/edit/console.rs`): the log's pinned tail,
+//! the command line's focus, the editing keys (submit and the /del ghost
+//! completion), the build command's worker handoff, and what the /add, /del,
+//! /snap and /dup commands do to the working entries. The command parsers
+//! themselves are tested beside them in `editor/panels/console.rs`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_engine::components::{
-    FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput, TextLabel,
+    FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, List, TextField,
 };
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
-use crate::editor::hook::tests::fixtures::{
-    entry, hook, select, world_with_fields, world_with_input,
-};
+use crate::editor::hook::tests::fixtures::{entry, hook, select, world_with_fields};
 use crate::editor::hook::{EditorHook, declared_id, entry_type};
 use crate::editor::panels::console;
-use crate::editor::panels::console_panel::{self, ConsoleAction};
+use crate::editor::panels::console_panel;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::ui::{BuiltUi, UiBuilder, field};
 use crate::frame_hook::FrameHook;
 use crate::test_support::isolate_state_dir;
 use std::sync::atomic::Ordering;
 
+// A world holding the built Console panel.
 fn console_world() -> World {
     let mut world = World::new();
-    for id in console_panel::ids().field_ids() {
-        world.push_identified(id, TextInput::default());
-    }
+    let panel = {
+        let mut ui = UiBuilder::new(&mut world, AssetId(1), None);
+        console_panel::build(&mut ui).unwrap()
+    };
+    let mut built = BuiltUi::default();
+    built.panels[PanelKey::Console] = Some(panel);
+    world.insert_resource(built);
     world
+}
+
+fn field(world: &World) -> Option<AssetId> {
+    EditorHook::console_input(world)
+}
+
+fn seed(world: &mut World, text: &str) {
+    let id = field(world);
+    field::set_text(world, id, text);
+}
+
+fn line(world: &World) -> String {
+    field::text(world, field(world))
 }
 
 fn fill_log(h: &EditorHook, n: usize) {
@@ -47,68 +62,62 @@ fn log_text(h: &EditorHook) -> String {
         .join("\n")
 }
 
-// A fresh console is pinned to the tail, so the newest lines are the ones on
-// screen however long the log grows.
+// A pinned console shows the newest lines however long the log grows; a
+// scroll away from the tail unpins it, and one back onto it re-pins.
 #[test]
-fn the_log_window_follows_the_tail_while_pinned() {
-    let h = hook(Vec::new());
-    let shown = console_panel::visible_lines(h.effective_size(PanelKey::Console)[1]);
-    fill_log(&h, shown + 20);
-
-    let (lines, total, first) = h.console_window();
-    assert_eq!(total, shown + 20);
-    assert_eq!(first, 20, "the window sits at the tail");
-    assert_eq!(lines.len(), shown);
-    assert_eq!(lines.last().unwrap().text, format!("line {}", shown + 19));
-}
-
-// Scrolling back through the log unpins the window; stepping forward onto the
-// last line re-pins it, so the log resumes following new output on its own.
-#[test]
-fn scrolling_off_the_tail_unpins_and_returning_re_pins() {
-    let mut h = hook(Vec::new());
-    let shown = console_panel::visible_lines(h.effective_size(PanelKey::Console)[1]);
-    fill_log(&h, shown + 10);
-    assert!(h.console.pinned);
-
-    h.scroll_console(-1.0);
-    assert!(!h.console.pinned, "stepping back leaves the tail");
-    let (_, _, first) = h.console_window();
-    assert_eq!(first, 9);
-
-    h.scroll_console(1.0);
-    assert!(h.console.pinned, "stepping onto the last line re-pins");
-    assert_eq!(h.console_window().2, 10);
-}
-
-// The scroll clamps at both ends of a log shorter than the window, where
-// there is nothing to scroll at all.
-#[test]
-fn scrolling_stays_in_bounds_on_a_short_log() {
-    let mut h = hook(Vec::new());
-    fill_log(&h, 3);
-    for _ in 0..8 {
-        h.scroll_console(1.0);
-    }
-    assert_eq!(h.console_window().2, 0);
-    for _ in 0..8 {
-        h.scroll_console(-1.0);
-    }
-    assert_eq!(h.console_window().2, 0);
-    assert!(h.console.pinned);
-}
-
-// Clicking the command line focuses it; clicking the surrounding chrome blurs
-// it, so the keys stop being swallowed by a field the user left.
-#[test]
-fn the_panel_actions_focus_and_blur_the_command_line() {
+fn the_log_follows_its_tail_while_pinned() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
+    let panel = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::Console)
+        .unwrap()
+        .clone();
+    fill_log(&h, 40);
+    let sync = |h: &EditorHook, world: &mut World| {
+        let view = h.console_view("");
+        let log = || h.console_sink.read(console_panel::items);
+        console_panel::sync(&view, log, world, &panel);
+    };
+    sync(&h, &mut world);
+    let list = |w: &World| w.get_by_id::<List>(panel.slots[0]).unwrap().clone();
+    let tail = list(&world).max_scroll(40);
+    assert!(
+        tail > 0.0 && list(&world).scroll == tail,
+        "the list sits at the tail"
+    );
 
-    h.apply_console_action(ConsoleAction::FocusInput, &mut world);
+    world.get_mut_by_id::<List>(panel.slots[0]).unwrap().scroll = 0.0;
+    h.observe_console(&world, &panel);
+    assert!(!h.console.pinned, "scrolling back leaves the tail");
+    fill_log(&h, 1);
+    sync(&h, &mut world);
+    assert_eq!(list(&world).scroll, 0.0, "an unpinned log stays put");
+
+    world.get_mut_by_id::<List>(panel.slots[0]).unwrap().scroll = list(&world).max_scroll(41);
+    h.observe_console(&world, &panel);
+    assert!(h.console.pinned, "returning to the tail re-pins");
+}
+
+// A click that focuses the command line, or leaves it, reaches the hook.
+#[test]
+fn the_command_lines_focus_follows_the_widget() {
+    let mut h = hook(Vec::new());
+    let mut world = console_world();
+    let panel = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::Console)
+        .unwrap()
+        .clone();
+    h.focus_panel(PanelKey::Console);
+    let id = field(&world).unwrap();
+    world.get_mut_by_id::<TextField>(id).unwrap().focused = true;
+    h.observe_console(&world, &panel);
     assert!(h.console.focus);
-
-    h.apply_console_action(ConsoleAction::Consume, &mut world);
+    world.get_mut_by_id::<TextField>(id).unwrap().focused = false;
+    h.observe_console(&world, &panel);
     assert!(!h.console.focus);
 }
 
@@ -119,7 +128,7 @@ fn enter_submits_the_line_and_clears_the_field() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
     h.console.focus = true;
-    widget::seed_field(&mut world, console_panel::INPUT, "  /help  ");
+    seed(&mut world, "  /help  ");
 
     h.console_keys(
         &mut world,
@@ -129,7 +138,7 @@ fn enter_submits_the_line_and_clears_the_field() {
         },
     );
 
-    assert_eq!(widget::field_text(&world, console_panel::INPUT), "");
+    assert_eq!(line(&world), "");
     let log = log_text(&h);
     assert!(log.contains("> /help"), "the line is echoed: {log}");
     assert!(log.lines().count() > 1, "/help answered: {log}");
@@ -141,7 +150,7 @@ fn enter_on_a_blank_line_submits_nothing() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
     h.console.focus = true;
-    widget::seed_field(&mut world, console_panel::INPUT, "   ");
+    seed(&mut world, "   ");
 
     h.console_keys(
         &mut world,
@@ -160,7 +169,7 @@ fn the_keys_are_ignored_while_the_command_line_is_unfocused() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
     h.console.focus = false;
-    widget::seed_field(&mut world, console_panel::INPUT, "/help");
+    seed(&mut world, "/help");
 
     h.console_keys(
         &mut world,
@@ -170,7 +179,7 @@ fn the_keys_are_ignored_while_the_command_line_is_unfocused() {
         },
     );
     assert_eq!(h.console_sink.len(), 0);
-    assert_eq!(widget::field_text(&world, console_panel::INPUT), "/help");
+    assert_eq!(line(&world), "/help");
 }
 
 // Tab accepts the /del name completion, so a long asset name is one keypress.
@@ -181,7 +190,7 @@ fn tab_accepts_the_del_ghost() {
     ]);
     let mut world = console_world();
     h.console.focus = true;
-    widget::seed_field(&mut world, console_panel::INPUT, "/del lant");
+    seed(&mut world, "/del lant");
     assert_eq!(h.console_ghost(&world), "ern_post");
 
     h.console_keys(
@@ -191,10 +200,7 @@ fn tab_accepts_the_del_ghost() {
             ..Default::default()
         },
     );
-    assert_eq!(
-        widget::field_text(&world, console_panel::INPUT),
-        "/del lantern_post"
-    );
+    assert_eq!(line(&world), "/del lantern_post");
 }
 
 // Right accepts the ghost only from the end of the line; mid-line it is an
@@ -210,25 +216,19 @@ fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
     let mut at_end = hook(entries.clone());
     let mut world = console_world();
     at_end.console.focus = true;
-    widget::focus_field_with(&mut world, console_panel::INPUT, "/del lant");
+    seed(&mut world, "/del lant");
     at_end.console_keys(&mut world, &key);
-    assert_eq!(
-        widget::field_text(&world, console_panel::INPUT),
-        "/del lantern_post"
-    );
+    assert_eq!(line(&world), "/del lantern_post");
 
     let mut mid = hook(entries);
     let mut world = console_world();
     mid.console.focus = true;
-    widget::focus_field_with(&mut world, console_panel::INPUT, "/del lant");
-    if let Some(t) = widget::input_mut(&mut world, console_panel::INPUT) {
+    seed(&mut world, "/del lant");
+    if let Some(t) = field(&world).and_then(|id| world.get_mut_by_id::<TextField>(id)) {
         t.caret = 2;
     }
     mid.console_keys(&mut world, &key);
-    assert_eq!(
-        widget::field_text(&world, console_panel::INPUT),
-        "/del lant"
-    );
+    assert_eq!(line(&world), "/del lant");
 }
 
 // With no name to complete there is no ghost, and the accept keys leave the
@@ -238,7 +238,7 @@ fn the_accept_keys_are_inert_without_a_ghost() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
     h.console.focus = true;
-    widget::focus_field_with(&mut world, console_panel::INPUT, "/del nothing");
+    seed(&mut world, "/del nothing");
     assert_eq!(h.console_ghost(&world), "");
 
     h.console_keys(
@@ -248,10 +248,7 @@ fn the_accept_keys_are_inert_without_a_ghost() {
             ..Default::default()
         },
     );
-    assert_eq!(
-        widget::field_text(&world, console_panel::INPUT),
-        "/del nothing"
-    );
+    assert_eq!(line(&world), "/del nothing");
 }
 
 // One build at a time: a second /cook while the worker is still writing blobs
@@ -465,19 +462,13 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     h.drive_console_toggle(&input, &mut world);
     assert!(h.open[PanelKey::Console] && h.console.focus && h.console.blur);
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Console));
-    let (lines, total, first) = h.console_window();
     assert!(
-        !h.make_console_view(&lines, total, first, "", [0.0, 0.0])
-            .focus,
+        !h.console_view("").focus,
         "the opening frame never asserts field focus"
     );
     // The next frame clears the blur (the tick does this) and focus asserts.
     h.console.blur = false;
-    let (lines, total, first) = h.console_window();
-    assert!(
-        h.make_console_view(&lines, total, first, "", [0.0, 0.0])
-            .focus
-    );
+    assert!(h.console_view("").focus);
 
     h.drive_console_toggle(&input, &mut world);
     assert!(
@@ -514,15 +505,8 @@ fn a_held_backtick_toggles_once() {
 #[test]
 fn console_ghost_completes_del_names_and_tab_accepts() {
     let mut h = hook(vec![entry("cube_red", "Prop")]);
-    let mut world = World::new();
-    world.push_identified(
-        console_panel::INPUT,
-        TextInput {
-            content: "/del cu".to_string(),
-            caret: 7,
-            ..Default::default()
-        },
-    );
+    let mut world = console_world();
+    seed(&mut world, "/del cu");
 
     assert_eq!(h.console_ghost(&world), "be_red");
     h.console.focus = true;
@@ -531,10 +515,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
         ..Default::default()
     };
     h.console_keys(&mut world, &tab);
-    assert_eq!(
-        widget::field_text(&world, console_panel::INPUT),
-        "/del cube_red"
-    );
+    assert_eq!(line(&world), "/del cube_red");
     // With the name complete there is nothing left to ghost.
     assert_eq!(h.console_ghost(&world), "");
 }
@@ -546,30 +527,53 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
 fn tick_opens_the_console_blurred_then_focuses() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
-    let mut world = world_with_input(FrameInput {
+    let mut world = World::new();
+    crate::editor::install::editor_ui(&mut world);
+    world.add_component(FrameInput {
         key_events: vec![KeyEvent::press(InputKey::Backtick)],
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
-    world.push_identified(console_panel::INPUT, TextInput::default());
-    for &id in &console_panel::ids().labels {
-        world.push_identified(id, TextLabel::default());
-    }
     let mut h = hook(Vec::new());
 
     h.tick(&mut world);
     assert!(h.open[PanelKey::Console]);
-    let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
-    assert!(
-        input.visible && !input.focused,
-        "the opening frame leaves the field blurred"
-    );
+    let input = world
+        .get_by_id::<TextField>(field(&world).unwrap())
+        .unwrap();
+    assert!(!input.focused, "the opening frame leaves the field blurred");
 
     // Next frame, no key held: focus asserts.
     for i in world.query_mut::<FrameInput>() {
         i.key_events.clear();
     }
     h.tick(&mut world);
-    let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
-    assert!(input.visible && input.focused);
+    let input = world
+        .get_by_id::<TextField>(field(&world).unwrap())
+        .unwrap();
+    assert!(input.focused);
+}
+
+// The completion follows the command line and the authored names as they stand
+// this frame: none once Tab has taken it, and a fresh one when a name arrives.
+#[test]
+fn the_ghost_follows_the_line_and_the_names_this_frame() {
+    let mut h = hook(vec![entry("cube_red", "Prop")]);
+    let mut world = console_world();
+    h.console.focus = true;
+    seed(&mut world, "/del cu");
+    assert_eq!(h.console_ghost_now(&world), "be_red");
+    h.console_keys(
+        &mut world,
+        &FrameInput {
+            key_events: vec![KeyEvent::press(InputKey::Tab)],
+            ..Default::default()
+        },
+    );
+    assert_eq!(h.console_ghost_now(&world), "", "taken by the Tab");
+
+    seed(&mut world, "/del wa");
+    assert_eq!(h.console_ghost_now(&world), "");
+    h.entries.push(entry("wall", "Prop"));
+    assert_eq!(h.console_ghost_now(&world), "ll", "a new name completes");
 }

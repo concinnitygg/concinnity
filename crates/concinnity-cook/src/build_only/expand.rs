@@ -10,18 +10,16 @@ use super::character_model::expand::expand_character_models;
 use super::companion::inject_companions;
 use super::ground_look::expand::expand_ground_looks;
 use super::light_rig::expand::expand_light_rigs;
-use super::main_menu::expand_main_menus;
 use super::material_palette::expand::expand_material_palettes;
-use super::menu_defaults::inject_menu_defaults;
-use super::option_select::expand::expand_option_selects;
-use super::panel::expand::expand_panels;
 use super::prefab::expand::expand_prefabs;
 use super::room::expand_room_textures;
 use super::scene_import::expand::expand_scene_imports;
-use super::slider::expand::expand_sliders;
 use super::story::expand_stories;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::{ID_KEY, WorldSource, args_without_id, entry_id, load_world};
+use crate::ui::{
+    MainMenu, OptionSelect, Panel, Slider, expand_all, expand_screens, inject_menu_defaults,
+};
 
 // Shared helpers used across expansion submodules.
 
@@ -42,6 +40,25 @@ pub(crate) fn asset_name(v: &serde_json::Value) -> String {
 // Borrowing form of `asset_name`, for scans that only compare.
 pub(crate) fn asset_name_str(v: &serde_json::Value) -> &str {
     entry_id(v).unwrap_or("")
+}
+
+// Set `args.key` to `value` on the entry unless it already names one, giving
+// an entry without args an object to hold it.
+pub(crate) fn set_arg_if_absent(entry: &mut serde_json::Value, key: &str, value: &str) {
+    let Some(entry) = entry.as_object_mut() else {
+        return;
+    };
+    let args = entry
+        .entry("args")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
+    if let serde_json::Value::Object(args) = args
+        && !args.contains_key(key)
+    {
+        args.insert(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
 }
 
 // Deserialize the `args` of the `ty` asset `name` into its schema struct, a
@@ -69,8 +86,8 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
 }
 
 /// One asset added to the world by an injection pass rather than authored or
-/// macro-expanded. Recorded in world-lock.json so the user can see every
-/// default and copy its entry into world.jsonl as an override.
+/// macro-expanded. Recorded in cook-lock.json so the user can see every
+/// default and copy its entry into a .jsonl file as an override.
 #[derive(Debug, Clone)]
 pub struct InjectedAsset {
     /// The injected asset's name.
@@ -86,7 +103,7 @@ pub struct InjectedAsset {
 
 /// One asset a macro expansion produced from an authored entry, recorded so
 /// listings can group generated assets by what produced them and offer to copy
-/// one into world.jsonl as an override.
+/// one into a .jsonl file as an override.
 #[derive(Debug, Clone)]
 pub struct GeneratedAsset {
     /// The generated asset's name.
@@ -99,7 +116,7 @@ pub struct GeneratedAsset {
 
 /// One generated asset the world declares itself: the authored entry is a
 /// sparse patch merged over the generated args (see `shadow::merge_args`), so a
-/// line in world.jsonl overrides exactly the fields it names and tracks the
+/// line in a .jsonl file overrides exactly the fields it names and tracks the
 /// expansion for the rest. Recorded so listings can show the override for what
 /// it is rather than leaving the generated asset unaccounted for.
 #[derive(Debug, Clone)]
@@ -176,13 +193,14 @@ impl ExpandReport {
 }
 
 // Run all expansion passes in order. Mutates the asset list in place and
-// reports what the injection passes added. `assets_dir` is the asset search
-// root the source-reading passes (scene imports, presets) resolve against.
+// reports what the injection passes added. `root` is the content root a
+// scene import's source resolves against; presets are looked up by name under
+// its `assets/`.
 // Returns an error only when a hard failure occurs (e.g. prefab cycle or
 // missing prefab reference).
 pub(crate) fn expand_world(
     assets: &mut Vec<serde_json::Value>,
-    assets_dir: Option<&Path>,
+    root: Option<&Path>,
 ) -> Result<ExpandReport, Diagnostic> {
     let mut report = ExpandReport::default();
     // The assets the world declares itself, snapshotted before any pass runs:
@@ -197,19 +215,21 @@ pub(crate) fn expand_world(
     // Imports expand first so the assets they generate (materials, meshes,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
-    expand_scene_imports(assets, &mut report, assets_dir)?;
+    let presets = root.map(concinnity_host::store::paths::assets_dir_of);
+    let presets = presets.as_deref();
+    expand_scene_imports(assets, &mut report, root)?;
     // Stories expand to External UI assets (Screens, TextLabels, HitRegions)
     // that need no further expansion but must exist before companion
     // injection so their TextLabels pull in Window + Font companions.
-    expand_stories(assets)?;
-    expand_camera_shots(assets, assets_dir)?;
+    expand_stories(assets, root)?;
+    expand_camera_shots(assets, presets)?;
     // Character models become the skinned meshes they emit, under their own
     // names, so every later pass (companions, references) sees a SkinnedMesh.
     expand_character_models(assets)?;
-    expand_light_rigs(assets, assets_dir)?;
-    expand_material_palettes(assets, assets_dir)?;
+    expand_light_rigs(assets, presets)?;
+    expand_material_palettes(assets, presets)?;
     expand_ground_looks(assets)?;
-    expand_prefabs(assets, &authored, &mut report, assets_dir)?;
+    expand_prefabs(assets, &authored, &mut report, presets)?;
     expand_room_textures(assets);
     // First companion round: materialize the Window implied by everything
     // authored or expanded above, so the defaults pass can key off "this world
@@ -220,6 +240,10 @@ pub(crate) fn expand_world(
     // name. Runs after the first companion round so a rendering world's injected
     // Window is present to receive the title.
     apply_app_config(assets, &mut report)?;
+    // Screens lift their children out into entries of their own, before the
+    // shorthand passes below expand the shorthands among them and the second
+    // companion round gives their TextLabels a Window and Font.
+    expand_screens(assets)?;
     // The engine defaults stated in build-only terms: the StatHud a MainMenu
     // world drives, and a story world's pause MainMenu. Runs before menu
     // expansion so an injected MainMenu expands like an authored one. Every
@@ -229,18 +253,18 @@ pub(crate) fn expand_world(
     // HitRegion / KeyBinding) that need no further expansion, but whose
     // TextLabels must still pull in their Window + Font companions, so
     // this runs before the second companion round.
-    expand_main_menus(assets)?;
+    expand_all::<MainMenu>(assets)?;
     // Menus emit OptionSelect rows for their settings sub-screen; expand those to
     // their primitives (TextLabels + HitRegion) before companion injection so
     // the generated TextLabels pull in their Font.
-    expand_option_selects(assets)?;
+    expand_all::<OptionSelect>(assets)?;
     // Menus also emit Slider rows (continuous settings); expand those to their
     // primitives (TextLabels + Sprites + HitRegion) on the same footing, before
     // companion injection.
-    expand_sliders(assets)?;
+    expand_all::<Slider>(assets)?;
     // Panels expand to a background Sprite (+ title TextLabel), also before the
     // second companion round so those pull in their Window / Font.
-    expand_panels(assets)?;
+    expand_all::<Panel>(assets)?;
     // Second companion round: companions for the assets the defaults and menu
     // passes added. Idempotent for everything round one already covered.
     inject_companions(assets, &mut report);
@@ -248,7 +272,7 @@ pub(crate) fn expand_world(
 }
 
 /// Load and structurally validate world text, then run all expansion passes,
-/// resolving bare source filenames under `assets_dir`. Returns the fully
+/// resolving paths under the source's root. Returns the fully
 /// expanded asset list. Does not run semantic validation; see
 /// `crate::build_only::prepare_world` for the full build-pipeline front half.
 ///
@@ -258,12 +282,12 @@ pub(crate) fn expand_world(
 /// expansion pass fails.
 pub fn expand_world_from_str<'a>(
     source: impl Into<WorldSource<'a>>,
-    assets_dir: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
-    let mut assets = load_world(source.into())
+    let source = source.into();
+    let mut assets = load_world(source)
         .map_err(|errs| std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n")))?;
 
-    expand_world(&mut assets, assets_dir)
+    expand_world(&mut assets, source.root)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(assets)
@@ -272,6 +296,17 @@ pub fn expand_world_from_str<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_arg_if_absent_fills_a_missing_arg_only() {
+        let mut bare = serde_json::json!({"type": "Prop"});
+        set_arg_if_absent(&mut bare, "scene", "level");
+        assert_eq!(bare["args"]["scene"], "level");
+
+        let mut named = serde_json::json!({"type": "Prop", "args": {"scene": "other"}});
+        set_arg_if_absent(&mut named, "scene", "level");
+        assert_eq!(named["args"]["scene"], "other");
+    }
 
     #[test]
     fn registered_type_parses_an_exact_name() {
@@ -422,12 +457,12 @@ mod tests {
     // finds and the expansion failures that follow it.
     #[test]
     fn expand_world_from_str_surfaces_load_and_expansion_errors() {
-        let malformed = expand_world_from_str("not json at all\n", None).unwrap_err();
+        let malformed = expand_world_from_str("not json at all\n").unwrap_err();
         assert_eq!(malformed.kind(), std::io::ErrorKind::InvalidData);
         assert!(!malformed.to_string().is_empty());
 
         let broken = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let err = expand_world_from_str(broken, None).unwrap_err();
+        let err = expand_world_from_str(broken).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("ghost"), "{err}");
     }
@@ -509,7 +544,7 @@ mod tests {
     #[test]
     fn expand_world_from_str_injects_companions() {
         let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
-        let assets = expand_world_from_str(content, None).unwrap();
+        let assets = expand_world_from_str(content).unwrap();
         assert!(
             assets
                 .iter()
@@ -526,7 +561,7 @@ mod tests {
     #[test]
     fn bare_main_menu_world_expands_and_pulls_companions() {
         let content = r#"["MainMenu",{"$id":"main_menu"}]"#;
-        let assets = expand_world_from_str(content, None).unwrap();
+        let assets = expand_world_from_str(content).unwrap();
         // The MainMenu is gone, replaced by its UI assets.
         assert!(
             !assets

@@ -187,21 +187,10 @@ fn every_frame_cascades(update: ShadowUpdate, active_cascades: u32) -> u32 {
     }
 }
 
-// Pure cascade-selection step, split out of `next_mask` so the priming +
-// round-robin policy is unit-testable without renderer state.
-//
-// Given the update policy, the current round-robin clock, and which cascades
-// have already been primed, returns `(render_mask, new_primed_mask)`:
-//
-//   - `scheduled` is the policy's steady-state set (EveryFrame = all; Hybrid =
-//     the first cascade plus one round-robin among the rest) and the `forced`
-//     cascades. The round-robin takes the next cascade not forced, so a forced
-//     one does not cost another its turn.
-//   - any cascade not yet primed is force-rendered this frame so its slice is
-//     never sampled before it holds valid depth. Because a cascade's bit is set
-//     in `primed` the first frame it renders and cleared only by `reprime`,
-//     priming renders each cascade once on first access and once after each
-//     `reprime`.
+// The cascade selection behind `next_mask`, returning `(render_mask,
+// new_primed_mask)`: the policy's scheduled set plus `forced` (the round-robin
+// skips forced cascades), plus any cascade not yet primed, so none is sampled
+// before it holds depth.
 fn select_cascade_mask(
     update: ShadowUpdate,
     clock: u32,

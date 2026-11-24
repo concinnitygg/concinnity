@@ -1,4 +1,4 @@
-//! Typed asset specs: the struct form of a world.jsonl line.
+//! Typed asset specs: the struct form of a .jsonl line.
 //!
 //! An `AssetSpec` is a `{name, type, args}` entry described as data rather than a
 //! JSON string. `args` is an ordered list of `(key, ArgValue)` pairs, where
@@ -94,7 +94,7 @@ impl<const N: usize> From<[f32; N]> for ArgValue {
     }
 }
 
-/// A named asset entry: the `{name, type, args}` of one world.jsonl line, as data.
+/// A named asset entry: the `{name, type, args}` of one .jsonl line, as data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssetSpec {
     /// The readable asset name (the world-line key). Ignored when a spec is

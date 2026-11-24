@@ -1,13 +1,5 @@
-// Casting a ray at a list of entities rather than at the simulation.
-//
-// The simulation's own `raycast` answers with a surface point, against every
-// body it holds. A caller that addresses the world by entity wants the other
-// shape of answer: which of *these* entities the ray meets first. That is what
-// this is, and it lives here because the ray-versus-shape primitives do -- the
-// caller stays free of them, and a hit means the same thing either way.
-//
-// Only an entity carrying a `Collider` can be hit. Terrain and heightfields
-// belong to the simulation, not to any entity, so they are not tested here.
+// A ray cast at a list of entities, answering which carrying a `Collider` it
+// meets first. Terrain belongs to no entity, so it is not tested.
 
 use crate::components::{Collider, Transform};
 use crate::ecs::{ComponentStorage, Entity};

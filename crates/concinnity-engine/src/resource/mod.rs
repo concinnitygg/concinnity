@@ -76,12 +76,8 @@ impl ResourceEntry {
     }
 }
 
-// Build a dense per-kind table from the blob's resource stream, indexed by
-// handle: `table[handle]` is that resource's entry. Records of other kinds are
-// ignored; a missing handle yields a default entry so indexing by any handle in
-// range never panics. Each record's data bytes are MOVED into its entry (a
-// record belongs to exactly one kind, so the per-kind builders never contend);
-// the records are spent scaffolding once every table is built.
+// A dense per-kind table from the blob's resource stream, indexed by handle.
+// Missing handles get a default entry. Each record's bytes move into its entry.
 pub(crate) fn resource_table(
     records: &mut [ResourceRecord],
     kind: ResourceKind,
@@ -189,18 +185,11 @@ resource_tables! {
     // Fonts, indexed by `FontHandle`. The renderer reads this at init to build
     // its glyph atlases + metrics; every font has a compiled SDF-atlas payload.
     FontTable => Font,
-    // Static meshes, indexed by `MeshHandle`. Mesh shares its handle space with
-    // the still-component geometry producers (ProceduralMesh, VoxelChunk,
-    // mesh-kind File): the Mesh block leads that space, so this table covers
-    // handles `0..len` and the runtime appends the component-produced geometry
-    // after it in the same block order cook assigned.
+    // Static meshes by `MeshHandle`. The Mesh block leads the handle space the
+    // component geometry producers share; their geometry follows it.
     MeshTable => Mesh,
-    // Skinned meshes, indexed by `SkinnedMeshHandle`. A hybrid entry: `payload`
-    // locates the compiled geometry (vertices + indices + skeleton) while
-    // `data_bytes` carries the baked runtime fields (placement, material/texture
-    // handles, capsule, spawn reserve) as a `(name_id, SkinnedMesh)` postcard
-    // tuple -- the struct carries no identity, so the interned name travels
-    // beside it for the runtime's spawn-by-name registration.
+    // Skinned meshes by `SkinnedMeshHandle`: `payload` locates the geometry
+    // and `data_bytes` carries a `(name_id, SkinnedMesh)` postcard tuple.
     SkinnedMeshTable => SkinnedMesh,
     // Materials, indexed by `MaterialHandle`. Unlike the payload-backed tables,
     // a Material is a DATA resource: cook bakes its validated args into the

@@ -37,7 +37,7 @@ impl SdfForm {
     pub(crate) fn open(
         entries: &[serde_json::Value],
         editing: Option<usize>,
-        resolve: impl FnMut(&str) -> String,
+        resolve: impl FnMut(usize, &str) -> String,
     ) -> Self {
         let Some(i) = editing else {
             return Self {
@@ -181,7 +181,7 @@ mod tests {
     // file and flag it decides, and names the file it would write.
     #[test]
     fn a_new_volume_chooses_its_kind_and_starter() {
-        let mut form = SdfForm::open(&[], None, str::to_string);
+        let mut form = SdfForm::open(&[], None, |_, d| d.to_string());
         assert!(form.is_new() && !form.volumetric());
         assert_eq!(form.hidden_fields(), ["fragment_shader", "volumetric"]);
         let rows = form.rows("shaders/blob.hlsl");
@@ -212,7 +212,7 @@ mod tests {
             volume("b", "./shaders/blob.hlsl"),
             volume("c", "shaders/cloud.hlsl"),
         ];
-        let resolve = |d: &str| d.trim_start_matches("./").to_string();
+        let resolve = |_: usize, d: &str| d.trim_start_matches("./").to_string();
         let form = SdfForm::open(&entries, Some(1), resolve);
         assert!(form.hidden_fields().is_empty());
         let rows = form.rows("");
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn a_new_volume_needs_a_free_name() {
-        let form = SdfForm::open(&[], None, str::to_string);
+        let form = SdfForm::open(&[], None, |_, d| d.to_string());
         assert_eq!(
             form.blocked(" ", false).as_deref(),
             Some("Enter a name for the volume.")
