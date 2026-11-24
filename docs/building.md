@@ -52,7 +52,7 @@ and the headless loop that steps it, with no operating system underneath.
 ## Common prerequisites
 
 Install the [Rust toolchain](https://rustup.rs) on every platform. The workspace
-uses the **2024 edition**, so Rust **1.85 or newer** is required:
+builds with the current stable release and requires Rust **1.97 or newer**:
 
 ```sh
 rustup update

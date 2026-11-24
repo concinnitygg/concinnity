@@ -29,6 +29,8 @@ jobs:
       - name: Install Rust Toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
+          components: rustfmt
           cache: false
 
       - name: Run Cargo Fmt
@@ -59,6 +61,9 @@ jobs:
 
       - name: Install Rust Toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
 
       - name: Install Linux Dependencies
         uses: ./.github/actions/install-linux-deps
@@ -101,6 +106,9 @@ jobs:
 
       - name: Install Rust Toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: llvm-tools
 
       - name: Install Linux Dependencies
         uses: ./.github/actions/install-linux-deps
