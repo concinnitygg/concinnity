@@ -74,9 +74,7 @@ impl SystemHost for Host {
     fn story_store(world: &World) -> Option<Box<dyn StoryStore>> {
         let tree = world.resource::<StateTree>()?;
         let transient = world.resource::<TransientSaves>().is_some_and(|t| t.0);
-        Some(Box::new(crate::persist::story::FileStore::new(
-            tree, transient,
-        )))
+        Some(crate::persist::story::for_session(tree, transient))
     }
 
     fn report(text: &str) {

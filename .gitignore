@@ -19,12 +19,12 @@ node_modules/
 
 /*.jsonl
 /cache
-/crashes/
 /data
 /editor
-/preview-saves/
 /saves/
 /settings
+/crash.log
+/crash.dmp
 /cook-lock.json
 
 *.a

@@ -1,10 +1,11 @@
-//! Crash reporting: a panic hook, native fault capture, and local report files
-//! under the crashes directory a host names at install. Reports
-//! are plain text written section by section, so a partial report still leads
-//! with what matters; macOS and Windows also write a minidump beside the
-//! report. The directory is pruned to the newest reports after each write.
-//! Local files only: nothing is uploaded, and no hostname or username is
-//! recorded.
+//! Crash reporting: a panic hook, native fault capture, and one local crash log
+//! at the path a host names at install. A run's first crash rewrites the log,
+//! and any later one in the same run is appended after it, so the log holds
+//! the latest run's crashes with the root cause first. The log is plain text
+//! written section by section, so a partial log still leads with what matters.
+//! On macOS and Windows the run's first panic or native fault also writes a
+//! minidump beside the log, sharing its stem. Local files only: nothing is
+//! uploaded, and no hostname or username is recorded.
 
 mod hook;
 mod memory;
@@ -22,24 +23,24 @@ pub use ring::RingLayer;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-// Where reports land. Process state, and it has to be: a fault handler runs on
-// a compromised stack with no caller to take a path from, so the directory is
+// Where the log lands. Process state, and it has to be: a fault handler runs on
+// a compromised stack with no caller to take a path from, so the path is
 // resolved once, up front, by whoever installs the hooks.
-static REPORT_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+static LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Install the process-wide crash hooks writing to `dir`: a panic hook that
-/// writes a report and chains to the previously installed hook, plus
+/// Install the process-wide crash hooks writing the crash log at `log`: a panic
+/// hook that writes the log and chains to the previously installed hook, plus
 /// (macOS/Windows) a native fault handler that writes a minidump. Binaries call
-/// this first thing at startup, naming the `crashes/` of the state tree they
-/// resolved; later calls re-point the directory but install nothing twice.
+/// this first thing at startup, naming the crash log of the state tree they
+/// resolved; later calls re-point the log but install nothing twice.
 ///
-/// Without a directory (`None`) the hooks still chain and the notes still
+/// Without a path (`None`) the hooks still chain and the notes still
 /// accumulate, but nothing is written: an embedder that has chosen no place for
 /// them gets no files.
-pub fn install(dir: Option<&Path>) {
-    *REPORT_DIR
+pub fn install(log: Option<&Path>) {
+    *LOG_PATH
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = dir.map(Path::to_path_buf);
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = log.map(Path::to_path_buf);
     hook::install();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native::install();
@@ -74,14 +75,14 @@ pub fn note(key: &str, value: &str) {
 // another machine leaves the same local evidence as a crash.
 pub(crate) fn report_device_lost(detail: &str) {
     let report = report::CrashReport::gather(report::ReportKind::DeviceLost, detail.to_string());
-    if write::emit(&report).is_none() {
-        tracing::warn!("crash report for device loss could not be written");
+    if !write::emit(&report) {
+        tracing::warn!("crash log for device loss could not be written");
     }
 }
 
-// The directory reports are written to, or `None` when no host named one.
-pub(crate) fn report_dir() -> Option<PathBuf> {
-    REPORT_DIR.lock().ok()?.clone()
+// The crash log, or `None` when no host named one.
+pub(crate) fn log_path() -> Option<PathBuf> {
+    LOG_PATH.lock().ok()?.clone()
 }
 
 pub(crate) fn notes_snapshot() -> Vec<(String, String)> {

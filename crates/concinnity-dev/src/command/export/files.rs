@@ -13,25 +13,9 @@ pub(super) fn reset_dir(dir: &Path) -> io::Result<()> {
 
 // Copy every compiled blob (the integer-named files) from the build's data
 // directory into `data_dst`, skipping the shader-compile intermediates the
-// build leaves there (named after their asset). Returns the number copied.
-// Copy the built blobs into the bundle as the `data` entry the player looks
-// for, and report how many were copied.
-//
-// A world that fits in one blob ships as a single file named `data`; one that
-// overflows ships as a `data/` directory holding `0`, `1`, ... Overflow blobs
-// are always siblings of blob 0 named by index, so the single-file form can
-// only carry a world that has none -- the player refuses the mismatch rather
-// than reading `1` and `2` out of the folder it was launched from.
-// Remove `path`, a file or a directory, when it exists.
-pub(super) fn remove_any(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
-        Ok(_) => fs::remove_file(path),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
+// build leaves there (named after their asset), and report how many were
+// copied. `data_dst` is replaced whole, so no blob from an earlier export
+// survives beside a world that shrank.
 pub(super) fn copy_blobs(data_src: &Path, data_dst: &Path) -> io::Result<usize> {
     let blobs = blobs_in(data_src)?;
     if blobs.is_empty() {
@@ -40,19 +24,7 @@ pub(super) fn copy_blobs(data_src: &Path, data_dst: &Path) -> io::Result<usize> 
             format!("no compiled blobs in {}", data_src.display()),
         ));
     }
-    // Whatever the previous export left here: the two forms occupy the same
-    // name, so a shrinking world would otherwise write a file over a directory.
-    remove_any(data_dst)?;
-
-    if let [(_, only)] = blobs.as_slice() {
-        if let Some(parent) = data_dst.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(only, data_dst)?;
-        return Ok(1);
-    }
-
-    fs::create_dir_all(data_dst)?;
+    reset_dir(data_dst)?;
     for (index, path) in &blobs {
         fs::copy(path, data_dst.join(index.to_string()))?;
     }

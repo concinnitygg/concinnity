@@ -1,57 +1,42 @@
 // Story saves kept as files under the host's save directory: the auto-save is
 // `auto`, manual slots are `save1`.. (1-based on disk, matching the slot-menu
 // labels). The save's shape is `concinnity_engine::story::StorySave`; what this
-// owns is the files, written off the sim thread.
+// owns is the files, written off the sim thread. A preview session saves to
+// memory instead, so the save UI works without touching the player's saves and
+// every session starts fresh.
 
 use concinnity_engine::story::{SaveSlot, StorySave, StoryStore};
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::store::writer::FileWriter;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+// The store a session saves to: the player's save files, or for a preview
+// session (`transient`) a sandbox that lives as long as the store.
+pub(crate) fn for_session(tree: &StateTree, transient: bool) -> Box<dyn StoryStore> {
+    if transient {
+        Box::<SandboxStore>::default()
+    } else {
+        Box::new(FileStore::at(&tree.saves_dir()))
+    }
+}
 
 #[derive(Debug)]
-pub(crate) struct FileStore {
+struct FileStore {
     dir: PathBuf,
     writer: FileWriter,
-    // A preview store's sandbox is emptied on first use rather than when the
-    // store is built: a system manifest builds stores it never uses. First use
-    // is the new world's start, after the host dropped the world before it,
-    // whose store's writer joins on drop, so no earlier write lands after it.
-    empty_first: Option<Once>,
 }
 
 impl FileStore {
-    // The store under `tree`. A preview session (`transient`) saves to a
-    // sandbox emptied on first use, so the save UI works without touching the
-    // player's saves and every session starts fresh.
-    pub(crate) fn new(tree: &StateTree, transient: bool) -> Self {
-        if !transient {
-            return Self::at(&tree.saves_dir());
-        }
-        Self {
-            empty_first: Some(Once::new()),
-            ..Self::at(&tree.preview_saves_dir())
-        }
-    }
-
     fn at(dir: &Path) -> Self {
         Self {
             dir: dir.to_path_buf(),
             writer: FileWriter::new("cn-story-save"),
-            empty_first: None,
         }
     }
 
     fn path(&self, slot: SaveSlot) -> PathBuf {
-        if let Some(once) = &self.empty_first {
-            once.call_once(|| {
-                if let Err(e) = std::fs::remove_dir_all(&self.dir)
-                    && e.kind() != std::io::ErrorKind::NotFound
-                {
-                    tracing::warn!("story saves: could not clear {}: {e}", self.dir.display());
-                }
-            });
-        }
         match slot {
             SaveSlot::Auto => self.dir.join("auto"),
             SaveSlot::Manual(i) => self.dir.join(format!("save{}", i + 1)),
@@ -79,10 +64,38 @@ impl StoryStore for FileStore {
     }
 }
 
+// A preview session's saves, held in memory: a rebuilt preview world builds a
+// fresh store, so nothing from one session reaches the next or the disk.
+#[derive(Debug, Default)]
+struct SandboxStore(Mutex<BTreeMap<SaveSlot, StorySave>>);
+
+impl SandboxStore {
+    fn slots(&self) -> MutexGuard<'_, BTreeMap<SaveSlot, StorySave>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl StoryStore for SandboxStore {
+    fn read(&self, slot: SaveSlot) -> Option<StorySave> {
+        self.slots().get(&slot).cloned()
+    }
+
+    fn write(&self, slot: SaveSlot, save: &StorySave) {
+        self.slots().insert(slot, save.clone());
+    }
+
+    fn remove(&self, slot: SaveSlot) {
+        self.slots().remove(&slot);
+    }
+
+    fn exists(&self, slot: SaveSlot) -> bool {
+        self.slots().contains_key(&slot)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     fn save(slug: &str) -> StorySave {
         StorySave {
@@ -112,41 +125,29 @@ mod tests {
         assert!(!store.exists(SaveSlot::Manual(1)));
     }
 
-    // A preview store writes to the emptied preview directory and leaves the
-    // player's saves alone.
+    // A preview session saves to memory: its slots round-trip, and the
+    // player's save files are neither read nor written.
     #[test]
-    fn a_preview_store_starts_empty_beside_the_real_saves() {
+    fn a_preview_session_leaves_the_save_files_alone() {
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        FileStore::new(&tree, false).write(SaveSlot::Auto, &save("real"));
-        let stale = tree.preview_saves_dir().join("save1");
-        concinnity_host::store::atomic::replace_durable(&stale, b"stale").unwrap();
-        let preview = FileStore::new(&tree, true);
-        assert!(stale.exists(), "building the store touches nothing");
-        assert!(!preview.exists(SaveSlot::Manual(0)));
+        for_session(&tree, false).write(SaveSlot::Auto, &save("real"));
+
+        let preview = for_session(&tree, true);
         assert!(preview.read(SaveSlot::Auto).is_none());
         preview.write(SaveSlot::Auto, &save("preview"));
-        preview.writer.flush();
-        assert!(tree.preview_saves_dir().join("auto").exists());
+        preview.write(SaveSlot::Manual(0), &save("slot"));
+        assert_eq!(preview.read(SaveSlot::Auto), Some(save("preview")));
+        assert!(preview.exists(SaveSlot::Manual(0)));
+        preview.remove(SaveSlot::Manual(0));
+        assert!(!preview.exists(SaveSlot::Manual(0)));
+        drop(preview);
+
         assert_eq!(
-            FileStore::new(&tree, false).read(SaveSlot::Auto),
+            for_session(&tree, false).read(SaveSlot::Auto),
             Some(save("real"))
         );
-    }
-
-    // A rebuilt preview world drops the old store (draining its writes) before
-    // the new one's first use empties the sandbox, so nothing from the old
-    // session survives into the new one.
-    #[test]
-    fn a_rebuilt_preview_starts_after_the_old_store_drains() {
-        let dir = concinnity_testing::TempTree::new();
-        let tree = StateTree::at(dir.path());
-        let old = FileStore::new(&tree, true);
-        for slot in 0..8 {
-            old.write(SaveSlot::Manual(slot), &save("old"));
-        }
-        drop(old);
-        let new = FileStore::new(&tree, true);
-        assert!((0..8).all(|slot| !new.exists(SaveSlot::Manual(slot))));
+        assert!(!dir.join("saves/save1").exists());
+        assert!(for_session(&tree, true).read(SaveSlot::Auto).is_none());
     }
 }

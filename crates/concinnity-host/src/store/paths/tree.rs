@@ -21,9 +21,8 @@ const DATA_DIR: &str = "data";
 const COOK_LOCK_FILE: &str = "cook-lock.json";
 const SHIPPED_SHADERS_FILE: &str = "shaders";
 const SAVES_DIR: &str = "saves";
-const PREVIEW_SAVES_DIR: &str = "preview-saves";
 const SETTINGS_FILE: &str = "settings";
-const CRASHES_DIR: &str = "crashes";
+const CRASH_LOG_FILE: &str = "crash.log";
 const EDITOR_SESSION_FILE: &str = "editor";
 const CACHE_DIR: &str = "cache";
 const RUNTIME_CACHE_SEGMENT: &str = "0";
@@ -44,7 +43,7 @@ const BUILD_CACHE_SEGMENT: &str = "1";
 ///   split away when the authored content should stay visible and the output
 ///   should not,
 /// - the **writable** root holds what the running application writes
-///   (`saves/`, `settings`, `crashes/`), split away when the content root is a
+///   (`saves/`, `settings`, the crash log), split away when the content root is a
 ///   read-only install such as Program Files,
 /// - the **cache** root holds the regenerable segments, split away when the
 ///   caches should outlive (or be shared across) the content beside them.
@@ -151,10 +150,10 @@ impl StateTree {
         self.build_root().join(COOK_LOCK_FILE)
     }
 
-    /// The engine shaders an exported app ships beside its blobs, compiled
+    /// The engine shaders an exported app ships among its blobs, compiled
     /// ahead of time so the app needs no shader compiler.
     pub fn shipped_shaders_path(&self) -> PathBuf {
-        self.build_root().join(SHIPPED_SHADERS_FILE)
+        self.data_dir().join(SHIPPED_SHADERS_FILE)
     }
 
     /// Directory holding the runtime save files. Created on first write by the
@@ -163,23 +162,16 @@ impl StateTree {
         self.writable_root().join(SAVES_DIR)
     }
 
-    /// Sandboxed sibling of [`saves_dir`](Self::saves_dir) for preview
-    /// sessions: the save UI keeps working against this directory, the real
-    /// saves are never touched, and the sandbox is wiped at each session start.
-    pub fn preview_saves_dir(&self) -> PathBuf {
-        self.writable_root().join(PREVIEW_SAVES_DIR)
-    }
-
     /// The mutable settings file, written by the in-engine settings menu and
     /// never by a build.
     pub fn settings_path(&self) -> PathBuf {
         self.writable_root().join(SETTINGS_FILE)
     }
 
-    /// Directory holding crash reports. Created on first write; capped by the
-    /// writer's retention pruning.
-    pub fn crashes_dir(&self) -> PathBuf {
-        self.writable_root().join(CRASHES_DIR)
+    /// The crash log: one file holding the latest run's crashes, rewritten by
+    /// each run's first.
+    pub fn crash_log_path(&self) -> PathBuf {
+        self.writable_root().join(CRASH_LOG_FILE)
     }
 
     /// The editor's session store: the per-project state an editor run carries
@@ -213,16 +205,13 @@ impl StateTree {
     }
 
     /// The directories a build or a run writes into, none of which holds
-    /// authored content: the blobs, both cache directories, the saves, the
-    /// preview saves and the crash reports.
-    pub fn output_dirs(&self) -> [PathBuf; 6] {
+    /// authored content: the blobs, both cache directories and the saves.
+    pub fn output_dirs(&self) -> [PathBuf; 4] {
         [
             self.data_dir(),
             self.cache_root_for_build().join(CACHE_DIR),
             self.cache_root_for_runtime().join(CACHE_DIR),
             self.saves_dir(),
-            self.preview_saves_dir(),
-            self.crashes_dir(),
         ]
     }
 
@@ -259,10 +248,13 @@ mod tests {
         assert_eq!(tree.assets_dir(), root.join("assets"));
         assert_eq!(tree.data_dir(), root.join("data"));
         assert_eq!(tree.cook_lock_path(), root.join(COOK_LOCK_FILE));
+        assert_eq!(
+            tree.shipped_shaders_path(),
+            root.join("data").join("shaders")
+        );
         assert_eq!(tree.saves_dir(), root.join("saves"));
-        assert_eq!(tree.preview_saves_dir(), root.join("preview-saves"));
         assert_eq!(tree.settings_path(), root.join("settings"));
-        assert_eq!(tree.crashes_dir(), root.join("crashes"));
+        assert_eq!(tree.crash_log_path(), root.join("crash.log"));
         assert_eq!(tree.editor_session_path(), root.join("editor"));
         assert_eq!(tree.runtime_cache_path(), root.join("cache").join("0"));
         assert_eq!(tree.build_cache_path(), root.join("cache").join("1"));
@@ -283,8 +275,6 @@ mod tests {
                 "/caches/cache",
                 "/caches/cache",
                 "/state/saves",
-                "/state/preview-saves",
-                "/state/crashes",
             ]
         );
     }
@@ -300,9 +290,8 @@ mod tests {
         assert_eq!(tree.content_root(), content);
         assert_eq!(tree.writable_root(), writable);
         assert_eq!(tree.saves_dir(), writable.join("saves"));
-        assert_eq!(tree.preview_saves_dir(), writable.join("preview-saves"));
         assert_eq!(tree.settings_path(), writable.join("settings"));
-        assert_eq!(tree.crashes_dir(), writable.join("crashes"));
+        assert_eq!(tree.crash_log_path(), writable.join("crash.log"));
         assert_eq!(tree.editor_session_path(), writable.join("editor"));
         assert_eq!(tree.runtime_cache_path(), writable.join("cache").join("0"));
 
@@ -338,6 +327,10 @@ mod tests {
 
         assert_eq!(tree.assets_dir(), Path::new("/opt/app/assets"));
         assert_eq!(tree.data_dir(), Path::new("/opt/app/out/data"));
+        assert_eq!(
+            tree.shipped_shaders_path(),
+            Path::new("/opt/app/out/data/shaders")
+        );
         assert_eq!(tree.saves_dir(), Path::new("/home/u/app/saves"));
         assert_eq!(
             tree.runtime_cache_path(),

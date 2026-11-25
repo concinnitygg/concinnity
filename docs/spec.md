@@ -741,24 +741,23 @@ Everything the engine writes for a project lives under one state directory.
 ```
 <state root>/
 |-- data/            compiled blobs (0, 1, 2, ...)        read-only at runtime
+|   `-- shaders      engine shaders an export ships       export only
 |-- cook-lock.json   build provenance record (6.3)        cook only
-|-- shaders          engine shaders an export ships       export only
 |-- cache/           regenerable, deletable at any time   see 8.2
 |   |-- 0            runtime cache segment                runtime-writable
 |   `-- 1            build cache segment                  cook only
 |-- assets/          source assets                        authored
 |-- *.jsonl          asset files and applications         authored
 |-- saves/           runtime save files                   runtime-writable
-|-- preview-saves/   sandboxed saves for preview sessions runtime-writable
-|-- crashes/         crash reports and minidumps          runtime-writable
+|-- crash.log        the latest run's crashes (25.1)      runtime-writable
 `-- settings         persisted settings (CBOR)            runtime-writable
 ```
 
 The tree has four roots, and a host that keeps them together gets the layout
 above. The **content** root holds what a person authors (`assets/`, `.jsonl`
-files); the **build** root holds what a build produces (`data/`,
-`cook-lock.json`, and in an exported app `shaders`); the
-**writable** root holds what a run writes (`saves/`, `settings`, `crashes/`); the
+files); the **build** root holds what a build produces (`data/`, with
+`data/shaders` in an exported app, and `cook-lock.json`); the
+**writable** root holds what a run writes (`saves/`, `settings`, `crash.log`); the
 **cache** root holds the regenerable segments. Each of the last three defaults
 to the content root and may be split away on its own.
 
@@ -781,7 +780,7 @@ absolute path verbatim, a relative one against the content root, empty for
 "beside the data".
 
 **Read-only install.** When the player cannot write beside its data (for
-example under Program Files), only `saves/`, `settings`, `crashes/`, and the
+example under Program Files), only `saves/`, `settings`, `crash.log`, and the
 runtime cache segment relocate to a per-user directory: `%LOCALAPPDATA%` on
 Windows (falling back to `%APPDATA%`), `~/Library/Application Support` on macOS,
 `$XDG_DATA_HOME` or `~/.local/share` elsewhere. The player probes writability at
@@ -2085,12 +2084,13 @@ verified by test.
 ### 13.2 Production and caching
 
 Nothing is compiled at engine build time. Export compiles every declared engine
-program for the player's graphics APIs and ships them in one file beside the
-compiled world. At runtime a program is fetched from that shipped set when its
-source digest matches, else from the runtime cache segment, else compiled and
-cached. A shipped player therefore compiles nothing at start-up and needs no
-shader compiler; a development run compiles each program on first use. Driver
-pipeline caches are persisted per adapter (section 8.2).
+program for the player's graphics APIs and ships them in one file among the
+compiled world's blobs (`data/shaders`). At runtime a program is fetched from
+that shipped set when its source digest matches, else from the runtime cache
+segment, else compiled and cached. A shipped player therefore compiles nothing
+at start-up and needs no shader compiler; a development run compiles each
+program on first use. Driver pipeline caches are persisted per adapter
+(section 8.2).
 
 In a development session, engine shaders hot-reload from the source checkout.
 
@@ -2806,15 +2806,21 @@ reports every problem. Non-fatal products degrade rather than fail.
 
 Local files only: nothing is uploaded, and no hostname or username is recorded.
 
-- **Panic hook:** writes a report and chains to the previous hook.
-- **Native fault handler** (macOS, Windows): writes a minidump beside the report,
+One file, `crash.log` in the writable root (section 8). A run's first crash
+rewrites it, and any later crash in the same run is appended after it, so the
+root cause stays first. On macOS and Windows the run's first panic or native
+fault adds `crash.dmp` beside it.
+
+- **Panic hook:** writes the log and chains to the previous hook.
+- **Native fault handler** (macOS, Windows): writes the minidump, then the log,
   gathering without blocking since the crashing thread may hold a lock.
 - **Contents:** plain text, written section by section so a partial report still
   leads with what matters: kind and timestamp, message, crashing thread and
   location, backtrace, up to 16 bounded context notes (backend, GPU, world), the
   recent log lines, and heap and resident-size figures.
-- **Retention:** the directory is pruned to the newest reports after each write.
-- **Device loss** writes a report without a minidump.
+- **Device loss** writes the log without a minidump, leaving the dump to a crash
+  that follows; as a run's first report it removes the dump an earlier run
+  left.
 
 ### 25.2 Profiling
 
@@ -3019,9 +3025,9 @@ never saved. A preset given at launch also fixes every row the preset governs.
 
 Save files live under the writable root as CBOR, for the same reason. Behaviors save
 variables and once-flags (keyed by asset and content hash); stories save an
-auto-slot and three numbered slots. Preview sessions write to a sandboxed sibling
-directory that is wiped at each session start, so the save UI works against
-real-looking state while real saves are never touched.
+auto-slot and three numbered slots. Preview sessions keep their saves in memory for
+the session, so the save UI works against real-looking state while real saves are
+never touched.
 
 ---
 
@@ -3034,16 +3040,16 @@ real-looking state while real saves are never touched.
 1. **Pre-flight.** The target platform must be this platform, the player binary
    must exist, and its backend must match the one this CLI cooks for.
 2. **Cook.** The normal cook, reusing the cache.
-3. **Assemble.** Copy the prebuilt player beside the world's blobs in the layout the
-   player resolves relative to its executable. A world that fits in one blob ships as
-   a single file named `data`; one that overflows ships as a `data/` directory
-   holding `0`, `1`, ...
+3. **Assemble.** Copy the prebuilt player beside a `data/` directory, in the
+   layout the player resolves relative to its executable. `data/` holds the
+   world's blobs (`0`, `1`, ...) and `shaders`, every engine shader compiled
+   ahead of time for the player's graphics APIs.
 4. **Package.** A macOS bundle is a `.app` (optionally in a `.dmg`); elsewhere a
    folder. The result is archived to a `.zip` by default.
 
 The player is copied, never compiled, so packaging needs no compiler toolchain.
-Neither the cook cache nor a runtime cache ships: engine shaders are already
-embedded in the player (13.2).
+Neither the cook cache nor a runtime cache ships: the engine shaders an app needs
+travel in `data/shaders` (13.2).
 
 ### 28.2 The backend stamp
 
@@ -3057,10 +3063,10 @@ and export scans for it and refuses a mismatch.
 The player anchors its state root to its own executable, not the working directory,
 so it finds its data whether double-clicked, launched from a shell, or run inside a
 macOS bundle (where the root is `Contents/Resources/`). Inside the root the world is
-either a file named `data` or a directory named `data`. A single positional argument
-overrides that, naming a blob file or directory; it moves only what is read, never
-where the app writes. A single-file `data` whose world reports overflow blobs is
-refused with a message naming the fix.
+the `data/` directory. A single positional argument overrides that, naming a blob
+file or directory; it moves only what is read, never where the app writes. A
+single blob file whose world reports overflow blobs is refused with a message
+naming the fix.
 
 ---
 

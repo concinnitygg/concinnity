@@ -8,7 +8,7 @@
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
 use std::sync::OnceLock;
 
-use super::report::{CrashReport, ReportKind, file_stem_at, utc_now};
+use super::report::{CrashReport, ReportKind};
 use super::write;
 
 // Keeps the handler (and its exception thread on macOS) alive for the
@@ -42,22 +42,21 @@ pub(crate) fn install() {
     reason = "a fault handler has nowhere to report its own failure"
 )]
 fn report_fault(ctx: &CrashContext) {
-    // The dump lands before the report is gathered. Naming it still costs a
-    // path and a few directory probes, but everything else the report needs --
-    // formatting the message, snapshotting the notes and the log ring, querying
-    // process memory -- runs after the artifact with the compromised-context
-    // writer is already on disk.
-    let Some(dir) = super::report_dir() else {
+    // The dump lands before the report is gathered: everything the report
+    // needs -- formatting the message, snapshotting the notes and the log ring,
+    // querying process memory -- runs after the artifact with the
+    // compromised-context writer is already on disk. A fault after an earlier
+    // dump (a panic ending in abort) keeps that dump.
+    let Some(log) = super::log_path() else {
         return;
     };
-    let time = utc_now();
-    let stem = write::unique_stem(&dir, &file_stem_at(time));
-    super::minidump::write_fault_dump(&dir, &stem, ctx);
+    let mode = write::LOG.log_write();
+    if write::DUMP.claim() {
+        super::minidump::write_fault_dump(&log, ctx);
+    }
 
-    let mut report = CrashReport::gather_nonblocking(ReportKind::NativeFault, fault_message(ctx));
-    report.time = time;
-    let _ = write::write_report_named(&dir, &stem, &report);
-    write::prune(&dir, write::RETAINED_REPORTS);
+    let report = CrashReport::gather_nonblocking(ReportKind::NativeFault, fault_message(ctx));
+    let _ = write::write_report(&log, &report, mode);
 }
 
 #[cfg(target_os = "macos")]

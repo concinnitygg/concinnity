@@ -1,4 +1,4 @@
-//! The process panic hook: writes a crash report (and a minidump where
+//! The process panic hook: writes the crash log (and a minidump where
 //! supported), then chains to the previously installed hook so the standard
 //! stderr message and unwind behavior are unchanged. A reentry guard plus
 //! `catch_unwind` keep a fault inside the reporting path from recursing; its
@@ -38,14 +38,13 @@ fn report_panic(info: &PanicHookInfo<'_>) {
     report.location = info.location().map(ToString::to_string);
     report.backtrace = Some(std::backtrace::Backtrace::force_capture().to_string());
 
-    let Some(dir) = super::report_dir() else {
+    let Some(log) = super::log_path() else {
         return;
     };
-    let stem = write::unique_stem(&dir, &report.file_stem());
-    if write::write_report_named(&dir, &stem, &report).is_ok() {
+    let mode = write::LOG.log_write();
+    if write::write_report(&log, &report, mode).is_ok() && write::DUMP.claim() {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        super::minidump::write_self_dump(&dir, &stem);
-        write::prune(&dir, write::RETAINED_REPORTS);
+        super::minidump::write_self_dump(&log);
     }
 }
 

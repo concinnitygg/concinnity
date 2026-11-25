@@ -24,10 +24,10 @@ pub enum StartupError {
         /// What the read reported.
         cause: WorldLoadError,
     },
-    /// The world was packaged as one self-contained blob file, but it needs
-    /// overflow payload blobs, which only the directory layout can hold. Their
-    /// siblings would land beside the executable, so this is refused rather
-    /// than half-loaded.
+    /// The world was named as one self-contained blob file, but it needs
+    /// overflow payload blobs, which only the directory layout can hold. Its
+    /// siblings would be read from wherever the file sits, so this is refused
+    /// rather than half-loaded.
     OverflowUnsupported {
         /// The single blob file the world was read from.
         blob: PathBuf,
@@ -95,7 +95,7 @@ impl fmt::Display for StartupError {
             Self::OverflowUnsupported { blob, needed } => write!(
                 f,
                 "{} is a single blob file, but this world spans {} more; \
-                 re-export it so the player ships a `data/` directory",
+                 name the directory holding its blobs instead",
                 blob.display(),
                 needed
             ),
@@ -184,16 +184,19 @@ mod tests {
         }
     }
 
-    // The refusal has to say what to do about it, since a player cannot tell
-    // from a half-loaded world that its data was packaged in the wrong shape.
+    // The refusal has to say what to do about it, since a half-loaded world
+    // would not show that the wrong path was named.
     #[test]
     fn the_overflow_refusal_names_the_fix() {
         let err = StartupError::OverflowUnsupported {
-            blob: PathBuf::from("/apps/MyGame/data"),
+            blob: PathBuf::from("/worlds/world.blob"),
             needed: 3,
         };
         assert!(err.to_string().contains("single blob file"), "{err:?}");
-        assert!(err.to_string().contains("`data/` directory"), "{err:?}");
+        assert!(
+            err.to_string().contains("directory holding its blobs"),
+            "{err:?}"
+        );
         assert!(err.to_string().contains('3'), "{err:?}");
         assert_eq!(err.io_kind(), std::io::ErrorKind::InvalidData);
     }

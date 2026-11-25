@@ -1,6 +1,6 @@
 //! End-to-end panic reporting: a child process (this test binary re-run with
 //! the ignored probe selected) installs the crash hooks and panics; the parent
-//! asserts a complete report lands in the state tree's crashes dir.
+//! asserts a complete crash log lands in the state tree.
 //!
 //! The runtime reads no environment of its own, so the parent hands the child a
 //! scratch root through a variable this file owns and the probe installs it.
@@ -24,10 +24,10 @@ concinnity_core::install_global_allocator!();
 #[ignore = "probe body: spawned by crash_report_lands_for_a_panicking_process"]
 fn panicking_probe() {
     let tree = std::env::var_os(PROBE_ROOT_ENV).map(concinnity_host::store::paths::StateTree::at);
-    let crashes = tree
+    let log = tree
         .as_ref()
-        .map(concinnity_host::store::paths::StateTree::crashes_dir);
-    concinnity_runtime::crash::install(crashes.as_deref());
+        .map(concinnity_host::store::paths::StateTree::crash_log_path);
+    concinnity_runtime::crash::install(log.as_deref());
     panic!("crash report end to end probe");
 }
 
@@ -52,19 +52,9 @@ fn crash_report_lands_for_a_panicking_process() {
         String::from_utf8_lossy(&output.stdout)
     );
 
-    let crashes = root.path().join("crashes");
-    let paths: Vec<_> = std::fs::read_dir(&crashes)
-        .expect("crashes dir created by the hook")
-        .flatten()
-        .map(|e| e.path())
-        .collect();
-
-    let reports: Vec<_> = paths
-        .iter()
-        .filter(|p| p.extension().is_some_and(|x| x == "txt"))
-        .collect();
-    assert_eq!(reports.len(), 1, "one report for one panic: {paths:?}");
-    let text = std::fs::read_to_string(reports[0]).unwrap();
+    let tree = concinnity_host::store::paths::StateTree::at(root.path());
+    let log = tree.crash_log_path();
+    let text = std::fs::read_to_string(&log).expect("crash log written by the hook");
     assert!(text.contains("kind: panic"));
     assert!(text.contains("message: crash report end to end probe"));
     assert!(text.contains("thread: panicking_probe"));
@@ -88,12 +78,9 @@ fn crash_report_lands_for_a_panicking_process() {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        let dumps: Vec<_> = paths
-            .iter()
-            .filter(|p| p.extension().is_some_and(|x| x == "dmp"))
-            .collect();
-        assert_eq!(dumps.len(), 1, "a minidump beside the report: {paths:?}");
-        let len = std::fs::metadata(dumps[0]).unwrap().len();
+        let len = std::fs::metadata(log.with_extension("dmp"))
+            .expect("a minidump beside the log")
+            .len();
         assert!(len > 0, "minidump has content");
     }
 }

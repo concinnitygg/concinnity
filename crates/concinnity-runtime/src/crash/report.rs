@@ -79,12 +79,6 @@ impl CrashReport {
         }
     }
 
-    // Preferred file stem for this report: sortable timestamp plus pid, so
-    // retention pruning can order reports by name alone.
-    pub(crate) fn file_stem(&self) -> String {
-        file_stem_at(self.time)
-    }
-
     // The report text as ordered sections. The writer flushes after each one.
     pub(crate) fn sections(&self) -> [String; 4] {
         [
@@ -159,12 +153,6 @@ impl CrashReport {
     }
 }
 
-// The file stem a report written at `time` claims. Free-standing so the fault
-// handler can name (and write) the minidump before it builds the report.
-pub(crate) fn file_stem_at(time: UtcTime) -> String {
-    format!("crash-{}-{}", time.stem(), std::process::id())
-}
-
 // The system clock as a civil UTC time.
 pub(crate) fn utc_now() -> UtcTime {
     let secs = SystemTime::now()
@@ -233,13 +221,5 @@ mod tests {
         assert!(text.len() < MAX_MESSAGE_BYTES + MAX_BACKTRACE_BYTES + 4096);
         // Two-byte char at the boundary: truncation stays on a boundary.
         assert!(text.contains("message: \u{e9}"));
-    }
-
-    #[test]
-    fn file_stem_orders_by_time() {
-        let older = sample().file_stem();
-        let mut newer = sample();
-        newer.time = UtcTime::from_unix(1_786_192_497);
-        assert!(newer.file_stem() > older);
     }
 }

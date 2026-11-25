@@ -13,7 +13,7 @@ use super::StateTree;
 
 /// The state tree an installed executable runs against: the content beside the
 /// executable, with the runtime-writable state (`saves/`, `settings`,
-/// `crashes/`) redirected under `per_user_base` when the content directory
+/// the crash log) redirected under `per_user_base` when the content directory
 /// cannot be written. When the content directory is writable both stay beside
 /// the data, preserving the single-folder layout.
 ///

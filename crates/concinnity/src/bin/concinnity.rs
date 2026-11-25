@@ -17,7 +17,7 @@ fn main() -> std::process::ExitCode {
     // report written from here on lands in the project rather than nowhere,
     // and handed to the dev library, which builds and runs against it.
     let tree = project_tree();
-    player::install_crash_hooks(Some(&tree.crashes_dir()));
+    player::install_crash_hooks(Some(&tree.crash_log_path()));
     concinnity_dev::project::open(tree.clone());
 
     // Printed with Display rather than the Debug a returned error gets, so a
@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(tree.data_dir(), root.join("data"));
         assert_eq!(tree.cook_lock_path().parent(), Some(root));
         assert_eq!(tree.settings_path(), root.join("settings"));
-        assert_eq!(tree.crashes_dir(), root.join("crashes"));
+        assert_eq!(tree.crash_log_path(), root.join("crash.log"));
         assert_eq!(tree.editor_session_path(), root.join("editor"));
         assert_eq!(tree.build_cache_path(), root.join("cache").join("1"));
         assert_eq!(tree.runtime_cache_path(), root.join("cache").join("0"));

@@ -1,10 +1,10 @@
 //! `cn export`: package one application for distribution. Builds it (reusing
 //! the normal build cache), then assembles a self-contained bundle: the
-//! runtime player executable beside the application's compiled `data/` blobs
-//! and its engine shaders compiled ahead of time, in a flat layout the shipped
-//! runtime resolves relative to its own executable. On
-//! macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
-//! elsewhere it is a folder. The result is archived to a `.zip` by default.
+//! runtime player executable beside the application's `data/`, which holds its
+//! compiled blobs and its engine shaders compiled ahead of time, in a flat
+//! layout the shipped runtime resolves relative to its own executable. On macOS
+//! the bundle is a proper `.app` (optionally wrapped in a `.dmg`); elsewhere it
+//! is a folder. The result is archived to a `.zip` by default.
 //!
 //! The player is the prebuilt `concinnity-player` binary that ships beside the
 //! `cn`/`concinnity` executable; export copies it rather than compiling, so a
@@ -203,7 +203,7 @@ fn export_portable(
 }
 
 // A macOS `.app` bundle: Contents/MacOS/<exe>, Contents/Info.plist, and
-// Contents/Resources/{<icon>.icns, data/, shaders}. The runtime resolves its state root
+// Contents/Resources/{<icon>.icns, data/}. The runtime resolves its state root
 // to Contents/Resources (see `concinnity_host::store::paths::tree_for_exe`).
 // Optionally zipped and/or wrapped in a `.dmg`.
 fn export_macos(

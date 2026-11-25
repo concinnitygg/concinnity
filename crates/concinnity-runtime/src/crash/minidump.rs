@@ -2,38 +2,31 @@
 //! supported in-process dump path. Linux would need an external dumper process
 //! (ptrace cannot target the running process itself), so it ships text reports
 //! only. Failures are swallowed after cleaning up the partial file; the text
-//! report already landed.
+//! log carries the crash either way.
 
 use std::path::Path;
 
-// Dump the current (healthy) process, used from the panic hook.
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "removing a partial dump is best effort; the text report already landed"
-)]
-pub(crate) fn write_self_dump(dir: &Path, stem: &str) {
-    let Ok((mut file, path)) = super::write::create_dump_file(dir, stem) else {
-        return;
-    };
-    if !dump_self(&mut file) {
-        drop(file);
-        let _ = std::fs::remove_file(path);
-    }
+// Dump the current (healthy) process beside the crash log at `log`, used
+// from the panic hook.
+pub(crate) fn write_self_dump(log: &Path) {
+    write_dump(log, dump_self);
 }
 
 // Dump using the native fault handler's crash context, so the dump records
 // the faulting thread and exception rather than the handler.
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "removing a partial dump is best effort; the text report already landed"
-)]
-pub(crate) fn write_fault_dump(dir: &Path, stem: &str, ctx: &crash_handler::CrashContext) {
-    let Ok((mut file, path)) = super::write::create_dump_file(dir, stem) else {
-        return;
+pub(crate) fn write_fault_dump(log: &Path, ctx: &crash_handler::CrashContext) {
+    write_dump(log, |file| dump_fault(file, ctx));
+}
+
+// Replace the dump beside `log` with what `dump` writes, removing it when the
+// dump fails so no earlier crash's dump is left beside the new log.
+fn write_dump(log: &Path, dump: impl FnOnce(&mut std::fs::File) -> bool) {
+    let written = match super::write::create_truncated(&super::write::dump_path(log)) {
+        Ok(mut file) => dump(&mut file),
+        Err(_) => false,
     };
-    if !dump_fault(&mut file, ctx) {
-        drop(file);
-        let _ = std::fs::remove_file(path);
+    if !written {
+        super::write::remove_dump(log);
     }
 }
 

@@ -455,55 +455,42 @@ fn copy_blobs_takes_only_integer_named_files() {
     let dst = tmp.path().join("out");
     let count = copy_blobs(&src, &dst).unwrap();
     assert_eq!(count, 2);
-    assert!(dst.is_dir(), "an overflowing world ships a directory");
     assert_eq!(fs::read(dst.join("0")).unwrap(), b"blob0");
     assert_eq!(fs::read(dst.join("12")).unwrap(), b"blob12");
     assert!(!dst.join("default_vert.air").exists());
     assert!(!dst.join("settings").exists());
 }
 
-// A world that fits in one blob ships as a file named `data`, which is what
-// keeps a small game's bundle from carrying integer-named files at all.
+// A world that fits in one blob still ships a `data/` directory, which is where
+// the exported shaders sit beside it.
 #[test]
-fn a_single_blob_world_ships_as_one_file() {
+fn a_single_blob_world_ships_a_directory() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("data");
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("0"), b"blob0").unwrap();
-    fs::write(src.join("default_vert.air"), b"scratch").unwrap();
 
     let dst = tmp.path().join("bundle").join("data");
     assert_eq!(copy_blobs(&src, &dst).unwrap(), 1);
-    assert!(dst.is_file(), "one blob ships as the `data` file itself");
-    assert_eq!(fs::read(&dst).unwrap(), b"blob0");
+    assert_eq!(fs::read(dst.join("0")).unwrap(), b"blob0");
 }
 
-// The two forms occupy the same name, so a re-export across the boundary
-// has to clear whatever the last one left rather than write a file over a
-// directory (or leave a stale `1` beside a now-single blob).
+// A re-export replaces the blobs whole, so a world that shrank leaves no stale
+// overflow blob behind.
 #[test]
-fn re_exporting_across_the_form_boundary_replaces_the_previous_shape() {
+fn re_exporting_a_smaller_world_drops_the_stale_blobs() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("data");
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("0"), b"blob0").unwrap();
     fs::write(src.join("1"), b"blob1").unwrap();
     let dst = tmp.path().join("bundle").join("data");
-
     assert_eq!(copy_blobs(&src, &dst).unwrap(), 2);
-    assert!(dst.is_dir());
 
-    // The world shrinks to one blob: the directory gives way to a file.
     fs::remove_file(src.join("1")).unwrap();
     assert_eq!(copy_blobs(&src, &dst).unwrap(), 1);
-    assert!(dst.is_file());
-    assert_eq!(fs::read(&dst).unwrap(), b"blob0");
-
-    // ...and back the other way.
-    fs::write(src.join("1"), b"blob1").unwrap();
-    assert_eq!(copy_blobs(&src, &dst).unwrap(), 2);
-    assert!(dst.is_dir());
-    assert_eq!(fs::read(dst.join("1")).unwrap(), b"blob1");
+    assert!(dst.join("0").is_file());
+    assert!(!dst.join("1").exists());
 }
 
 // A build that produced nothing is caught here rather than shipping a
@@ -723,11 +710,10 @@ fn export_macos_builds_app_bundle_with_default_icon() {
 
     let app = out.join("My-Game.app");
     assert!(app.join("Contents/MacOS/My-Game").exists(), "exe missing");
-    // One blob, so the bundle carries `data` as a file rather than a
-    // directory -- the form the player reads as blob 0 directly.
-    let data_entry = app.join("Contents/Resources/data");
-    assert!(data_entry.is_file(), "blob missing");
-    assert_eq!(fs::read(&data_entry).unwrap(), b"blob0");
+    // The blobs and the shaders share `data/` under the bundle's resources.
+    let data_dir = app.join("Contents/Resources/data");
+    assert_eq!(fs::read(data_dir.join("0")).unwrap(), b"blob0");
+    assert_eq!(fs::read(data_dir.join("shaders")).unwrap(), b"shaders");
     assert!(
         app.join("Contents/Resources/My-Game.icns").exists(),
         "icns missing"

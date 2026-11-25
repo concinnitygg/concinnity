@@ -7,11 +7,10 @@
 //! working directory, so the app finds its data whether it is double-clicked,
 //! launched from a shell, or run from inside a macOS `.app` bundle.
 //!
-//! Inside that directory the world is either a file named `data` (one
-//! self-contained blob, what `cn export` ships for a small game) or a directory
-//! named `data` holding blob `0` and its overflow siblings. A single positional
-//! argument overrides both with a blob file or a directory of blobs; it moves
-//! only what is read, never where the app writes.
+//! Inside that directory the world is the `data/` directory `cn export` ships,
+//! holding blob `0`, its overflow siblings, and the engine shaders. A single
+//! positional argument overrides it with a blob file or a directory of blobs;
+//! it moves only what is read, never where the app writes.
 //!
 //! One file, owning what a process owns: the backend and shader stamps `cn
 //! export` reads back. Resolving the layout and loading the world come from
@@ -73,7 +72,7 @@ fn main() -> std::io::Result<()> {
 
     // Before anything else can fault: a report written from here on lands
     // beside the app rather than nowhere.
-    player::install_crash_hooks(Some(&tree.crashes_dir()));
+    player::install_crash_hooks(Some(&tree.crash_log_path()));
 
     // One positional argument names the world instead of the bundled `data`.
     // It moves only what is read: `saves/` and `settings` stay in the tree

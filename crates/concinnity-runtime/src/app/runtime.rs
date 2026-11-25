@@ -308,7 +308,7 @@ impl Runtime {
         self.launch_args().graphics_api
     }
 
-    // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the
+    // Point the runtime-writable state (`settings`, `saves/`, the
     // shader caches) at the world's `AppConfig.home`. Runs before
     // `world.start(SYSTEMS)`, which is where the systems that capture a save
     // directory are built, and before anything reads the settings file. An
