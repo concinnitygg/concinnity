@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Build-script support for Concinnity: backend cfg resolution and graphics SDK setup"
+description = "Build-script support for Concinnity: backend cfg resolution, source hashing and the version stamp"
 readme = "README.md"
 keywords = ["gamedev", "build-dependencies", "concinnity"]
 categories = ["game-engines", "development-tools::build-utils"]
@@ -16,13 +16,7 @@ include = [
 ]
 
 [dependencies]
-concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
-concinnity-shader = { workspace = true }
-
-# The MSL leg links spirv-cross; only a macOS host emits metallibs.
-[target.'cfg(target_os = "macos")'.dependencies]
-concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }

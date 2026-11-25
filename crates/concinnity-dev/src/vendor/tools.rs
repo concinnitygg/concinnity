@@ -1,35 +1,14 @@
-//! What `cargo xtask vendor` vendors: the shader compiler the build itself
-//! needs. The runtime SDKs an app loads are vendored by `concinnity vendor`
-//! instead, which the engine crates can depend on.
+//! The tools a development run and an export compile with: the shader compiler
+//! every engine shader goes through.
 
-use concinnity_vendor::{Component, Host, Source};
-
-/// Every component, in the order a bare verb visits them.
-pub(crate) const COMPONENTS: [&Component; 1] = [&DXC];
-
-/// Every component's name, for the command line to offer.
-pub(crate) const NAMES: [&str; 1] = [DXC.name];
-
-pub(crate) fn find(name: &str) -> Option<&'static Component> {
-    COMPONENTS
-        .into_iter()
-        .find(|component| component.name == name)
-}
-
-/// The build scripts that resolve `component`. They watch only the files they
-/// resolved, so touching them is what picks up a new install.
-pub(crate) fn watchers(component: &Component) -> &'static [&'static str] {
-    match component.name {
-        "dxc" => &["crates/concinnity-shader/build.rs"],
-        _ => &[],
-    }
-}
+use super::component::{Component, Source};
+use super::host::Host;
 
 /// The DirectX Shader Compiler every engine shader compiles through.
 ///
-/// One release for every host, since the SPIR-V, DXIL and MSL a build embeds
-/// and the runtime shader cache's key are all functions of it. Windows and
-/// Linux take Microsoft's release archive, cut to the compiler, the two
+/// One release for every host, since the SPIR-V, DXIL and MSL the engine
+/// compiles and the runtime shader cache's key are all functions of it. Windows
+/// and Linux take Microsoft's release archive, cut to the compiler, the two
 /// libraries it loads and the license files. Microsoft publishes no macOS
 /// build, so a Mac builds the same tagged commit from source (see
 /// `source_build::dxc`).
@@ -111,14 +90,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_follow_the_table() {
-        let names: Vec<&str> = COMPONENTS.iter().map(|c| c.name).collect();
-        assert_eq!(names, NAMES);
-        assert!(find("dxc").is_some());
-        assert!(find("xess").is_none());
-    }
-
-    #[test]
     fn dxc_pins_every_download() {
         for &host in DXC.hosts {
             if !DXC.is_built(host) {
@@ -135,13 +106,16 @@ mod tests {
     }
 
     #[test]
-    fn only_installed_releases_count_as_vendored() {
+    fn a_vendored_dxc_is_the_one_the_shader_compiler_finds() {
+        let Some(host) = Host::current() else {
+            return;
+        };
         let vendor = tempfile::tempdir().unwrap();
-        let host = Host::LinuxX64;
-        let installed = vendor.path().join("dxc-1.9.2607-linux-x86_64");
-        std::fs::create_dir_all(installed.join("bin")).unwrap();
-        std::fs::write(installed.join("bin/dxc"), b"").unwrap();
-        std::fs::create_dir_all(vendor.path().join("dxc-1.8.0-linux-x86_64")).unwrap();
-        assert_eq!(DXC.vendored_in(vendor.path(), host), vec![installed]);
+        let exe = DXC
+            .install_dir(vendor.path(), host)
+            .join((DXC.payload)(host));
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(concinnity_shader::vendored_dxc(vendor.path()), vec![exe]);
     }
 }

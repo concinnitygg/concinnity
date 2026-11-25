@@ -42,6 +42,16 @@ mod mcp;
 mod run;
 mod vendor;
 
+/// Have shader compiles use the dxc `concinnity vendor` pinned, and the
+/// renderer load the runtime SDKs it staged, for the workspace the process was
+/// started in (else the per-user vendor directory), as `concinnity run` does.
+/// Call it first, before anything compiles a shader or starts a renderer. An
+/// exported app ships its shaders and libraries and does not call this.
+pub fn use_vendored() {
+    vendor::use_vendored_tools();
+    vendor::use_staged_runtime();
+}
+
 /// The `cn` command line: the arguments a run was given, and the command they
 /// name.
 pub mod cli;

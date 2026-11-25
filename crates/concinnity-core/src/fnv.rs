@@ -28,9 +28,11 @@ impl Fnv1a {
     }
 
     /// Fold `bytes` into the hash.
-    pub fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::PRIME);
+    pub const fn write(&mut self, bytes: &[u8]) {
+        let mut i = 0;
+        while i < bytes.len() {
+            self.0 = (self.0 ^ bytes[i] as u64).wrapping_mul(Self::PRIME);
+            i += 1;
         }
     }
 
@@ -40,7 +42,7 @@ impl Fnv1a {
     }
 
     /// The hash of `bytes` alone.
-    pub fn of(bytes: &[u8]) -> u64 {
+    pub const fn of(bytes: &[u8]) -> u64 {
         let mut hash = Self::new();
         hash.write(bytes);
         hash.finish()

@@ -19,6 +19,7 @@ pub fn assets_dir_of(content: &Path) -> PathBuf {
 const ASSETS_DIR: &str = "assets";
 const DATA_DIR: &str = "data";
 const COOK_LOCK_FILE: &str = "cook-lock.json";
+const SHIPPED_SHADERS_FILE: &str = "shaders";
 const SAVES_DIR: &str = "saves";
 const PREVIEW_SAVES_DIR: &str = "preview-saves";
 const SETTINGS_FILE: &str = "settings";
@@ -148,6 +149,12 @@ impl StateTree {
     /// what the build injected that no authored line asked for.
     pub fn cook_lock_path(&self) -> PathBuf {
         self.build_root().join(COOK_LOCK_FILE)
+    }
+
+    /// The engine shaders an exported app ships beside its blobs, compiled
+    /// ahead of time so the app needs no shader compiler.
+    pub fn shipped_shaders_path(&self) -> PathBuf {
+        self.build_root().join(SHIPPED_SHADERS_FILE)
     }
 
     /// Directory holding the runtime save files. Created on first write by the

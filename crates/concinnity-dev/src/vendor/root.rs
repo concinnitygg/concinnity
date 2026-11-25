@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// The vendor directory for a tool started in `cwd`: `vendor/` beside the
 /// manifest of the nearest enclosing Cargo workspace, else `concinnity/vendor`
 /// under `per_user_base`. `None` when neither exists.
-pub fn vendor_root(cwd: &Path, per_user_base: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn vendor_root(cwd: &Path, per_user_base: Option<&Path>) -> Option<PathBuf> {
     workspace_root(cwd)
         .map(|root| root.join("vendor"))
         .or_else(|| per_user_base.map(|base| base.join("concinnity").join("vendor")))

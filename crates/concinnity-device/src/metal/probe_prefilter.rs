@@ -42,7 +42,7 @@ use super::error::allocation_failed;
 pub(in crate::metal) const PROBE_CUBE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
 /// The three compute pipelines a probe bake convolves with, built once from the
-/// precompiled `probe_prefilter.hlsl` variants.
+/// `probe_prefilter.hlsl` variants.
 pub(in crate::metal) struct ProbePrefilterPipelines {
     mip0: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     downsample: Retained<ProtocolObject<dyn MTLComputePipelineState>>,

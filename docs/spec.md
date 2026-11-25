@@ -742,6 +742,7 @@ Everything the engine writes for a project lives under one state directory.
 <state root>/
 |-- data/            compiled blobs (0, 1, 2, ...)        read-only at runtime
 |-- cook-lock.json   build provenance record (6.3)        cook only
+|-- shaders          engine shaders an export ships       export only
 |-- cache/           regenerable, deletable at any time   see 8.2
 |   |-- 0            runtime cache segment                runtime-writable
 |   `-- 1            build cache segment                  cook only
@@ -756,7 +757,7 @@ Everything the engine writes for a project lives under one state directory.
 The tree has four roots, and a host that keeps them together gets the layout
 above. The **content** root holds what a person authors (`assets/`, `.jsonl`
 files); the **build** root holds what a build produces (`data/`,
-`cook-lock.json`); the
+`cook-lock.json`, and in an exported app `shaders`); the
 **writable** root holds what a run writes (`saves/`, `settings`, `crashes/`); the
 **cache** root holds the regenerable segments. Each of the last three defaults
 to the content root and may be split away on its own.
@@ -800,9 +801,10 @@ valid for:
   the adapter, never ship, and a cache from another adapter is a miss.
 - Runtime-compiled shader artifacts key on a digest of everything the compile
   depended on, and the segment names the shader toolchain that produced them, so
-  a compiler upgrade discards them. Only shaders no build could enumerate land
-  here: an edited shader under hot reload, a program sized to the device below
-  the build's ceiling, a world's own distance field.
+  a compiler upgrade discards them. In a development run every engine shader
+  lands here on first use; an exported app adds only what its export could not
+  enumerate: an edited shader under hot reload, a program sized to the device
+  below the build's ceiling, a world's own distance field.
 
 **`cache/1`, the build segment.** The same container written by the cook: compiled
 payloads and scene-import expansions keyed by a digest of their args and source
@@ -2076,17 +2078,19 @@ flowchart LR
 Programs are assembled by splicing shared fragments and injecting variant and
 backend defines; the assembled text is the key for a content-addressed cache. Every
 resource declares an explicit register, from which the Metal binding index is
-derived, and build-time checks verify both the Metal and DXIL bindings against
-what each host binds. Constants shared between host and shader are defined once and
+derived, and tests verify both the Metal and DXIL bindings against what each
+host binds. Constants shared between host and shader are defined once and
 verified by test.
 
 ### 13.2 Production and caching
 
-Every declared engine program is compiled at **engine build time** and embedded in
-the binary, on all three backends. At runtime a program is fetched from the
-embedded set when its source digest matches, else from the runtime cache segment,
-else compiled. A shipped player therefore compiles nothing at start-up and needs no
-shader compiler. Driver pipeline caches are persisted per adapter (section 8.2).
+Nothing is compiled at engine build time. Export compiles every declared engine
+program for the player's graphics APIs and ships them in one file beside the
+compiled world. At runtime a program is fetched from that shipped set when its
+source digest matches, else from the runtime cache segment, else compiled and
+cached. A shipped player therefore compiles nothing at start-up and needs no
+shader compiler; a development run compiles each program on first use. Driver
+pipeline caches are persisted per adapter (section 8.2).
 
 In a development session, engine shaders hot-reload from the source checkout.
 

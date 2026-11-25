@@ -2,7 +2,7 @@
 
 Build-script support for the
 [Concinnity](https://crates.io/crates/concinnity) workspace: backend cfg
-resolution, shader precompilation and source hashing.
+resolution, source hashing and the version stamp.
 
 Consumed only under `[build-dependencies]`, never linked into a shipped
 binary. Every build script that compiles the renderer resolves the rendering

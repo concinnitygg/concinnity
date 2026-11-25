@@ -1,10 +1,10 @@
 //! Compiling an `SdfVolume`'s authored distance field into every entry the
 //! volume draws with.
 //!
-//! Every other engine shader is a build-time artifact of the engine itself.
-//! This one is only complete once a world authors the field that goes in the
-//! middle of the template, so it compiles here, where a shipped player never
-//! needs a compiler of its own. Each family's source is assembled with the
+//! Every other engine shader is the engine's own, compiled on first use or by
+//! export. This one is only complete once a world authors the field that goes
+//! in the middle of the template, so it compiles here, where a shipped player
+//! never needs a compiler of its own. Each family's source is assembled with the
 //! field spliced at its marker and compiled for the host's target (see
 //! `program`).
 //!

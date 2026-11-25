@@ -1,10 +1,10 @@
 //! The single-source engine shaders, embedded once for every consumer.
 //!
-//! Both halves of the toolchain read these: the renderer compiles them at init
-//! (or loads a precompiled artifact keyed by their text), and the device build
-//! script compiles the same text ahead of time. They live here, below the
-//! backends, so the two can never disagree about what a program's source is --
-//! the content-addressed shader cache keys on exactly this text.
+//! Both halves of the toolchain read these: the renderer compiles them on first
+//! use (or loads a shipped or cached artifact keyed by their text), and export
+//! compiles the same text ahead of time. They live here, below the backends, so
+//! the two can never disagree about what a program's source is -- the
+//! content-addressed shader cache keys on exactly this text.
 //!
 //! Every one is HLSL: a program compiles through dxc, and through spirv-cross
 //! as well on the Metal leg. A splice fragment is plain text to the assembler
@@ -20,7 +20,7 @@ macro_rules! embed_shaders {
         )*
 
         /// Every embedded shader, as (file name, source). `embedded` looks up by
-        /// name; a build script iterating the set walks this table.
+        /// name; anything iterating the set walks this table.
         pub const SOURCES: &[(&str, &str)] = &[$(($file, $name)),*];
     };
 }
@@ -132,4 +132,29 @@ pub fn embedded(file: &str) -> Option<&'static str> {
     SOURCES
         .iter()
         .find_map(|(name, text)| (*name == file).then_some(*text))
+}
+
+// SOURCES_HASH: derived by build.rs from every shader under `hlsl/`.
+include!(concat!(env!("OUT_DIR"), "/shader_sources_hash.rs"));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use concinnity_core::fnv::Fnv1a;
+
+    // The build script hashes the directory; this hashes what is embedded. They
+    // agree only while every shader in the directory is embedded under its name.
+    #[test]
+    fn the_sources_hash_covers_exactly_the_embedded_shaders() {
+        let mut sources = SOURCES.to_vec();
+        sources.sort_unstable();
+        let mut hash = Fnv1a::new();
+        for (name, text) in sources {
+            hash.write(&(name.len() as u64).to_le_bytes());
+            hash.write(name.as_bytes());
+            hash.write(&(text.len() as u64).to_le_bytes());
+            hash.write(text.as_bytes());
+        }
+        assert_eq!(hash.finish(), SOURCES_HASH);
+    }
 }

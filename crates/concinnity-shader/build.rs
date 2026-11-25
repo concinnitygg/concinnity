@@ -3,12 +3,12 @@
 //! source text and of the flags this crate builds, so a change here must miss
 //! rather than replay stale bytes.
 //!
-//! Self-contained rather than calling `concinnity_toolchain::hash_sources`,
-//! because that crate depends on this one and a build dependency back would
-//! cycle.
+//! Self-contained, so this crate takes no build dependency for a few lines of
+//! hashing.
 //!
 //! Also locates the workspace root, under whose `vendor/` directory `locate`
-//! looks for the pinned dxc release.
+//! looks for the pinned dxc release when the dev CLI named no other, as when
+//! the workspace's own tests compile shaders.
 
 use std::path::{Path, PathBuf};
 
@@ -62,7 +62,6 @@ fn main() {
 // The workspace root, two levels above this manifest, under which `vendor/`
 // holds the pinned dxc release. A registry copy has neither that layout nor a
 // manifest there, so it emits `None` and resolution falls through to PATH.
-// `cargo xtask vendor` touches this file after installing dxc, which reruns it.
 fn emit_workspace_root(manifest: &Path, out_dir: &Path) {
     let root = manifest
         .parent()

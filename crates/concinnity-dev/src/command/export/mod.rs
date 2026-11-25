@@ -1,7 +1,8 @@
 //! `cn export`: package one application for distribution. Builds it (reusing
 //! the normal build cache), then assembles a self-contained bundle: the
-//! runtime player executable beside the application's compiled `data/` blobs, in a
-//! flat layout the shipped runtime resolves relative to its own executable. On
+//! runtime player executable beside the application's compiled `data/` blobs
+//! and its engine shaders compiled ahead of time, in a flat layout the shipped
+//! runtime resolves relative to its own executable. On
 //! macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
 //! elsewhere it is a folder. The result is archived to a `.zip` by default.
 //!
@@ -15,6 +16,7 @@ mod files;
 mod macos;
 mod meta;
 mod runtime;
+mod shaders;
 #[cfg(test)]
 mod tests;
 
@@ -31,8 +33,9 @@ use macos::{build_default_icns, build_dmg, build_icns, info_plist};
 use meta::{artifact_stem, platform_tag, slug, world_app_meta};
 use runtime::{
     check_target_platform, copy_runtime_sidecars, exe_file_name, read_runtime_platforms,
-    runtime_binary_path, verify_runtime_backend,
+    runtime_binary_path, verify_runtime_backend, verify_runtime_shader_stamp,
 };
+use shaders::{compile_shipped_shaders, write_shipped_shaders};
 
 // Resolved naming/metadata for the exported app.
 struct AppMeta {
@@ -99,17 +102,26 @@ pub(crate) fn export(options: &ExportOptions<'_>) -> io::Result<()> {
     }
 
     // Fail fast, before building, on the things export cannot recover from: a
-    // target that is not this platform, a missing runtime player, and a runtime
-    // rendering with a backend this `cn` cannot cook blobs for.
+    // target that is not this platform, a missing runtime player, a runtime
+    // rendering with a backend this `cn` cannot cook blobs for, and one that
+    // would refuse the shaders this `cn` compiles.
     check_target_platform(platform)?;
     let runtime = runtime_binary_path()?;
-    let runtime_platforms = read_runtime_platforms(&runtime)?;
+    let runtime_bytes = fs::read(&runtime)?;
+    let runtime_platforms = read_runtime_platforms(&runtime_bytes, &runtime)?;
+    verify_runtime_shader_stamp(
+        &runtime_bytes,
+        &runtime,
+        concinnity_runtime::SHIPPED_SHADER_STAMP,
+    )?;
+    drop(runtime_bytes);
     let targets = verify_runtime_backend(runtime_platforms, crate::cook_targets())?;
 
     // Build the application like `cn cook` (validates, compiles, writes the
     // blobs + cook-lock.json, reuses the build cache), for the player's backends.
     let world_path = target.resolve()?;
     crate::authoring::build_world_file_for(&world_path, targets)?;
+    let shaders = compile_shipped_shaders(targets)?;
 
     let content = fs::read_to_string(&world_path)?;
     let root = crate::project::content_root();
@@ -129,7 +141,7 @@ pub(crate) fn export(options: &ExportOptions<'_>) -> io::Result<()> {
     })?;
 
     if cfg!(target_os = "macos") {
-        export_macos(&meta, &runtime, out_dir, &data_dir, make_zip, dmg)
+        export_macos(&meta, &runtime, out_dir, &data_dir, &shaders, make_zip, dmg)
     } else {
         export_portable(
             &meta,
@@ -137,6 +149,7 @@ pub(crate) fn export(options: &ExportOptions<'_>) -> io::Result<()> {
             runtime_platforms,
             out_dir,
             &data_dir,
+            &shaders,
             make_zip,
         )
     }
@@ -152,6 +165,7 @@ fn export_portable(
     runtime_platforms: Option<PlatformSet>,
     out_dir: &Path,
     data_dir: &Path,
+    shaders: &[u8],
     make_zip: bool,
 ) -> io::Result<()> {
     let slug = slug(&meta.display_name);
@@ -176,6 +190,7 @@ fn export_portable(
     copy_runtime_sidecars(runtime_libraries.as_deref(), runtime_platforms, &bundle_dir)?;
 
     let blobs = copy_blobs(data_dir, &StateTree::at(&bundle_dir).data_dir())?;
+    write_shipped_shaders(shaders, &bundle_dir)?;
     report_export(&meta.display_name, &bundle_dir, blobs);
 
     if make_zip {
@@ -188,7 +203,7 @@ fn export_portable(
 }
 
 // A macOS `.app` bundle: Contents/MacOS/<exe>, Contents/Info.plist, and
-// Contents/Resources/{<icon>.icns, data/}. The runtime resolves its state root
+// Contents/Resources/{<icon>.icns, data/, shaders}. The runtime resolves its state root
 // to Contents/Resources (see `concinnity_host::store::paths::tree_for_exe`).
 // Optionally zipped and/or wrapped in a `.dmg`.
 fn export_macos(
@@ -196,6 +211,7 @@ fn export_macos(
     runtime: &Path,
     out_dir: &Path,
     data_dir: &Path,
+    shaders: &[u8],
     make_zip: bool,
     make_dmg: bool,
 ) -> io::Result<()> {
@@ -214,6 +230,7 @@ fn export_macos(
     make_executable(&exe_dst)?;
 
     let blobs = copy_blobs(data_dir, &StateTree::at(&resources).data_dir())?;
+    write_shipped_shaders(shaders, &resources)?;
 
     // Build the .icns from the AppConfig's icon, falling back to the bundled
     // engine default so every macOS bundle carries an icon.

@@ -1,10 +1,10 @@
 //! The checks every program table runs.
 //!
-//! Completeness: `ALL` is what the build script iterates, so a program declared
-//! but left off it compiles at renderer init on every host instead of being
-//! carried in the binary. Nothing observes that at runtime beyond a line in the
-//! log, and a warm shader cache hides even that, so the declarations are read
-//! from the module's own source text.
+//! Completeness: `ALL` is what an export iterates, so a program declared but
+//! left off it compiles at renderer init in every exported app instead of being
+//! shipped. Nothing observes that at runtime beyond a line in the log, and a
+//! warm shader cache hides even that, so the declarations are read from the
+//! module's own source text.
 //!
 //! Soundness: every row assembles to a compilable source that holds its entry,
 //! and no two rows share an artifact key or compile the same program.
@@ -33,7 +33,7 @@ pub(super) struct Row {
 ///   one reaches the compiler as a syntax error at renderer init;
 /// - its entry point appears in the assembled source, so a rename on one side
 ///   fails here rather than at a pipeline build;
-/// - its label is unique, since the label keys the precompiled artifact and a
+/// - its label is unique, since the label keys the shipped artifact and a
 ///   shared one would hand one variant's bytes to another;
 /// - no other row compiles the same (file, entry, defines).
 pub(super) fn assert_rows_are_sound(table: &str, rows: &[Row]) {

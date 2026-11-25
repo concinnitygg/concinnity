@@ -113,8 +113,7 @@ fn check_bindless_support(
         ));
     }
     // SAFETY: the index is the static buffer index the engine fragment declares
-    // its texture argument buffer at (locked by the build script's ABI
-    // assertion).
+    // its texture argument buffer at (locked by the ABI tests).
     let texture =
         unsafe { fragment.newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX) };
     let expected = bindless_block_len(1);
@@ -146,8 +145,7 @@ pub(crate) fn build_bindless_sampler_args(
     )?;
     check_bindless_support(device, &fragment)?;
     // SAFETY: the index is the static buffer index the engine fragment declares
-    // its sampler argument buffer at (locked by the build script's ABI
-    // assertion).
+    // its sampler argument buffer at (locked by the ABI tests).
     let encoder =
         unsafe { fragment.newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX) };
     let len = encoder.encodedLength().max(16);

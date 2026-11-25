@@ -3,9 +3,10 @@
 //!
 //! An `SdfVolume` is the one asset whose shader source is only complete once a
 //! world is loaded, because the world authors the field that goes in the middle
-//! of the engine's template. Every other engine shader is a build-time artifact.
-//! Making this one a build-time artifact too is what keeps a shipped player from
-//! needing a shader compiler: the cook runs dxc and stores what it emitted.
+//! of the engine's template. Every other engine shader is the engine's own,
+//! which an export compiles and ships. Compiling this one in the cook is what
+//! keeps a shipped player from needing a shader compiler: the cook runs dxc and
+//! stores what it emitted.
 //!
 //! The field rides along with the artifacts because a compiled artifact is only
 //! usable while the template it was built against still matches. The renderer

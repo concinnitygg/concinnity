@@ -1,5 +1,5 @@
 name: Vendor third-party binaries
-description: Runs `cargo xtask vendor` commands
+description: Vendors the shader compiler with `concinnity vendor dxc`
 runs:
   using: composite
   steps:
@@ -10,7 +10,7 @@ runs:
         path: |
           vendor
           !vendor/.build
-        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/xtask/src/components.rs', 'crates/xtask/src/source_build.rs') }}
+        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/concinnity-dev/src/vendor/tools.rs', 'crates/concinnity-dev/src/vendor/source_build.rs') }}
 
     - name: Install Ninja
       if: runner.os == 'macOS' && steps.restore.outputs.cache-hit != 'true'
@@ -18,8 +18,9 @@ runs:
       run: command -v ninja || brew install ninja
 
     - name: Vendor Binaries
+      if: steps.restore.outputs.cache-hit != 'true'
       shell: bash
-      run: cargo xtask vendor
+      run: cargo run --locked --all-features --bin concinnity -- vendor dxc
 
     # Saved before the build so a failing test does not throw away a source build.
     - name: Save Vendored Binaries

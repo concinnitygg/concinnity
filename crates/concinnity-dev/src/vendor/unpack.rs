@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
 
-use crate::files::{remove_dir_quietly, staging_dir};
-use crate::{Context, Result, fail};
+use super::files::{remove_dir_quietly, staging_dir};
+use super::{Context, Result, fail};
 
 /// Extract `archive` into `target`, replacing it only once it holds `payload`.
 ///

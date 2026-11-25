@@ -181,28 +181,14 @@ pub mod launch {
 pub mod player {
     pub use concinnity_host::store::paths::{StateTree, per_user_base, tree_for_exe};
     pub use concinnity_runtime::crash::install as install_crash_hooks;
-    pub use concinnity_runtime::{BlobSource, run_from};
+    pub use concinnity_runtime::{BlobSource, SHIPPED_SHADER_STAMP, run_from};
 }
 
 /// Development-time setup a binary run from a checkout can ask for. Requires
-/// the `cook` feature.
-#[cfg(feature = "cook")]
+/// the `editor` feature.
+#[cfg(feature = "editor")]
 pub mod dev {
-    /// Have the renderer load the runtime SDKs (the upscalers and the Agility
-    /// D3D12 runtime) that `concinnity vendor` staged for the workspace the
-    /// process was started in, as `concinnity run` does. Call it first, before
-    /// anything starts a renderer. A shipped app keeps those libraries beside
-    /// its executable and does not call this.
-    pub fn use_vendored_runtime() {
-        let cwd = std::env::current_dir().ok();
-        let base = concinnity_host::store::paths::per_user_base();
-        if let Some(dir) = cwd
-            .as_deref()
-            .and_then(|cwd| concinnity_vendor::runtime::staged_for(cwd, base.as_deref()))
-        {
-            concinnity_runtime::use_runtime_libraries(&dir);
-        }
-    }
+    pub use concinnity_dev::use_vendored;
 }
 
 /// The heap figures the counting allocator keeps. `stats` is `None` in a

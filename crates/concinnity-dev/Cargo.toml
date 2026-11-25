@@ -27,13 +27,16 @@ concinnity-cook = { workspace = true, features = ["schema"] }
 concinnity-engine = { workspace = true, features = ["schema"] }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-vendor = { workspace = true }
+concinnity-shader = { workspace = true }
+flate2 = { workspace = true }
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
 rayon = { workspace = true }
 rfd = { workspace = true, features = ["xdg-portal"] }
+sha2 = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+tar = { workspace = true }
 terminal_size = { workspace = true }
 tracing = { workspace = true, features = ["std"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
@@ -48,7 +51,7 @@ objc2-foundation = { workspace = true }
 [dev-dependencies]
 concinnity-engine = { workspace = true, features = ["test-support"] }
 concinnity-core = { workspace = true, features = ["test-support"] }
-concinnity-shader = { workspace = true }
+concinnity-device = { workspace = true }
 concinnity-testing = { workspace = true }
 tempfile = { workspace = true }
 

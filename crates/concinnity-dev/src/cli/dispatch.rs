@@ -19,8 +19,10 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         quiet: cli.quiet,
         ..args.clone()
     };
-    // A launch loads the runtime SDKs `concinnity vendor` staged, which the
-    // renderer has to know of before anything probes a device.
+    // Shaders compile with the dxc `concinnity vendor` pinned, and a launch
+    // loads the runtime SDKs it staged, which the renderer has to know of
+    // before anything probes a device.
+    crate::vendor::use_vendored_tools();
     if cli.command.launch_args(cli.quiet).is_some() {
         crate::vendor::use_staged_runtime();
     }
@@ -73,7 +75,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         }),
         Commands::Mcp(args) => crate::run_mcp(args.debug_port),
         Commands::Vendor(args) => crate::vendor::vendor(&crate::vendor::VendorRequest {
-            sdks: &args.sdks,
+            components: &args.components,
             force: args.force,
             accept_licenses: args.accept_licenses,
             status: args.status,

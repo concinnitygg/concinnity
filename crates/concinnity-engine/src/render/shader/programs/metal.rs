@@ -1,15 +1,14 @@
 //! Single-source engine shader programs for the Metal backend.
 //!
 //! Each program compiles a file under `src/render/shader/hlsl/` to its own metallib
-//! through dxc's SPIR-V, spirv-cross and the Metal toolchain: at build time
-//! where the host has them, and at renderer init otherwise, cached in the
-//! content-addressed shader cache. Each library holds one entry point, so a
-//! variant binds only the resources it reads, and its artifact name is the key
-//! the build script files it under and the renderer looks it up by.
+//! through dxc's SPIR-V, spirv-cross and the Metal toolchain on first use,
+//! cached in the content-addressed shader cache, unless an export shipped it.
+//! Each library holds one entry point, so a variant binds only the resources it
+//! reads, and its artifact name is the key an export files it under and the
+//! renderer looks it up by.
 //!
 //! The sources' `CN_BACKEND_METAL` branches reproduce the engine's Metal
-//! binding layout; `assert_metal_abi` in the device build script locks the
-//! emitted slot assignment.
+//! binding layout; the device's ABI tests lock the emitted slot assignment.
 //!
 //! Every depth-reading program reads the resolved single-sample depth here,
 //! where Vulkan and DirectX read the multisampled original, so each compiles
@@ -21,7 +20,7 @@ use super::{ShaderProgram, Table, shared};
 /// (`buffer(7)` in `main_bindless.hlsl`) sits, by `[[id(n)]]`. The fixed
 /// members come first and the unsized texture pool last, so no fixed id depends
 /// on the pool's length. The ids are the source's register numbers; the device
-/// build script reads each one back from the emitted MSL.
+/// tests read each one back from the emitted MSL.
 pub mod bindless_textures {
     /// The cascaded shadow map array.
     pub const SHADOW_MAP: usize = 0;

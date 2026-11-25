@@ -1218,8 +1218,8 @@ mod tests {
     }
 
     // Reading the main pass's depth is what makes a program's assembly depend on
-    // the host's sample count, and the build script embeds a variant per sample
-    // count for exactly those. A program that gained or lost the dependency
+    // the host's sample count, and export ships a variant per sample count for
+    // exactly those. A program that gained or lost the dependency
     // silently would leave one MSAA mode compiling at renderer init.
     #[test]
     fn only_the_depth_reading_programs_take_the_sample_count() {

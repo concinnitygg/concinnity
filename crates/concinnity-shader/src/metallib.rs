@@ -1,6 +1,6 @@
 //! MSL to a Metal library: the one place the engine runs the Metal toolchain,
-//! for the built-in libraries a build script embeds and for the world shaders a
-//! renderer compiles at runtime alike.
+//! for the built-in libraries an export ships or a run compiles on first use,
+//! and for the world shaders a renderer compiles at runtime alike.
 //!
 //! The toolchain resolves once per process. Its binaries are invoked directly
 //! against the macOS SDK rather than through `xcrun` per compile, which emits

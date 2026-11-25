@@ -31,11 +31,10 @@ use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// SHADER_COMPILE_SOURCE_HASH: derived by build.rs from the modules that decide
-// how an artifact is produced, so a change to a compiler invocation or to what
-// `cached` stores orphans every entry it would otherwise serve stale. The
-// segment's own budget reclaims the orphans.
-include!(concat!(env!("OUT_DIR"), "/shader_compile_source_hash.rs"));
+// A change to a compiler invocation or to what `cached` stores orphans every
+// entry it would otherwise serve stale. The segment's own budget reclaims the
+// orphans.
+use super::stamp::SHADER_COMPILE_SOURCE_HASH;
 
 const KIND: CacheEntryKind = CacheEntryKind::Shader;
 

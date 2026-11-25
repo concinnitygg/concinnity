@@ -73,3 +73,11 @@ pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device, probe_display}
 
 mod runtime_libraries;
 pub use runtime_libraries::use_runtime_libraries;
+
+/// The `D3D12SDKVersion` of the Agility D3D12 runtime the DirectX backend
+/// opens: the middle number of the release `concinnity vendor` fetches.
+pub const AGILITY_SDK_VERSION: u32 = 619;
+
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub use shader::shipped::{precompile_shipped_shaders, use_shipped_shaders};
+pub use shader::stamp::SHIPPED_SHADER_STAMP;

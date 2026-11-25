@@ -1,7 +1,7 @@
-// Disk-cached compilation for MSL that cannot precompile at build time: world
-// Shader and SdfVolume programs, and the cull encode kernel when its source
-// changed. A cold build compiles through `concinnity_shader::metallib` and
-// stores the metallib content-addressed; a warm launch loads it directly.
+// Disk-cached compilation for MSL: world Shader and SdfVolume programs, and the
+// cull encode kernel when no export shipped it. A cold launch compiles through
+// `concinnity_shader::metallib` and stores the metallib content-addressed; a
+// warm launch loads it directly.
 // Without the toolchain every path uses `newLibraryWithSource`.
 //
 // The toolchain's id is part of the key, since a metallib from a superseded
@@ -28,16 +28,16 @@ pub(super) fn metallib_key<'a>(source: &'a str, entry: &'a str) -> Option<Key<'a
     })
 }
 
-// Produce the MTLLibrary for `source`: `embedded` when it was built from this
+// Produce the MTLLibrary for `source`: `shipped` when it was compiled from this
 // exact text, else a cached or fresh metallib, else an in-process source
 // compile. `label` names the shader in cache-miss logs and compile errors.
 pub(super) fn compiled_library(
     device: &ProtocolObject<dyn MTLDevice>,
     source: &str,
     label: &str,
-    embedded: Option<(u64, &'static [u8])>,
+    shipped: Option<crate::shader::shipped::Shipped>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
-    match metallib_bytes(source, label, embedded) {
+    match metallib_bytes(source, label, shipped) {
         Ok(bytes) => match super::pipeline::load_library(device, &bytes) {
             Ok(library) => Ok(library),
             Err(e) => {
@@ -54,19 +54,19 @@ pub(super) fn compiled_library(
     }
 }
 
-// The metallib for `source`: `embedded` when it was built from this exact text,
-// else the cached bytes, else a fresh compile stored into the cache.
+// The metallib for `source`: `shipped` when it was compiled from this exact
+// text, else the cached bytes, else a fresh compile stored into the cache.
 fn metallib_bytes(
     source: &str,
     label: &str,
-    embedded: Option<(u64, &'static [u8])>,
+    shipped: Option<crate::shader::shipped::Shipped>,
 ) -> RenderResult<std::borrow::Cow<'static, [u8]>> {
     let key = metallib_key(source, "main");
     let compile = || match key {
         Some(_) => compile_to_metallib(source, label),
         None => Err(RenderError::ShaderCompile("no Metal toolchain".into())),
     };
-    crate::shader::builtin::fetch(label, source, embedded, key.as_ref(), compile)
+    crate::shader::builtin::fetch(label, source, shipped, key.as_ref(), compile)
 }
 
 fn msl_text<'a>(msl: &'a [u8], label: &str) -> RenderResult<&'a str> {
@@ -99,7 +99,7 @@ fn source_library(
 }
 
 // Compile `source` to metallib bytes in a work directory removed afterwards.
-fn compile_to_metallib(source: &str, label: &str) -> RenderResult<Vec<u8>> {
+pub(crate) fn compile_to_metallib(source: &str, label: &str) -> RenderResult<Vec<u8>> {
     let work = crate::shader::compiler_work::dir().map_err(RenderError::Other)?;
     concinnity_shader::metallib::compile(source, work.path())
         .map_err(|e| RenderError::ShaderCompile(format!("{label}: {e}")))

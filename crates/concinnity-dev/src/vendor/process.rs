@@ -1,15 +1,9 @@
-//! Running the external tools a source build needs, and telling the build
-//! scripts about a new install.
+//! Running the external programs vendoring needs.
 
-use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::SystemTime;
 
-use concinnity_vendor::{Component, Context, Result, fail};
-
-use crate::components::watchers;
-use crate::workspace_root;
+use super::{Context, Result, fail};
 
 /// Run `command`, failing unless it exits cleanly.
 pub(crate) fn run(command: &mut Command) -> Result {
@@ -58,32 +52,26 @@ pub(crate) fn require(tool: &str) -> Result {
     }
 }
 
-/// The first `file` on PATH.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "PATH is where a build looks for a tool nothing vendored"
-)]
-pub(crate) fn on_path(file: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(file))
-        .find(|candidate| candidate.is_file())
-}
-
-/// Make the build scripts that resolve `component` re-run.
-pub(crate) fn touch_watchers(component: &Component) {
-    for name in watchers(component) {
-        let script = workspace_root().join(name);
-        if !script.is_file() {
-            continue;
+/// What a tool says it is, which proves it loads its libraries.
+pub(crate) fn report(exe: &Path) -> String {
+    match Command::new(exe).arg("--version").output() {
+        Err(e) => format!("does not run: {e}"),
+        Ok(done) if !done.status.success() => {
+            let stderr = String::from_utf8_lossy(&done.stderr);
+            let stdout = String::from_utf8_lossy(&done.stdout);
+            let said = if stderr.trim().is_empty() {
+                stdout
+            } else {
+                stderr
+            };
+            format!("does not run: {}", said.trim())
         }
-        let touched = fs::File::options()
-            .write(true)
-            .open(&script)
-            .and_then(|file| file.set_modified(SystemTime::now()));
-        if let Err(e) = touched {
-            println!("  warning: could not touch {name}: {e}");
-        }
+        Ok(done) => String::from_utf8_lossy(&done.stdout)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
     }
 }
 
@@ -105,5 +93,10 @@ mod tests {
             panic!("a missing program ran");
         };
         assert!(failure.0.contains("`cn-no-such-tool clone`"));
+    }
+
+    #[test]
+    fn a_missing_tool_reports_that_it_does_not_run() {
+        assert!(report(Path::new("/nonexistent/dxc")).starts_with("does not run:"));
     }
 }

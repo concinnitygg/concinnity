@@ -1,8 +1,8 @@
 // Hot-reload's half of the single-source shader assembly.
 //
 // The assembly itself lives in `concinnity_engine::render::shader::source`, below the
-// backends, so this crate's runtime compile and the build script's precompile
-// cannot key different text for the same program. What stays here is the one
+// backends, so this crate's runtime compile and an export's precompile cannot
+// key different text for the same program. What stays here is the one
 // part that needs a filesystem: under hot-reload a shader's checkout copy wins
 // over the embedded one, so an edit is picked up without a rebuild.
 

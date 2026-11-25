@@ -1,30 +1,21 @@
 //! Shared build-script support for the workspace.
 //!
-//! Besides the Metal shader precompilation in `metal_shaders`, the emitted
-//! binding readers in `shader_abi` and the source hashing in `source_hash`, one
+//! Besides the source hashing in `source_hash` and the version stamp, one
 //! responsibility every build script that compiles the renderer needs: resolve
 //! the rendering backends the build compiles in and emit one cfg per backend
 //! (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on, behind
 //! one call, [`setup_graphics_backends`].
 //!
-//! Nothing here reads a graphics SDK: the upscalers and the Agility runtime
-//! are loaded when an app runs, from the libraries `concinnity vendor` stages,
-//! so a build needs none of them.
+//! Nothing here compiles a shader or reads a graphics SDK: the engine's shaders
+//! compile when an app first runs (or when an export ships them), and the
+//! upscalers and the Agility runtime are loaded when an app runs, so a build
+//! needs neither a shader compiler nor any SDK.
 
 use std::path::PathBuf;
 
-mod embedded_shaders;
-mod metal_shaders;
-mod parallel;
-mod shader_abi;
-mod shader_artifacts;
 mod source_hash;
 mod version_stamp;
 
-pub use metal_shaders::{EmittedMsl, precompile_metal_shaders};
-pub use parallel::parallel_map;
-pub use shader_abi::{msl_binds, msl_binds_a_resource, msl_entry_params, msl_param_name};
-pub use shader_artifacts::{ShaderArtifact, precompile_shader_artifacts};
 pub use version_stamp::emit_version_stamp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

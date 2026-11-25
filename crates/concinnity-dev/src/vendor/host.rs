@@ -2,7 +2,7 @@
 
 /// A machine a component may have a release for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Host {
+pub(crate) enum Host {
     /// Windows on x86-64.
     WindowsX64,
     /// Linux on x86-64.
@@ -13,10 +13,10 @@ pub enum Host {
 
 impl Host {
     /// Every host anything is vendored for.
-    pub const ALL: [Self; 3] = [Self::WindowsX64, Self::LinuxX64, Self::MacosArm64];
+    pub(crate) const ALL: [Self; 3] = [Self::WindowsX64, Self::LinuxX64, Self::MacosArm64];
 
     /// The machine this runs on, or `None` where nothing is vendored for it.
-    pub fn current() -> Option<Self> {
+    pub(crate) fn current() -> Option<Self> {
         Self::from_consts(std::env::consts::OS, std::env::consts::ARCH)
     }
 
@@ -31,7 +31,7 @@ impl Host {
 
     /// The suffix a vendored directory carries, matching what the build scripts
     /// scan `vendor/` for.
-    pub fn slug(self) -> &'static str {
+    pub(crate) fn slug(self) -> &'static str {
         match self {
             Self::WindowsX64 => "windows-x86_64",
             Self::LinuxX64 => "linux-x86_64",
@@ -40,7 +40,7 @@ impl Host {
     }
 
     /// Whether this is the Windows host.
-    pub fn is_windows(self) -> bool {
+    pub(crate) fn is_windows(self) -> bool {
         self == Self::WindowsX64
     }
 }

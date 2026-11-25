@@ -22,7 +22,7 @@ mod fault_log;
 // pub(in crate::metal) so the render-graph executor, planar mirror, and probe
 // bake can name the shared main-pass param structs (MainPassCamera, DrawInputs,
 // GpuFrameBuffers, FaceTargets) defined in draw/main.rs.
-mod builtin_shaders;
+pub(crate) mod builtin_shaders;
 #[cfg(test)]
 mod cull_variants_tests;
 pub(in crate::metal) mod draw;
@@ -42,9 +42,8 @@ mod light_cull;
 mod lights;
 mod line;
 mod material_params;
-mod metallib;
 mod model_history;
-mod msl_cache;
+pub(crate) mod msl_cache;
 mod parallel_encoder;
 mod particle;
 mod pass_timing;

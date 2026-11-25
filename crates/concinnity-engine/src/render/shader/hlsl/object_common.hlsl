@@ -6,7 +6,7 @@
 // same reason the variant defines ride the source text: the replacement lands
 // in the assembled source, so the content-addressed shader cache keys it.
 // `shader_source::assemble` performs the splice, for the runtime compile and
-// the build script's precompile alike.
+// an export's precompile alike.
 //
 // This is the record's only declaration: `shader_layout` in concinnity-device
 // reflects it against `GpuObjectData` on every target, and its

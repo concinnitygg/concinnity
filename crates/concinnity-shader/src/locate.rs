@@ -1,15 +1,14 @@
 //! Where to look for `dxc`, in order.
 //!
-//! `dxc/` beside the running executable, then the workspace's vendored
-//! releases, then PATH, then `$VULKAN_SDK/bin`. The first two are the same idea
-//! from either side of a release: a release stages the dxc it was built with
-//! beside its binaries, and a checkout carries a pinned release under `vendor/`
-//! (`cargo xtask vendor`), so a given revision compiles its shaders with a given
-//! compiler rather than with whatever a machine installed. Both beat PATH,
-//! because both are the answer nearest to the thing being run. Neither exists
-//! for a consumer building from a registry copy, which starts at PATH.
+//! `dxc/` beside the running executable, then the releases vendored in the
+//! directory the dev CLI named, then those under the checkout's `vendor/`, then
+//! PATH, then `$VULKAN_SDK/bin`. `concinnity vendor` pins one release, so a
+//! given revision compiles its shaders with a given compiler rather than with
+//! whatever a machine installed. Each beats PATH, because each is the answer
+//! nearest to the thing being run.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// The dxc file name on this platform.
 pub(crate) const EXE: &str = if cfg!(windows) { "dxc.exe" } else { "dxc" };
@@ -21,23 +20,38 @@ include!(concat!(env!("OUT_DIR"), "/workspace_root.rs"));
 /// The directory a release stages its dxc in, beside the binaries.
 const BUNDLED_DIR: &str = "dxc";
 
-/// The name `cargo xtask vendor` gives a dxc release directory, before `-<version>-<slug>`.
+/// The name `concinnity vendor` gives a dxc release directory, before `-<version>-<slug>`.
 const VENDORED_NAME: &str = "dxc";
+
+static VENDOR_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Look for dxc among the releases vendored in `vendor` before any other
+/// vendored release, for the life of the process. Call it before the first
+/// compile; only the first call counts.
+pub fn use_vendor_dir(vendor: &Path) {
+    let _first = VENDOR_DIR.set(vendor.to_path_buf());
+}
+
+/// Every vendored dxc for this machine under `vendor`, newest first.
+pub fn vendored_dxc(vendor: &Path) -> Vec<PathBuf> {
+    host_slug().map_or_else(Vec::new, |slug| vendored_in(vendor, slug))
+}
 
 /// Every dxc to try, in resolution order.
 ///
-/// Resolution runs on the host when this crate is a build dependency and on the
-/// target when it is linked into the runtime; `std::env::consts` names the
-/// machine it runs on either way.
+/// Resolution runs on the machine doing the compile, which
+/// `std::env::consts` names.
 #[expect(
     clippy::disallowed_methods,
     reason = "the Vulkan SDK installer publishes its location only as VULKAN_SDK"
 )]
 pub(crate) fn dxc_candidates() -> Vec<PathBuf> {
-    let vendored = match (WORKSPACE_ROOT, host_slug()) {
-        (Some(root), Some(slug)) => vendored_in(&Path::new(root).join("vendor"), slug),
-        _ => Vec::new(),
-    };
+    let named = VENDOR_DIR.get().map(PathBuf::as_path);
+    let workspace = WORKSPACE_ROOT.map(|root| Path::new(root).join("vendor"));
+    let mut vendored = named.map_or_else(Vec::new, vendored_dxc);
+    if workspace.as_deref() != named {
+        vendored.extend(workspace.as_deref().map_or_else(Vec::new, vendored_dxc));
+    }
     candidates(
         exe_dir().as_deref(),
         vendored,
@@ -66,16 +80,16 @@ fn candidates(
     found
 }
 
-// The directory holding the running executable. A build script gets its own
-// binary's directory under `target/`, which carries no `dxc/`, so the
-// candidate costs a failed probe there and nothing more.
+// The directory holding the running executable. A test binary's directory
+// under `target/` carries no `dxc/`, so the candidate costs a failed probe there
+// and nothing more.
 fn exe_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.parent()?.to_path_buf())
 }
 
 // The `<os>-<arch>` half of a release directory name. `None` on a platform
-// `cargo xtask vendor` vendors no dxc for.
+// `concinnity vendor` vendors no dxc for.
 fn host_slug() -> Option<&'static str> {
     Some(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "macos-aarch64",

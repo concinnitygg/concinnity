@@ -12,7 +12,7 @@
 //! tile win those two measured did not reproduce on this backend.
 //!
 //! Two compute kernels come from the single-source `src/render/shader/hlsl/hiz_build.hlsl`
-//! (one precompiled variant library each):
+//! (one variant library each):
 //!
 //!   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
 //!     mip 0. The multisample variant takes the MAX over every

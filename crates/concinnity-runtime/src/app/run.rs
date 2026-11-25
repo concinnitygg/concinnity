@@ -127,6 +127,7 @@ fn load_world(runtime: &mut Runtime, source: &BlobSource) -> Result<(), StartupE
 /// fails to start.
 pub fn run_from(tree: &StateTree, blob: &BlobSource) -> std::io::Result<()> {
     init_logging();
+    crate::platform::device::use_shipped_shaders(&tree.shipped_shaders_path());
 
     let mut runtime = Runtime::new().in_tree(tree.clone());
     if let Err(error) = load_world(&mut runtime, blob) {

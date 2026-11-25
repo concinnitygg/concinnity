@@ -1,19 +1,11 @@
 //! The runtime SDKs an app loads when it runs: the libraries the upscalers and
 //! the newer D3D12 runtime come in. All of them are Windows-only.
 
-use crate::component::{Component, License, RuntimeFile, Source};
-use crate::host::Host;
+use super::component::{Component, License, RuntimeFile, Source};
+use super::host::Host;
 
-/// Every runtime SDK, in the order a bare request visits them.
-pub const SDKS: [&Component; 4] = [&AGILITY, &FIDELITYFX, &XESS, &STREAMLINE];
-
-/// Every runtime SDK's name, for a command line to offer.
-pub const NAMES: [&str; 4] = [AGILITY.name, FIDELITYFX.name, XESS.name, STREAMLINE.name];
-
-/// The runtime SDK called `name`.
-pub fn find(name: &str) -> Option<&'static Component> {
-    SDKS.into_iter().find(|sdk| sdk.name == name)
-}
+/// Every runtime SDK, whose libraries the runtime directory stages.
+pub(crate) const SDKS: [&Component; 4] = [&AGILITY, &FIDELITYFX, &XESS, &STREAMLINE];
 
 const WINDOWS: &[Host] = &[Host::WindowsX64];
 
@@ -25,7 +17,7 @@ fn download(url: String) -> Source {
 /// under another name, which its flat container serves without an API key. Its
 /// runtime goes in a `D3D12/` directory of its own, which the renderer opens as
 /// the process's D3D12 runtime.
-pub const AGILITY: Component = Component {
+pub(crate) const AGILITY: Component = Component {
     name: "agility",
     release: "1.619.3",
     summary: "Microsoft's D3D12 Agility SDK, which FSR on DirectX needs",
@@ -76,7 +68,7 @@ pub const AGILITY: Component = Component {
 /// carries AMD's signed runtimes. It is cut to the loader and upscaler library
 /// of each API and the license. The loader is what the renderer opens; it finds
 /// the upscaler library beside itself.
-pub const FIDELITYFX: Component = Component {
+pub(crate) const FIDELITYFX: Component = Component {
     name: "fidelityfx",
     release: "2.4.0",
     summary: "AMD FidelityFX, for FSR on DirectX and Vulkan",
@@ -139,7 +131,7 @@ pub const FIDELITYFX: Component = Component {
 };
 
 /// Intel's XeSS SDK.
-pub const XESS: Component = Component {
+pub(crate) const XESS: Component = Component {
     name: "xess",
     release: "3.0.1",
     summary: "Intel XeSS",
@@ -180,7 +172,7 @@ pub const XESS: Component = Component {
 /// NVIDIA Streamline, which DLSS runs through: its core, the common plugin and
 /// the low-latency library that plugin opens on Vulkan, and the DLSS plugin with
 /// its feature library.
-pub const STREAMLINE: Component = Component {
+pub(crate) const STREAMLINE: Component = Component {
     name: "streamline",
     release: "2.14.16",
     summary: "NVIDIA Streamline, for DLSS",
@@ -257,11 +249,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_follow_the_table() {
-        let names: Vec<&str> = SDKS.iter().map(|c| c.name).collect();
-        assert_eq!(names, NAMES);
-        assert!(find("xess").is_some());
-        assert!(find("dxc").is_none());
+    fn the_agility_release_is_the_runtime_the_renderer_opens() {
+        assert_eq!(
+            AGILITY.release.split('.').nth(1),
+            Some(concinnity_device::AGILITY_SDK_VERSION.to_string().as_str()),
+            "{}",
+            AGILITY.release
+        );
     }
 
     #[test]
@@ -363,13 +357,16 @@ mod tests {
         ];
         for (member, want) in members {
             assert_eq!(
-                crate::unpack::wanted(keep, &format!("{root}{member}")),
+                crate::vendor::unpack::wanted(keep, &format!("{root}{member}")),
                 want,
                 "{member}"
             );
         }
         for file in FIDELITYFX.runtime.iter().chain(FIDELITYFX.notices) {
-            assert!(crate::unpack::wanted(keep, &format!("{root}{}", file.from)));
+            assert!(crate::vendor::unpack::wanted(
+                keep,
+                &format!("{root}{}", file.from)
+            ));
         }
     }
 }

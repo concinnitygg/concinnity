@@ -1,5 +1,5 @@
-//! The slots each Metal program's host encoder writes, which the device build
-//! checks against the MSL the precompile emits.
+//! The slots each Metal program's host encoder writes, which the device tests
+//! check against the MSL each program compiles to.
 
 use super::MetalAbi;
 use super::atmosphere::metal as atmosphere;

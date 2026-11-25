@@ -78,7 +78,7 @@ const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 pub(in crate::directx) use concinnity_engine::render::uniforms::{DecalParams, DecalView};
 
 // Root-signature layout (binds 1:1 with the `decal.hlsl` declarations, whose
-// `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
+// `register()` annotations the `DXIL_ENTRY_ABI` tests pin):
 //   [0] root CBV   DecalView    (per-frame)
 //   [1] root CBV   DecalParams  (per-decal)
 //   [2] table   scene depth SRV (Texture2D[MS]<float>)

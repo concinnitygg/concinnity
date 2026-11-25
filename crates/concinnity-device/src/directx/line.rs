@@ -147,7 +147,7 @@ pub(in crate::directx) fn rebuild_line_pso(
 }
 
 // Root-signature layout (binds 1:1 with the `line.hlsl` declarations, whose
-// `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
+// `register()` annotations the `DXIL_ENTRY_ABI` tests pin):
 //   [0] root CBV   LineView (per-frame)
 //   [1] table   scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.

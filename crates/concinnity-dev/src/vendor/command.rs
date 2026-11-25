@@ -1,17 +1,17 @@
-//! The runtime SDKs a development run loads: `concinnity vendor`, which fetches
-//! and stages them, and where `run`, `bench`, `edit` and `export` find what it
-//! staged.
+//! `concinnity vendor`, which fetches or builds every component and stages the
+//! runtime SDKs' libraries, and where `run`, `bench`, `edit` and `export` find
+//! what it left.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
-use concinnity_vendor::sdks::{SDKS, find};
-use concinnity_vendor::{Component, Host, fetch, root, runtime};
+use super::sdks::SDKS;
+use super::{COMPONENTS, Component, Host, fetch, find, process, root, runtime, source_build};
 
 /// What `concinnity vendor` was asked to do.
 pub(crate) struct VendorRequest<'a> {
-    /// The SDKs named, every one when empty.
-    pub(crate) sdks: &'a [String],
+    /// The components named, every one when empty.
+    pub(crate) components: &'a [String],
     pub(crate) force: bool,
     pub(crate) accept_licenses: bool,
     pub(crate) status: bool,
@@ -40,6 +40,14 @@ pub(crate) fn use_staged_runtime() {
     }
 }
 
+/// Have the shader compiler look for the tools vendored here first. Called
+/// before anything compiles a shader.
+pub(crate) fn use_vendored_tools() {
+    if let Some(vendor) = vendor_root() {
+        concinnity_shader::use_vendor_dir(&vendor);
+    }
+}
+
 /// `concinnity vendor`.
 pub(crate) fn vendor(request: &VendorRequest<'_>) -> io::Result<()> {
     let vendor = vendor_root().ok_or_else(|| {
@@ -49,11 +57,15 @@ pub(crate) fn vendor(request: &VendorRequest<'_>) -> io::Result<()> {
         )
     })?;
     let host = Host::current();
-    let named = !request.sdks.is_empty();
+    let named = !request.components.is_empty();
     let chosen: Vec<&'static Component> = if named {
-        request.sdks.iter().filter_map(|name| find(name)).collect()
+        request
+            .components
+            .iter()
+            .filter_map(|name| find(name))
+            .collect()
     } else {
-        SDKS.to_vec()
+        COMPONENTS.to_vec()
     };
     if request.status {
         status(&chosen, &vendor, host);
@@ -62,30 +74,42 @@ pub(crate) fn vendor(request: &VendorRequest<'_>) -> io::Result<()> {
 
     println!("vendor: {}", vendor.display());
     let mut unanswered = Vec::new();
-    for sdk in chosen {
-        let Some(host) = sdk.host_for(host, named).map_err(io::Error::other)? else {
-            println!("{}: no release for this host, skipped", sdk.name);
+    for component in chosen {
+        let name = component.name;
+        let Some(host) = component.host_for(host, named).map_err(io::Error::other)? else {
+            println!("{name}: no release for this host, skipped");
             continue;
         };
-        if sdk.installed(&vendor, host) && !request.force {
-            println!("{}: already vendored ({})", sdk.name, sdk.release);
+        if component.installed(&vendor, host) && !request.force {
+            println!("{name}: already vendored ({})", component.release);
             continue;
         }
-        if sdk.needs_acceptance() {
-            match acceptance(sdk, request.accept_licenses)? {
+        if component.needs_acceptance() {
+            match acceptance(component, request.accept_licenses)? {
                 Acceptance::Accepted => {}
                 Acceptance::Declined => {
-                    println!("{}: terms declined, skipped", sdk.name);
+                    println!("{name}: terms declined, skipped");
                     continue;
                 }
                 Acceptance::Unanswerable => {
-                    println!("{}: terms not accepted, skipped", sdk.name);
-                    unanswered.push(sdk.name);
+                    println!("{name}: terms not accepted, skipped");
+                    unanswered.push(name);
                     continue;
                 }
             }
         }
-        fetch::fetch(sdk, host, &vendor, request.force).map_err(io::Error::other)?;
+        let installed = if component.is_built(host) {
+            source_build::build(component, host, &vendor)
+        } else {
+            fetch::fetch(component, host, &vendor, request.force)
+        }
+        .map_err(io::Error::other)?;
+        if component.tool {
+            println!(
+                "  reports   {}",
+                process::report(&installed.join((component.payload)(host)))
+            );
+        }
     }
 
     if let Some(host) = host.filter(|host| SDKS.iter().any(|sdk| sdk.hosts.contains(host))) {
@@ -125,11 +149,11 @@ enum Acceptance {
     Unanswerable,
 }
 
-// Whether `sdk`'s terms are accepted: on the command line, or by answering a
+// Whether `component`'s terms are accepted: on the command line, or by answering a
 // terminal that can be asked.
-fn acceptance(sdk: &Component, on_the_command_line: bool) -> io::Result<Acceptance> {
-    println!("{} comes under these terms:", sdk.name);
-    for license in sdk.licenses {
+fn acceptance(component: &Component, on_the_command_line: bool) -> io::Result<Acceptance> {
+    println!("{} comes under these terms:", component.name);
+    for license in component.licenses {
         println!("  {}: {}", license.name, license.url);
     }
     if on_the_command_line {
@@ -156,13 +180,28 @@ fn is_yes(answer: &str) -> bool {
 
 fn status(chosen: &[&Component], vendor: &std::path::Path, host: Option<Host>) {
     println!("vendor: {}", vendor.display());
-    for sdk in chosen {
-        let state = match host.filter(|host| sdk.hosts.contains(host)) {
-            None => "no release for this host".to_string(),
-            Some(host) if sdk.installed(vendor, host) => "vendored".to_string(),
-            Some(_) => "not vendored".to_string(),
+    for component in chosen {
+        let host = host.filter(|host| component.hosts.contains(host));
+        let state = match host {
+            None => "no release for this host",
+            Some(host) if component.installed(vendor, host) => "vendored",
+            Some(host) if component.is_built(host) => "not vendored (built from source here)",
+            Some(_) => "not vendored",
         };
-        println!("{} {}: {state} -- {}", sdk.name, sdk.release, sdk.summary);
+        println!(
+            "{} {}: {state} -- {}",
+            component.name, component.release, component.summary
+        );
+        if let Some(digest) = host.and_then(|host| component.pinned_digest(host)) {
+            println!("  sha256 {digest}");
+        }
+        if let Some(host) = host.filter(|host| component.tool && component.installed(vendor, *host))
+        {
+            let exe = component
+                .install_dir(vendor, host)
+                .join((component.payload)(host));
+            println!("  reports {}", process::report(&exe));
+        }
     }
     match runtime::staged(vendor) {
         Some(dir) => println!("runtime: {}", dir.display()),

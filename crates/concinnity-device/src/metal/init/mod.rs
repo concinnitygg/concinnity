@@ -440,8 +440,7 @@ impl MtlContext {
         }
         let pooled = ctx.hw.allocator.stats();
         tracing::info!("device allocator: {pooled}");
-        // Tally the raymarch metallib cache (the only shader-cache client on
-        // Metal; everything else precompiles at build time).
+        // Tally what the shader cache served and compiled during this init.
         crate::shader::cache::report_init();
         crate::shader::runtime_cache::checkpoint();
         Ok(ctx)

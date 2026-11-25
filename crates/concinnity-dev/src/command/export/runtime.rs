@@ -67,9 +67,11 @@ pub(super) const RUNTIME_PLATFORM_MARKER: &[u8] = b"cn-runtime-platform:";
 // Read the runtime player's stamped shader platforms by scanning its binary for
 // the backend marker. Returns None for an unstamped runtime, warning once so the
 // skipped backend check is visible.
-pub(super) fn read_runtime_platforms(runtime: &Path) -> io::Result<Option<PlatformSet>> {
-    let bytes = fs::read(runtime)?;
-    let Some(token) = find_platform_stamp(&bytes) else {
+pub(super) fn read_runtime_platforms(
+    bytes: &[u8],
+    runtime: &Path,
+) -> io::Result<Option<PlatformSet>> {
+    let Some(token) = find_platform_stamp(bytes) else {
         eprintln!(
             "warning: no backend stamp found in {}; skipping the runtime/cook \
              backend check (rebuild `concinnity-player` to enable it)",
@@ -146,6 +148,52 @@ pub(super) fn find_platform_stamp(bytes: &[u8]) -> Option<String> {
     } else {
         std::str::from_utf8(token).ok().map(str::to_string)
     }
+}
+
+// The fixed prefix of the shader stamp baked into `concinnity-player`; the
+// stamp follows as 16 lowercase hex digits.
+pub(super) const RUNTIME_SHADER_STAMP_MARKER: &[u8] = b"cn-shader-stamp:";
+
+// Refuse a player whose shader stamp is not `ours`: the shaders this `cn`
+// compiles for the bundle would be refused by it, and it carries no compiler to
+// fall back on.
+pub(super) fn verify_runtime_shader_stamp(
+    bytes: &[u8],
+    runtime: &Path,
+    ours: u64,
+) -> io::Result<()> {
+    let found = find_shader_stamp(bytes);
+    if found == Some(ours) {
+        return Ok(());
+    }
+    let theirs = found.map_or_else(
+        || "no shader stamp".to_string(),
+        |s| format!("shader stamp {s:016x}"),
+    );
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "runtime/export shader mismatch: {} carries {theirs}, but this `concinnity` compiles \
+             shaders stamped {ours:016x}. Build `concinnity` and `concinnity-player` from the same \
+             source (`cargo build`).",
+            runtime.display()
+        ),
+    ))
+}
+
+// The shader stamp after the marker, or None when the marker or its 16 hex
+// digits are absent.
+pub(super) fn find_shader_stamp(bytes: &[u8]) -> Option<u64> {
+    let start =
+        find_subslice(bytes, RUNTIME_SHADER_STAMP_MARKER)? + RUNTIME_SHADER_STAMP_MARKER.len();
+    let digits = bytes.get(start..start + 16)?;
+    if !digits
+        .iter()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+    {
+        return None;
+    }
+    u64::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()
 }
 
 // Index of the first occurrence of `needle` in `haystack`, or None.

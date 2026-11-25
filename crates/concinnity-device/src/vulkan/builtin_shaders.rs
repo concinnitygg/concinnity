@@ -17,8 +17,12 @@ use crate::shader::builtin::{Backend, Program};
 const VULKAN: Backend = Backend {
     platform: Platform::Vulkan,
     target: |_| HlslTarget::Spirv,
-    embedded: embedded_spirv,
 };
+
+// Every Vulkan program as a player fetches it, for an export to ship.
+pub(crate) fn shipped_plan() -> Vec<crate::shader::shipped::Planned> {
+    VULKAN.plan(&concinnity_engine::render::shader::programs::vk::TABLE)
+}
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
 // because `ShaderProgram` is defined in `core::render`, which is `no_std` and
@@ -30,7 +34,7 @@ pub(crate) trait CompileProgram: Program {
         VULKAN.source(self.variant(), hot_reload)
     }
 
-    // The SPIR-V for this variant, embedded, cached or compiled (see
+    // The SPIR-V for this variant, shipped, cached or compiled (see
     // `shader::builtin`).
     fn compile(&self, hot_reload: bool) -> RenderResult<Vec<u8>> {
         VULKAN.compile(self.variant(), hot_reload)
@@ -39,14 +43,29 @@ pub(crate) trait CompileProgram: Program {
 
 impl<P: Program> CompileProgram for P {}
 
-// The build script's precompiled SPIR-V. Every name misses on a host that had
-// no shader compiler at build time, and the renderer compiles instead -- the
-// only path that then needs one at runtime.
-include!(concat!(env!("OUT_DIR"), "/engine_spirv.rs"));
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The plan an export compiles is every variant the table declares, under
+    // the names and sources the runtime looks them up by.
+    #[test]
+    fn the_shipped_plan_is_every_variant_as_a_player_fetches_it() {
+        use concinnity_engine::render::shader::source::source_digest;
+        let plan: Vec<(String, u64)> = shipped_plan()
+            .iter()
+            .map(|p| (p.name.clone(), source_digest(&p.source)))
+            .collect();
+        let expected: Vec<(String, u64)> = concinnity_engine::render::shader::programs::vk::TABLE
+            .variants()
+            .map(|v| (v.artifact_name(), source_digest(&VULKAN.source(v, false))))
+            .collect();
+        assert_eq!(plan, expected);
+        let mut names: Vec<&str> = plan.iter().map(|(name, _)| name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), plan.len(), "two artifacts share a name");
+    }
 
     #[test]
     fn gates_lead_and_nothing_else_is_injected() {
@@ -68,30 +87,5 @@ mod tests {
         assert_eq!(key.compiler, "hlsl");
         assert_eq!(key.target, "spirv");
         assert_eq!(key.entry, "vertex_main_bindless");
-    }
-
-    // Every variant the table declares is embedded under the name the renderer
-    // looks it up by, with the digest of the source it assembles in either
-    // hot-reload mode, so an unedited binary compiles nothing at init. A build
-    // host without a compiler embeds nothing, and every name misses together.
-    #[test]
-    fn every_variant_is_embedded_under_its_lookup_name() {
-        use concinnity_engine::render::shader::programs::vk::TABLE;
-        use concinnity_engine::render::shader::source::source_digest;
-
-        let embedded: Vec<_> = TABLE
-            .variants()
-            .map(|v| (v, embedded_spirv(&v.artifact_name())))
-            .collect();
-        if embedded.iter().all(|(_, e)| e.is_none()) {
-            return;
-        }
-        for (v, e) in embedded {
-            let name = v.artifact_name();
-            let (digest, _) = e.unwrap_or_else(|| panic!("{name}: not embedded"));
-            for hot_reload in [false, true] {
-                assert_eq!(digest, source_digest(&v.source(hot_reload)), "{name}");
-            }
-        }
     }
 }

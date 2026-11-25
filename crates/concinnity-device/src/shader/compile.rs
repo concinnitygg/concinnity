@@ -3,21 +3,12 @@
 //
 // Every backend reaches the compiler the same way -- assemble the source, then
 // hand it to dxc -- so the call is made once, here, rather than three times.
-// The build script makes the same call in
-// `concinnity_toolchain::shader_artifacts`, and the two must agree: an artifact
-// the build embedded is taken whenever its source digest matches, so a runtime
-// compile of the same text under different flags would be a different shader
-// under the same name.
+// An export's shipped artifacts come from this same call, which is what lets a
+// player take one whenever its source digest matches.
 
 use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_shader::HlslTarget;
-
-/// What the content-addressed shader cache records as the toolchain behind an
-/// engine SPIR-V or DXIL artifact. A metallib is keyed on the Metal toolchain's
-/// release instead, which the cache segment's dxc stamp does not cover.
-#[cfg(any(backend_vk, backend_dx))]
-pub(crate) const COMPILER_TAG: &str = "hlsl";
 
 /// The shader toolchain this binary reaches, for the cache's whole-segment
 /// invalidation: an upgraded dxc discards every entry an older one wrote.

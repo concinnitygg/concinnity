@@ -3,11 +3,10 @@
 //! Declarations only: the file, the entry point, and the variant gates, as
 //! plain `&'static` data. They live here rather than in the device crate
 //! because both halves of the toolchain iterate them -- the renderer to compile
-//! a program at init, and the device build script to compile the same programs
-//! ahead of time -- and a build script cannot read its own crate's data. One
-//! table is what keeps the two from disagreeing about what a program's source
-//! is, which the content-addressed shader cache would otherwise paper over by
-//! serving one path's bytes to the other.
+//! a program on first use, and export to compile the same programs ahead of
+//! time. One table is what keeps the two from disagreeing about what a
+//! program's source is, which the content-addressed shader cache would
+//! otherwise paper over by serving one path's bytes to the other.
 //!
 //! A program's stage is not declared here: the entry point's `[shader("...")]`
 //! attribute states it. Neither is the backend define, which the source
@@ -63,7 +62,7 @@ pub struct ShaderProgram {
     pub file: &'static str,
     /// Entry point compiled out of that file.
     pub entry: &'static str,
-    /// Lookup key for the precompiled artifact, and the diagnostic label.
+    /// Lookup key for the shipped artifact, and the diagnostic label.
     pub label: &'static str,
     /// Fixed variant gates, each injected as `#define <gate> 1`. More than one
     /// where a variant is the intersection of two, like the textured
@@ -128,8 +127,8 @@ impl Variant<'_> {
     }
 }
 
-/// Everything one backend compiles, which the renderer and the build script
-/// both iterate: one compiles it at init, the other ahead of time.
+/// Everything one backend compiles, which the renderer and export both
+/// iterate: one compiles it on first use, the other ahead of time.
 pub struct Table {
     /// The program lists the backend draws from.
     pub programs: &'static [&'static [&'static ShaderProgram]],
@@ -160,8 +159,8 @@ mod tests {
     use super::declared::{Row, assert_rows_are_sound};
     use super::*;
 
-    // Every variant each backend compiles, as the build script and the renderer
-    // expand it, so an artifact name is unique per backend at every sample count.
+    // Every variant each backend compiles, as export and the renderer expand
+    // it, so an artifact name is unique per backend at every sample count.
     #[test]
     fn every_backend_table_is_sound() {
         for (platform, table) in [

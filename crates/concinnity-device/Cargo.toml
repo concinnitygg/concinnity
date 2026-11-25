@@ -67,16 +67,9 @@ objc2-core-graphics = { workspace = true }
 # The layout guard reads a compiled module's decorations, on every backend.
 concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 concinnity-testing = { workspace = true }
-concinnity-vendor = { workspace = true }
 
 [build-dependencies]
-concinnity-core = { workspace = true }
-concinnity-engine = { workspace = true }
-concinnity-shader = { workspace = true }
 concinnity-toolchain = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.build-dependencies]
-concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 
 [lints]
 workspace = true

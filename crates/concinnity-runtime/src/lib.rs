@@ -43,6 +43,7 @@ pub use app::run::{init_logging, install_logging, run, run_from};
 pub use app::runloop;
 pub use app::runtime::Runtime;
 pub use app::startup_error::StartupError;
-pub use concinnity_device::use_runtime_libraries;
+pub use concinnity_device::{SHIPPED_SHADER_STAMP, use_runtime_libraries};
 pub use lend::SYSTEMS;
+pub use platform::device::{precompile_shipped_shaders, use_shipped_shaders};
 pub use render::system::{ActiveRenderBackend, OwnedBackend};

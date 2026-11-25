@@ -3,14 +3,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{Context, Result};
+use super::{Context, Result};
 
 /// Put `built` at `payload`, which only exists once the copy is whole.
 ///
 /// # Errors
 ///
 /// When the copy or the move into place fails.
-pub fn install(built: &Path, payload: &Path) -> Result {
+pub(crate) fn install(built: &Path, payload: &Path) -> Result {
     if let Some(parent) = payload.parent() {
         fs::create_dir_all(parent).context(parent.display())?;
     }
@@ -21,18 +21,18 @@ pub fn install(built: &Path, payload: &Path) -> Result {
 }
 
 /// Remove `dir` if it is there, ignoring what was not.
-pub fn remove_dir_quietly(dir: &Path) {
+pub(crate) fn remove_dir_quietly(dir: &Path) {
     let _removed = fs::remove_dir_all(dir);
 }
 
 /// Where an install is assembled before it replaces `target` whole.
-pub fn staging_dir(target: &Path) -> PathBuf {
+pub(crate) fn staging_dir(target: &Path) -> PathBuf {
     let name = target.file_name().unwrap_or_default().to_string_lossy();
     target.with_file_name(format!(".{name}.incoming"))
 }
 
 /// The last component of `path`, for messages.
-pub fn file_name(path: &Path) -> String {
+pub(crate) fn file_name(path: &Path) -> String {
     path.file_name()
         .unwrap_or_default()
         .to_string_lossy()

@@ -11,6 +11,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::backend::{DeviceProbe, RenderBackend};
 use concinnity_engine::window::display_mode::DisplayProbe;
+use std::path::Path;
 use std::sync::OnceLock;
 
 /// Whether a rendering backend compiles into this build. False leaves the
@@ -78,6 +79,35 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
                 op: "init_backend",
             },
         )
+    }
+}
+
+/// Load the engine shader artifacts an exported app shipped at `path`, for the
+/// life of the process. Call it before the first backend starts; a missing or
+/// unusable file leaves every program to the runtime cache and a compile.
+pub fn use_shipped_shaders(path: &Path) {
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
+    concinnity_device::use_shipped_shaders(path);
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    let _ = path;
+}
+
+/// Compile every engine program for `platforms` into the file an export ships
+/// beside its blobs, returning its bytes and how many artifacts it holds.
+///
+/// # Errors
+///
+/// When this build has no backend for one of `platforms`, or a program fails
+/// to compile.
+pub fn precompile_shipped_shaders(platforms: &[Platform]) -> Result<(Vec<u8>, usize), String> {
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
+    {
+        concinnity_device::precompile_shipped_shaders(platforms)
+    }
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    {
+        let _ = platforms;
+        Err("this build has no graphics backend".to_string())
     }
 }
 

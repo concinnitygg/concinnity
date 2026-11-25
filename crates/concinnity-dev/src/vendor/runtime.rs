@@ -6,35 +6,35 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::component::Component;
-use crate::files::{install, remove_dir_quietly, staging_dir};
-use crate::host::Host;
-use crate::{Context, Result};
+use super::component::Component;
+use super::files::{install, remove_dir_quietly, staging_dir};
+use super::host::Host;
+use super::{Context, Result};
 
 /// The runtime directory for `host` under `vendor`.
-pub fn runtime_dir(vendor: &Path, host: Host) -> PathBuf {
+pub(crate) fn runtime_dir(vendor: &Path, host: Host) -> PathBuf {
     vendor.join(format!("runtime-{}", host.slug()))
 }
 
 /// The staged runtime directory for a tool started in `cwd`, in the vendor
-/// directory [`vendor_root`](crate::root::vendor_root) resolves, if one is.
-pub fn staged_for(cwd: &Path, per_user_base: Option<&Path>) -> Option<PathBuf> {
-    staged(&crate::root::vendor_root(cwd, per_user_base)?)
+/// directory [`vendor_root`](super::root::vendor_root) resolves, if one is.
+pub(crate) fn staged_for(cwd: &Path, per_user_base: Option<&Path>) -> Option<PathBuf> {
+    staged(&super::root::vendor_root(cwd, per_user_base)?)
 }
 
 /// The staged runtime directory for the machine this runs on, if one is.
-pub fn staged(vendor: &Path) -> Option<PathBuf> {
+pub(crate) fn staged(vendor: &Path) -> Option<PathBuf> {
     let dir = runtime_dir(vendor, Host::current()?);
     dir.is_dir().then_some(dir)
 }
 
 /// What staging left in the runtime directory.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Staged {
+pub(crate) struct Staged {
     /// The SDKs it holds.
-    pub sdks: Vec<&'static str>,
+    pub(crate) sdks: Vec<&'static str>,
     /// Whether it already held exactly these, so nothing was rewritten.
-    pub unchanged: bool,
+    pub(crate) unchanged: bool,
 }
 
 /// Bring the runtime directory for `host` in line with the `sdks` installed
@@ -47,7 +47,7 @@ pub struct Staged {
 ///
 /// When a file cannot be copied, or the directory cannot be swapped, as when
 /// an app still has its libraries loaded.
-pub fn stage(sdks: &[&Component], vendor: &Path, host: Host) -> Result<Staged> {
+pub(crate) fn stage(sdks: &[&Component], vendor: &Path, host: Host) -> Result<Staged> {
     let installed: Vec<&Component> = sdks
         .iter()
         .copied()
@@ -151,7 +151,7 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sdks::{AGILITY, XESS};
+    use crate::vendor::sdks::{AGILITY, XESS};
 
     fn install_release(vendor: &Path, sdk: &Component, host: Host) {
         let release = sdk.install_dir(vendor, host);

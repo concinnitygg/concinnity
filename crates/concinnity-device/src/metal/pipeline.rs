@@ -49,18 +49,27 @@ pub(super) fn cull_encode_source(hot_reload: bool) -> Cow<'static, str> {
     Cow::Borrowed(include_str!("shaders/cull_encode.metal"))
 }
 
-// The cull encode kernel's MTLLibrary, from the metallib the build script
-// embedded when its source is unedited, else a cached or fresh compile.
+// The cull encode kernel as a player fetches it.
+pub(super) fn cull_encode_planned(hot_reload: bool) -> crate::shader::shipped::Planned {
+    crate::shader::shipped::Planned {
+        name: CULL_ENCODE.to_string(),
+        source: cull_encode_source(hot_reload).into_owned(),
+        compile: crate::shader::shipped::Compile::Msl,
+    }
+}
+
+// The cull encode kernel's MTLLibrary, from the metallib an export shipped when
+// its source is unedited, else a cached or fresh compile.
 pub(super) fn cull_encode_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
-    let msl = cull_encode_source(hot_reload);
+    let planned = cull_encode_planned(hot_reload);
     super::msl_cache::compiled_library(
         device,
-        &msl,
-        CULL_ENCODE,
-        super::metallib::embedded_metallib(CULL_ENCODE),
+        &planned.source,
+        &planned.name,
+        planned.shipped(concinnity_core::platform::Platform::Metal),
     )
 }
 

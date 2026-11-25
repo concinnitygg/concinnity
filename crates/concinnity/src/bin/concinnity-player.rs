@@ -13,8 +13,8 @@
 //! argument overrides both with a blob file or a directory of blobs; it moves
 //! only what is read, never where the app writes.
 //!
-//! One file, owning what a process owns: the backend stamp `cn export` reads
-//! back. Resolving the layout and loading the world come from
+//! One file, owning what a process owns: the backend and shader stamps `cn
+//! export` reads back. Resolving the layout and loading the world come from
 //! `concinnity::player`.
 
 use std::path::{Path, PathBuf};
@@ -36,10 +36,35 @@ use concinnity::player;
 static CN_RUNTIME_PLATFORM: &[u8] =
     concat!("cn-runtime-platform:", env!("CN_RUNTIME_PLATFORMS"), "\0").as_bytes();
 
+// Shader stamp read back by `cn export`: the stamp of the shaders this player
+// accepts as shipped, as 16 hex digits after a fixed marker, so an export
+// compiled by a `cn` built from other shader sources or flags is refused before
+// it ships rather than when the player cannot find a compiler.
+#[used]
+static CN_SHADER_STAMP: [u8; 33] = shader_stamp(player::SHIPPED_SHADER_STAMP);
+
+const fn shader_stamp(stamp: u64) -> [u8; 33] {
+    const MARKER: &[u8; 16] = b"cn-shader-stamp:";
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = [0u8; 33];
+    let mut i = 0;
+    while i < MARKER.len() {
+        out[i] = MARKER[i];
+        i += 1;
+    }
+    let mut digit = 0;
+    while digit < 16 {
+        out[MARKER.len() + digit] = HEX[((stamp >> (60 - 4 * digit)) & 0xf) as usize];
+        digit += 1;
+    }
+    out
+}
+
 fn main() -> std::io::Result<()> {
-    // Keep the backend stamp in the linked binary (its bytes are what `cn
-    // export` scans); taking its address defeats any linker dead-stripping.
+    // Keep the stamps in the linked binary (their bytes are what `cn export`
+    // scans); taking their addresses defeats any linker dead-stripping.
     std::hint::black_box(&CN_RUNTIME_PLATFORM);
+    std::hint::black_box(&CN_SHADER_STAMP);
 
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
@@ -69,6 +94,13 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_shader_stamp_is_the_marker_then_hex_digits() {
+        let stamp = super::shader_stamp(0x0123_4567_89ab_cdef);
+        assert_eq!(&stamp[..32], b"cn-shader-stamp:0123456789abcdef");
+        assert_eq!(stamp[32], 0);
+    }
+
     // The shipped player counts its own heap through the library's
     // counting allocator. Without it the player would run correctly
     // while reporting no memory at all, and crash reports would ship without

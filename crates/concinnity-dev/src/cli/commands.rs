@@ -207,17 +207,21 @@ pub(crate) enum Commands {
     #[command(name = "mcp", verbatim_doc_comment)]
     Mcp(McpArgs),
 
-    /// Fetch the runtime SDKs an application loads
+    /// Fetch the shader compiler and the runtime SDKs an application loads
     ///
-    /// Downloads the pinned Agility, FidelityFX, XeSS and Streamline releases
-    /// (Windows only) into the workspace's `vendor/` directory, or a per-user
-    /// one outside a workspace, and stages their libraries into the runtime
-    /// directory that `run`, `bench` and `edit` load from and `export` bundles.
-    /// An SDK whose terms are an agreement asks for them to be accepted first;
-    /// `--accept-licenses` accepts them without asking.
+    /// Downloads the pinned dxc release (built from source on macOS, which
+    /// needs git, cmake and ninja) and the Agility, FidelityFX, XeSS and
+    /// Streamline releases (Windows only) into the workspace's `vendor/`
+    /// directory, or a per-user one outside a workspace. dxc compiles the
+    /// engine's shaders on first use and for `export`; the SDKs' libraries are
+    /// staged into the runtime directory that `run`, `bench` and `edit` load
+    /// from and `export` bundles. A component whose terms are an agreement asks
+    /// for them to be accepted first; `--accept-licenses` accepts them without
+    /// asking.
     ///
     /// ```sh
     /// concinnity vendor
+    /// concinnity vendor dxc
     /// concinnity vendor streamline xess
     /// concinnity vendor --status
     /// ```
@@ -406,15 +410,15 @@ pub(crate) struct CookArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct VendorArgs {
-    /// The SDKs to fetch, every one when none is named
-    #[arg(value_parser = clap::builder::PossibleValuesParser::new(concinnity_vendor::sdks::NAMES))]
-    pub(crate) sdks: Vec<String>,
+    /// The components to fetch, every one when none is named
+    #[arg(value_parser = clap::builder::PossibleValuesParser::new(crate::vendor::NAMES))]
+    pub(crate) components: Vec<String>,
 
-    /// Re-download over an existing copy
+    /// Re-download or rebuild over an existing copy
     #[arg(long, conflicts_with = "status")]
     pub(crate) force: bool,
 
-    /// Accept the SDKs' terms without asking
+    /// Accept the components' terms without asking
     #[arg(long, conflicts_with = "status")]
     pub(crate) accept_licenses: bool,
 

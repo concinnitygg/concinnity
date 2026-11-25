@@ -11,10 +11,9 @@
 //! came from, so a renderer whose template has moved compiles instead of
 //! loading something stale.
 //!
-//! The build script makes the same call in
-//! `concinnity_toolchain::shader_artifacts` for the engine's own programs, and
-//! the two must agree: a renderer takes a stored artifact whenever its source
-//! digest matches, so the same text compiled under different flags would be a
+//! The renderer makes the same call for the engine's own programs, and the two
+//! must agree: a renderer takes a stored artifact whenever its source digest
+//! matches, so the same text compiled under different flags would be a
 //! different shader under the same name.
 //!
 //! [`HlslTarget::cooked`]: concinnity_shader::HlslTarget::cooked

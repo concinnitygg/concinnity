@@ -1,9 +1,8 @@
 //! What the Vulkan backend compiles to SPIR-V: the shared engine programs and
 //! the single-pass Hi-Z downsampler.
 //!
-//! Each program compiles a file under `src/render/shader/hlsl/`, at build time where
-//! the host has dxc and at renderer init otherwise, cached in the
-//! content-addressed shader cache.
+//! Each program compiles a file under `src/render/shader/hlsl/` on first use,
+//! cached in the content-addressed shader cache, unless an export shipped it.
 //!
 //! The `[[vk::binding]]` annotations in the sources are the engine's
 //! descriptor-set layouts. dxc names every SPIR-V entry point `main`, which is

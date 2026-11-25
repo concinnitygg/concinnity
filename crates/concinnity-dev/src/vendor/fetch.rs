@@ -10,10 +10,10 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
-use crate::component::{Component, Source};
-use crate::files::file_name;
-use crate::host::Host;
-use crate::{Context, Result, fail, unpack};
+use super::component::{Component, Source};
+use super::files::file_name;
+use super::host::Host;
+use super::{Context, Result, fail, unpack};
 
 /// Download `component`'s release for `host` and install it under `vendor`,
 /// unless it is installed already and `force` is off. Returns its directory.
@@ -22,7 +22,12 @@ use crate::{Context, Result, fail, unpack};
 ///
 /// When the host builds it from source, the download fails, the archive does
 /// not match its pinned sha256, or it does not hold the payload.
-pub fn fetch(component: &Component, host: Host, vendor: &Path, force: bool) -> Result<PathBuf> {
+pub(crate) fn fetch(
+    component: &Component,
+    host: Host,
+    vendor: &Path,
+    force: bool,
+) -> Result<PathBuf> {
     let name = component.name;
     let Source::Download { url, keep } = (component.source)(host) else {
         return fail(format!(

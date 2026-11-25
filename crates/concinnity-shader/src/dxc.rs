@@ -1,6 +1,6 @@
 //! The `dxc` invocation.
 //!
-//! One argument list, assembled in one place, because the build script and the
+//! One argument list, assembled in one place, because an export and the
 //! renderer must produce byte-identical artifacts or the content-addressed
 //! shader cache serves one path's bytes to the other.
 

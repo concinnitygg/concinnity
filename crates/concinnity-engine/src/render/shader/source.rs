@@ -14,9 +14,9 @@
 //! and no table can forget it.
 //!
 //! It lives here, below the device backends, because the assembly is what they
-//! and the build script have to agree on: a build script's precompile and a
-//! renderer's runtime compile must produce byte-identical source for the
-//! content-addressed cache to be sound across them. Keeping one implementation
+//! and export have to agree on: an export's precompile and a renderer's runtime
+//! compile must produce byte-identical source for the content-addressed cache
+//! to be sound across them. Keeping one implementation
 //! is what makes that true by construction rather than by review.
 //!
 //! Reading a shader off disk is not part of it. Hot-reload wants the checkout's
@@ -200,13 +200,13 @@ pub fn assemble(file: &str, platform: Platform, defines: &[(&str, &str)]) -> Str
     assemble_with(file, platform, defines, embedded::embedded)
 }
 
-/// Digest of one assembled source text, identifying the artifact a build script
+/// Digest of one assembled source text, identifying the artifact an export
 /// compiled from it.
 ///
 /// A precompiled artifact is only usable if the source still matches the one it
 /// was built from, and the name alone cannot say so: hot-reload exists precisely
-/// to compile an edited shader, and a build-time artifact keyed by name would
-/// shadow the edit. Comparing digests makes the embedded copy a content hit --
+/// to compile an edited shader, and a shipped artifact keyed by name would
+/// shadow the edit. Comparing digests makes the shipped copy a content hit --
 /// used whenever the text is unchanged, skipped the moment it is not, in any
 /// build and under any flag.
 ///

@@ -1,13 +1,11 @@
-// Where a built-in program's artifact comes from: the copy the build script
-// embedded when it was built from this exact source, else the shader cache's,
-// else a compile. Every backend fetches its built-ins through this one path.
+// Where a built-in program's artifact comes from: the copy an export shipped
+// when it was compiled from this exact source, else the shader cache's, else a
+// compile, which the cache then keeps for the next launch. Every backend
+// fetches its built-ins through this one path.
 //
-// The match is on the source digest rather than on hot-reload being off, and
-// that distinction is the whole point. `cn run -f` and `cn edit` both run with
-// hot-reload on, so a mode check would leave the two binaries a developer
-// actually runs compiling every shader at startup, and needing dxc to do it.
-// Comparing digests means an unedited shader takes the embedded artifact in
-// every build and an edited one is recompiled in all of them.
+// The match is on the source digest rather than on hot-reload being off: an
+// unedited shader takes the shipped artifact whichever way it was assembled,
+// and an edited one is recompiled.
 
 use std::borrow::Cow;
 
@@ -22,22 +20,22 @@ use concinnity_shader::HlslTarget;
 
 use super::cache::{self, Key};
 
-/// A build script's embedded artifact: the digest of the source it was built
-/// from, and its bytes.
-pub(crate) type Embedded = (u64, &'static [u8]);
+use super::shipped::Shipped;
+#[cfg(any(backend_dx, backend_vk))]
+use super::shipped::{Compile, Planned};
 
-/// One built-in program's artifact. `embedded` is the build script's copy for
-/// the program, with the digest of the source it was built from. `key` is
+/// One built-in program's artifact. `shipped` is an export's copy for the
+/// program, with the digest of the source it was compiled from. `key` is
 /// `None` where the cache cannot key the toolchain's output, which then
 /// compiles every time. `label` names the program in errors and the miss log.
 pub(crate) fn fetch(
     label: &str,
     source: &str,
-    embedded: Option<Embedded>,
+    shipped: Option<Shipped>,
     key: Option<&Key<'_>>,
     compile: impl FnOnce() -> RenderResult<Vec<u8>>,
 ) -> RenderResult<Cow<'static, [u8]>> {
-    if let Some((digest, bytes)) = embedded
+    if let Some((digest, bytes)) = shipped
         && digest == source_digest(source)
     {
         return Ok(Cow::Borrowed(bytes));
@@ -77,13 +75,11 @@ impl Program for Variant<'_> {
 }
 
 /// What one backend's built-in compile varies by: the backend the source is
-/// assembled for, the target dxc emits for a program, and the build script's
-/// embedded artifacts.
+/// assembled for, and the target dxc emits for a program.
 #[cfg(any(backend_dx, backend_vk))]
 pub(crate) struct Backend {
     pub platform: Platform,
     pub target: fn(&ShaderProgram) -> HlslTarget,
-    pub embedded: fn(&str) -> Option<Embedded>,
 }
 
 #[cfg(any(backend_dx, backend_vk))]
@@ -93,31 +89,52 @@ impl Backend {
         super::source::assemble_variant(hot_reload, self.platform, v)
     }
 
-    /// The shader-cache key for `source`, which is what a compile the embedded
+    /// The shader-cache key for `source`, which is what a compile the shipped
     /// artifacts missed is stored under.
     pub(crate) fn cache_key<'a>(&self, v: Variant<'_>, source: &'a str) -> Key<'a> {
         Key {
-            compiler: super::compile::COMPILER_TAG,
+            compiler: super::stamp::COMPILER_TAG,
             source,
             entry: v.program.entry,
             target: (self.target)(v.program).name(),
         }
     }
 
-    /// `v`'s artifact, embedded, cached or compiled (see [`fetch`]).
+    /// `v` as a player fetches it: its artifact name, the source it compiles
+    /// and how.
+    pub(crate) fn planned(&self, v: Variant<'_>, hot_reload: bool) -> Planned {
+        Planned {
+            name: v.artifact_name(),
+            source: self.source(v, hot_reload),
+            compile: Compile::Hlsl {
+                file: v.program.file,
+                entry: v.program.entry,
+                target: (self.target)(v.program),
+            },
+        }
+    }
+
+    /// `v`'s artifact, shipped, cached or compiled (see [`fetch`]).
     pub(crate) fn compile(&self, v: Variant<'_>, hot_reload: bool) -> RenderResult<Vec<u8>> {
-        let source = self.source(v, hot_reload);
-        let name = v.artifact_name();
-        let key = self.cache_key(v, &source);
-        fetch(&name, &source, (self.embedded)(&name), Some(&key), || {
-            super::compile::compile(
-                v.program.file,
-                v.program.entry,
-                &source,
-                (self.target)(v.program),
-            )
-        })
+        let planned = self.planned(v, hot_reload);
+        let key = self.cache_key(v, &planned.source);
+        fetch(
+            &planned.name,
+            &planned.source,
+            planned.shipped(self.platform),
+            Some(&key),
+            || planned.compile(),
+        )
         .map(Cow::into_owned)
+    }
+
+    /// Every variant `table` declares, as a player fetches it, for an export
+    /// to compile and ship.
+    pub(crate) fn plan(
+        &self,
+        table: &concinnity_engine::render::shader::programs::Table,
+    ) -> Vec<Planned> {
+        table.variants().map(|v| self.planned(v, false)).collect()
     }
 }
 
@@ -127,30 +144,30 @@ mod tests {
     use concinnity_engine::render::backend::error::RenderError;
 
     const SOURCE: &str = "#define A 1\nBODY\n";
-    static EMBEDDED: &[u8] = b"embedded bytes";
+    static SHIPPED: &[u8] = b"shipped bytes";
 
     fn no_compile() -> RenderResult<Vec<u8>> {
-        panic!("a matching embedded artifact reached the compiler")
+        panic!("a matching shipped artifact reached the compiler")
     }
 
     #[test]
-    fn a_matching_embedded_artifact_is_taken_without_a_compile() {
-        let embedded = Some((source_digest(SOURCE), EMBEDDED));
-        let bytes = fetch("p", SOURCE, embedded, None, no_compile).unwrap();
-        assert!(matches!(bytes, Cow::Borrowed(b) if b == EMBEDDED));
+    fn a_matching_shipped_artifact_is_taken_without_a_compile() {
+        let shipped = Some((source_digest(SOURCE), SHIPPED));
+        let bytes = fetch("p", SOURCE, shipped, None, no_compile).unwrap();
+        assert!(matches!(bytes, Cow::Borrowed(b) if b == SHIPPED));
     }
 
-    // An edited source digests differently, so the embedded copy of the
+    // An edited source digests differently, so the shipped copy of the
     // unedited one must not shadow it.
     #[test]
-    fn an_edited_source_compiles_instead_of_taking_the_embedded_copy() {
-        let embedded = Some((source_digest("#define A 0\nBODY\n"), EMBEDDED));
-        let bytes = fetch("p", SOURCE, embedded, None, || Ok(b"fresh".to_vec())).unwrap();
+    fn an_edited_source_compiles_instead_of_taking_the_shipped_copy() {
+        let shipped = Some((source_digest("#define A 0\nBODY\n"), SHIPPED));
+        let bytes = fetch("p", SOURCE, shipped, None, || Ok(b"fresh".to_vec())).unwrap();
         assert_eq!(&*bytes, b"fresh");
     }
 
     #[test]
-    fn a_program_with_nothing_embedded_compiles() {
+    fn a_program_with_nothing_shipped_compiles() {
         let bytes = fetch("p", SOURCE, None, None, || Ok(b"fresh".to_vec())).unwrap();
         assert!(matches!(bytes, Cow::Owned(_)));
     }

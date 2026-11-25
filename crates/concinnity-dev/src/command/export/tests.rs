@@ -2,8 +2,8 @@ use super::files::{blob_index, collect_files, copy_tree};
 use super::macos::{DEFAULT_ICON_PNG, run_tool, xml_escape};
 use super::meta::{derive_identifier, read_app_meta, resolve_display_name};
 use super::runtime::{
-    backend_label, find_platform_stamp, find_subslice, normalize_platform, parse_runtime_platforms,
-    runtime_wants_d3d12,
+    backend_label, find_platform_stamp, find_shader_stamp, find_subslice, normalize_platform,
+    parse_runtime_platforms, runtime_wants_d3d12,
 };
 use super::*;
 use concinnity_cook::authoring::registry::RegisteredType;
@@ -302,6 +302,23 @@ fn find_platform_stamp_is_none_without_the_marker() {
 }
 
 #[test]
+fn the_shader_stamp_is_read_and_checked() {
+    let mut player = b"padding".to_vec();
+    player.extend_from_slice(b"cn-shader-stamp:00000000000000ff\0tail");
+    assert_eq!(find_shader_stamp(&player), Some(0xff));
+    let path = Path::new("concinnity-player");
+    assert!(verify_runtime_shader_stamp(&player, path, 0xff).is_ok());
+    let refused = verify_runtime_shader_stamp(&player, path, 0xfe).unwrap_err();
+    assert!(
+        refused.to_string().contains("00000000000000ff"),
+        "{refused}"
+    );
+    assert!(verify_runtime_shader_stamp(b"no stamp", path, 0xff).is_err());
+    assert_eq!(find_shader_stamp(b"cn-shader-stamp:00ff"), None);
+    assert_eq!(find_shader_stamp(b"cn-shader-stamp:0000000000000XYZ"), None);
+}
+
+#[test]
 fn find_subslice_locates_and_reports_absence() {
     assert_eq!(find_subslice(b"abcdef", b"cd"), Some(2));
     assert_eq!(find_subslice(b"abcdef", b"abc"), Some(0));
@@ -413,13 +430,16 @@ fn read_runtime_platforms_reads_a_stamp_or_warns_none() {
     let stamped = tmp.path().join("stamped");
     fs::write(&stamped, b"junk cn-runtime-platform:metal,vulkan\0 junk").unwrap();
     assert_eq!(
-        read_runtime_platforms(&stamped).unwrap(),
+        read_runtime_platforms(&fs::read(&stamped).unwrap(), &stamped).unwrap(),
         Some([Platform::Metal, Platform::Vulkan].into_iter().collect())
     );
 
     let unstamped = tmp.path().join("unstamped");
     fs::write(&unstamped, b"no marker in here").unwrap();
-    assert_eq!(read_runtime_platforms(&unstamped).unwrap(), None);
+    assert_eq!(
+        read_runtime_platforms(&fs::read(&unstamped).unwrap(), &unstamped).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -651,6 +671,7 @@ fn export_portable_assembles_folder_and_zip() {
         Some(Platform::Metal.into()),
         &out,
         &data,
+        b"shaders",
         true,
     )
     .unwrap();
@@ -663,6 +684,10 @@ fn export_portable_assembles_folder_and_zip() {
     assert!(bundle.join("data").join("1").exists());
     // Build scratch is not packaged.
     assert!(!bundle.join("data").join("scratch.air").exists());
+    assert_eq!(
+        fs::read(StateTree::at(&bundle).shipped_shaders_path()).unwrap(),
+        b"shaders"
+    );
 
     // The versioned archive was written beside the folder.
     let stem = artifact_stem(&meta, platform_tag(std::env::consts::OS));
@@ -694,7 +719,7 @@ fn export_macos_builds_app_bundle_with_default_icon() {
     };
     // No AppConfig icon -> the bundled default flows through the icon
     // pipeline. make_zip on, make_dmg off (dmg needs a slow hdiutil).
-    export_macos(&meta, &runtime, &out, &data, true, false).unwrap();
+    export_macos(&meta, &runtime, &out, &data, b"shaders", true, false).unwrap();
 
     let app = out.join("My-Game.app");
     assert!(app.join("Contents/MacOS/My-Game").exists(), "exe missing");

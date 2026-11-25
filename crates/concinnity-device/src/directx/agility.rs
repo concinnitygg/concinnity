@@ -15,9 +15,7 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 use windows::core::PCSTR;
 
-// The `D3D12SDKVersion` of the vendored Agility package, the middle number of
-// its release.
-const SDK_VERSION: u32 = 619;
+use crate::AGILITY_SDK_VERSION as SDK_VERSION;
 
 // The directory the runtime sits in, beside the executable.
 const SDK_DIR: &str = "D3D12";
@@ -105,16 +103,6 @@ fn sdk_path(dir: &Path) -> Option<CString> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_sdk_version_is_the_vendored_release() {
-        let release = concinnity_vendor::sdks::AGILITY.release;
-        assert_eq!(
-            release.split('.').nth(1),
-            Some(SDK_VERSION.to_string().as_str()),
-            "{release}"
-        );
-    }
 
     #[test]
     fn the_sdk_path_ends_in_a_separator() {

@@ -1,4 +1,4 @@
-//! The HLSL shader toolchain, shared by build scripts and the renderer.
+//! The HLSL shader toolchain, shared by the cook, the renderer and export.
 //!
 //! The engine's single-source shaders
 //! (`crates/concinnity-engine/src/render/shader/hlsl/*.hlsl`) compile through one
@@ -10,21 +10,17 @@
 //! the entry point, and the target -- which is what lets the renderer's
 //! content-addressed shader cache key it.
 //!
-//! Being needed on both sides is why this is its own crate rather than a module
-//! of `concinnity-toolchain`: that crate is build-script support, consumed only
-//! under `[build-dependencies]` and never linked into a shipped binary, and it
-//! stays that way. This one sits below it and holds no policy beyond two
-//! things no compiler can be asked for: the Metal binding table, which
-//! `metal_bindings` derives from the source's own annotations rather than from
-//! a hand-maintained list, and what each backend loads a cooked program as
-//! ([`HlslTarget::cooked`]), which the cook and a renderer's fallback compile
-//! must agree on.
+//! It holds no policy beyond two things no compiler can be asked for: the Metal
+//! binding table, which `metal_bindings` derives from the source's own
+//! annotations rather than from a hand-maintained list, and what each backend
+//! loads a cooked program as ([`HlslTarget::cooked`]), which the cook and a
+//! renderer's compile must agree on.
 //!
-//! dxc resolves from `dxc/bin` beside the running executable, then the
-//! checkout's pinned release under `vendor/`, then PATH, then `$VULKAN_SDK/bin`
-//! (see `locate`). Everything the engine draws is compiled ahead of time, so a
-//! host with none of these candidates runs a world fine and fails only when
-//! something has to be compiled: an authored shader, or an edited one.
+//! dxc resolves from `dxc/bin` beside the running executable, then the pinned
+//! release `concinnity vendor` fetched, then PATH, then `$VULKAN_SDK/bin` (see
+//! `locate`). A development run compiles the engine's shaders on first use and
+//! caches them; an export compiles them ahead of time and ships them, so an
+//! exported app needs no compiler.
 //!
 //! The MSL leg and the layout reflection are behind the `spirv-cross` feature,
 //! which links spirv-cross itself. A DirectX or Vulkan build needs neither and
@@ -52,8 +48,9 @@ use std::sync::OnceLock;
 
 use concinnity_core::platform::Platform;
 
+pub use locate::{use_vendor_dir, vendored_dxc};
 pub use stage::{Stage, stage_of};
-pub use vendored::vendored_releases;
+use vendored::vendored_releases;
 
 /// The shader model every program compiles at unless it asks for 6.5: the
 /// floor `NonUniformResourceIndex` needs, which the bindless pool does.
@@ -267,9 +264,9 @@ fn probe_dxc() -> Result<Dxc, String> {
     }
     Err(format!(
         "dxc not found: the engine's single-source shaders need the DirectX \
-         Shader Compiler. In an engine checkout, `cargo xtask vendor fetch dxc` \
-         vendors the pinned release (`build dxc` on macOS, which Microsoft \
-         publishes no binary for). Otherwise install a release \
+         Shader Compiler. `concinnity vendor dxc` vendors the pinned release \
+         (building it from source on macOS, which Microsoft publishes no binary \
+         for). Otherwise install a release \
          (https://github.com/microsoft/DirectXShaderCompiler/releases) and put \
          its `{}` first on PATH.",
         locate::EXE

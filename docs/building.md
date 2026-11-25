@@ -61,53 +61,53 @@ rustc --version
 
 ### Third-party dependencies
 
-The build uses one third-party binary that is not a Rust crate, the
-[shader compiler](#shader-compiler). Vendor it once per checkout:
+The build reads no third-party binary that is not a Rust crate. Running an app
+from a checkout does: the [shader compiler](#shader-compiler), and on Windows
+the [runtime SDKs](#optional-runtime-sdks). Vendor them once per checkout:
 
 ```sh
-cargo xtask vendor
+cargo run --bin concinnity -- vendor
 ```
 
-To see what is vendored and what the build would otherwise pick:
+To see what is vendored:
 
 ```sh
-cargo xtask vendor status
+cargo run --bin concinnity -- vendor --status
 ```
-
-The runtime SDKs an app loads on Windows are vendored separately, by
-`concinnity vendor`; see [Optional: runtime SDKs](#optional-runtime-sdks).
 
 ### Shader compiler
 
 Every engine shader is HLSL, compiled by the
 [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler)
 (`dxc`) to DXIL for DirectX 12 and to SPIR-V for Vulkan; on macOS the SPIR-V is
-translated to Metal by spirv-cross, which the build links, so there is nothing
-extra to install for it. The build compiles every engine shader into the
-binary, and stops if no `dxc` resolves. It is looked for in this order:
+translated to MSL by spirv-cross, which the build links, and to a metallib by
+the [Metal toolchain](#macos-metal). Nothing is compiled at build time. A run
+from a checkout compiles each engine shader the first time it is used and caches
+it under the project's `cache/`; `concinnity export` compiles all of them for
+the player's graphics APIs and ships them beside its data, so an exported app
+needs no compiler. `dxc` is looked for in this order:
 
-1. `dxc/bin/` beside the running executable, which is where a release carries
-   the one it was built with
-2. `vendor/dxc-<version>-<os>-<arch>/`, the release `cargo xtask vendor` pins
+1. `dxc/bin/` beside the running executable
+2. `<vendor>/dxc-<version>-<os>-<arch>/`, the release `concinnity vendor dxc`
+   pins, in the workspace's `vendor/` or the per-user vendor directory
 3. `PATH`
 4. `$VULKAN_SDK/bin`
 
-Every host compiles with the one pinned release, since the embedded shaders and
-the runtime shader cache's key both depend on it: Windows and Linux fetch
-Microsoft's archive, and macOS builds the same commit from source. Outside a
-checkout, install a
+Every host compiles with the one pinned release, since the shader cache's key
+depends on it: Windows and Linux fetch Microsoft's archive, and macOS builds the
+same commit from source, which needs `git`, `cmake` and `ninja`. Without
+vendoring, install a
 [DXC release](https://github.com/microsoft/DirectXShaderCompiler/releases) and
 put its `bin/` on `PATH`.
 
-A built binary needs no compiler to draw its own shaders. `cn cook` needs one
-to cook assets that declare a `Shader` or an `SdfVolume`, whose authored HLSL
-compiles alongside the engine's.
+`cn cook` also needs one to cook assets that declare a `Shader` or an
+`SdfVolume`, whose authored HLSL compiles alongside the engine's.
 
 ## Third-party environment variables
 
 | Variable     | Read at     | Default | Locates                                                                                                      |
 | ------------ | ----------- | ------- | ------------------------------------------------------------------------------------------------------------ |
-| `VULKAN_SDK` | build + run | none    | The Vulkan SDK: `bin/dxc` as the last `dxc` candidate, and the loader, layers and `glslc` for a Vulkan build |
+| `VULKAN_SDK` | run         | none    | The Vulkan SDK: `bin/dxc` as the last `dxc` candidate, and the loader, layers and `glslc` for a Vulkan build |
 
 No other SDK is read by the build. The upscalers and the Agility D3D12 runtime
 are loaded when an app runs; see
@@ -132,9 +132,10 @@ below.
    come from the Xcode SDK. The Command Line Tools alone are not sufficient.
 
 2. Install the **Metal toolchain**. Since Xcode 16 it ships as a separate,
-   downloadable component rather than being bundled. The device build script
-   invokes `xcrun metal` / `xcrun metallib` to precompile the engine's shaders,
-   so this is required:
+   downloadable component rather than being bundled. A run compiles the
+   engine's shaders with `xcrun metal` / `xcrun metallib` on first use, and
+   export compiles them for the player, so this is required to run or export
+   (not to build):
 
    ```sh
    xcodebuild -downloadComponent MetalToolchain
@@ -147,7 +148,8 @@ below.
    ```
 
 3. Build `dxc`, the [shader compiler](#shader-compiler), with
-   `cargo xtask vendor`: DXC publishes no macOS release of its own.
+   `concinnity vendor dxc`: DXC publishes no macOS release of its own, so this
+   builds the pinned commit (`brew install cmake ninja`).
 
 ### Build
 
@@ -164,9 +166,9 @@ exercised on a Mac without a Linux or Windows host.
 
 ### Prerequisites
 
-The [macOS Metal prerequisites](#macos-metal) are still required for a workspace
-build (the Metal toolchain compiles the Metal shaders for the crates that always
-build them). In addition:
+Xcode from the [macOS Metal prerequisites](#macos-metal) is still required to
+build, since the build carries Metal beside Vulkan; the Metal toolchain is
+needed only to run or export. In addition:
 
 1. Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) from LunarG,
    choosing the **system-wide install** so the loader, the MoltenVK ICD, and the
@@ -181,12 +183,8 @@ build them). In addition:
    vulkaninfo --summary
    ```
 
-2. The build still compiles with the vendored
+2. Shaders still compile with the vendored
    [shader compiler](#shader-compiler), not the SDK's `dxc`.
-
-   ```sh
-   brew install cmake python git
-   ```
 
 Windowing and input use the native AppKit window (shared with the Metal
 backend), so no windowing-library install is involved and GLFW is not built.
@@ -228,8 +226,9 @@ DirectX 12 is the default backend on Windows.
    through Visual Studio 2022 (any edition) or the standalone
    [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/),
    selecting the **Desktop development with C++** workload. This provides the MSVC
-   linker plus the Windows SDK. Shaders compile with the pinned `dxc` that
-   `cargo xtask vendor` vendors; see [Shader compiler](#shader-compiler).
+   linker plus the Windows SDK. Shaders compile at run time with the pinned
+   `dxc` that `concinnity vendor` vendors; see
+   [Shader compiler](#shader-compiler).
 
 ### Build
 
@@ -245,17 +244,12 @@ on Microsoft's D3D12 Agility SDK, which FSR on DirectX needs. None of them is
 needed to build: the renderer loads each when an app runs, and an upscaler whose
 libraries are absent falls through to the next one, then to native resolution.
 
-Fetch them with:
-
-```sh
-concinnity vendor
-```
-
-It downloads the pinned releases into the workspace's `vendor/` directory (or a
+`concinnity vendor` (see [Third-party dependencies](#third-party-dependencies))
+downloads the pinned releases into the workspace's `vendor/` directory (or a
 per-user one outside a workspace) and stages their libraries into
 `vendor/runtime-windows-x86_64/`, with their license notices under
 `licenses/`. `concinnity run`, `bench` and `edit`, and the examples (through
-`concinnity::dev::use_vendored_runtime`), load from there, and
+`concinnity::dev::use_vendored`), load from there, and
 `concinnity export` copies it beside the exported player. Streamline's DLSS and
 Reflex terms are agreements, which the command shows and asks to accept;
 `--accept-licenses` accepts them without asking, and without a terminal to ask
@@ -333,7 +327,7 @@ Ubuntu; translate them to your distribution's equivalents as needed.
    ```
 
 3. Vendor `dxc`, the [shader compiler](#shader-compiler), with
-   `cargo xtask vendor`.
+   `concinnity vendor dxc`.
 
 4. To **run** the engine you also need a Vulkan-capable GPU driver (e.g.
    `mesa-vulkan-drivers` for Intel/AMD, or the proprietary NVIDIA driver). The

@@ -1,6 +1,6 @@
-//! Releases unpacked under a workspace's `vendor/` directory.
+//! Releases unpacked under a vendor directory.
 //!
-//! `cargo xtask vendor` leaves each one at `vendor/<name>-<version>-<slug>/`,
+//! `concinnity vendor` leaves each one at `<vendor>/<name>-<version>-<slug>/`,
 //! where `<slug>` is the `<os>-<arch>` it was built for.
 
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// Versions compare by component rather than by string: 1.10.0 is newer than
 /// 1.9.0, which sorts the other way lexically. An absent `vendor` holds none.
 #[must_use]
-pub fn vendored_releases(vendor: &Path, name: &str, slug: &str) -> Vec<PathBuf> {
+pub(crate) fn vendored_releases(vendor: &Path, name: &str, slug: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(vendor) else {
         return Vec::new();
     };
