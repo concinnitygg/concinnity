@@ -32,6 +32,52 @@ pub struct PassCamera {
     pub pre_exposure: f32,
 }
 
+/// The frame's image-based lighting and exposure, which every [`PassCamera`]
+/// built that frame carries unchanged.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PassLighting {
+    /// Mip count of the bound IBL prefilter cube; 0 when none is bound.
+    pub prefilter_mip_count: f32,
+    /// 1 when the irradiance cube holds diffuse light; 0 otherwise.
+    pub irradiance: f32,
+    /// Rows of the rotation taking a world direction into the environment
+    /// cubemaps' baked frame.
+    pub sky_rot: [[f32; 4]; 3],
+    /// The scale the frame's HDR chain is written at.
+    pub pre_exposure: f32,
+}
+
+impl PassCamera {
+    /// A camera over `vp` and its inverse `inv_vp`, at `cam_pos`, for a
+    /// `viewport`-pixel target `time` seconds into the world, lit by `lighting`.
+    pub fn new(
+        vp: [[f32; 4]; 4],
+        inv_vp: [[f32; 4]; 4],
+        cam_pos: [f32; 3],
+        viewport: [f32; 2],
+        time: f32,
+        lighting: PassLighting,
+    ) -> Self {
+        let PassLighting {
+            prefilter_mip_count,
+            irradiance,
+            sky_rot,
+            pre_exposure,
+        } = lighting;
+        Self {
+            vp,
+            inv_vp,
+            cam_pos,
+            viewport,
+            time,
+            prefilter_mip_count,
+            irradiance,
+            sky_rot,
+            pre_exposure,
+        }
+    }
+}
+
 /// Per-frame view-projection uniforms, uploaded once per frame and shared across
 /// every draw in it. `view` is the standalone view matrix the vertex shader uses
 /// to compute view-space depth for cascade selection in the fragment shader.
@@ -283,23 +329,37 @@ impl GBufferView {
 #[cfg(test)]
 pub(super) fn test_camera() -> PassCamera {
     let m = |k: f32| [[k; 4]; 4];
-    PassCamera {
-        vp: m(1.0),
-        inv_vp: m(2.0),
-        cam_pos: [3.0, 4.0, 5.0],
-        viewport: [640.0, 480.0],
-        time: 6.5,
-        prefilter_mip_count: 7.0,
-        irradiance: 1.0,
-        sky_rot: [[8.0; 4]; 3],
-        pre_exposure: 9.5,
-    }
+    PassCamera::new(
+        m(1.0),
+        m(2.0),
+        [3.0, 4.0, 5.0],
+        [640.0, 480.0],
+        6.5,
+        PassLighting {
+            prefilter_mip_count: 7.0,
+            irradiance: 1.0,
+            sky_rot: [[8.0; 4]; 3],
+            pre_exposure: 9.5,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
+
+    #[test]
+    fn a_pass_camera_carries_its_view_and_the_frame_lighting() {
+        let c = test_camera();
+        assert_eq!((c.vp, c.inv_vp), ([[1.0; 4]; 4], [[2.0; 4]; 4]));
+        assert_eq!(
+            (c.cam_pos, c.viewport, c.time),
+            ([3.0, 4.0, 5.0], [640.0, 480.0], 6.5)
+        );
+        assert_eq!((c.prefilter_mip_count, c.irradiance), (7.0, 1.0));
+        assert_eq!((c.sky_rot, c.pre_exposure), ([[8.0; 4]; 3], 9.5));
+    }
 
     // A face carries its own camera and lighting inputs and none of the main
     // view's screen-space terms.

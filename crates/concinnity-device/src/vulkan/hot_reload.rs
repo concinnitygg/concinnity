@@ -24,14 +24,6 @@ use super::pipeline::{
 use super::pipeline_desc::compute_pipeline;
 use crate::vulkan::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
-// Rebuild a feature's pipelines into a temporary when `$cond` says it is live,
-// propagating errors: `Some(build?)` when live, `None` otherwise.
-macro_rules! rebuild_if_live {
-    ($cond:expr_2021, $build:expr_2021 $(,)?) => {
-        if $cond { Some($build?) } else { None }
-    };
-}
-
 impl VkContext {
     // Rebuild every built-in pipeline from source into temporaries, swapping them
     // in only when all succeed; a failure logs and keeps the live pipelines. The

@@ -1264,20 +1264,17 @@ impl DxContext {
         if surfaces().next().is_none() {
             return;
         }
-        let camera = PassCamera {
-            vp: prepass.jittered_vp,
-            inv_vp: mat4_inverse(prepass.jittered_vp),
-            cam_pos: prepass.cam_pos,
-            viewport: [
+        let camera = PassCamera::new(
+            prepass.jittered_vp,
+            mat4_inverse(prepass.jittered_vp),
+            prepass.cam_pos,
+            [
                 self.targets.extent.render_width as f32,
                 self.targets.extent.render_height as f32,
             ],
-            time: prepass.elapsed,
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            irradiance: self.irradiance_lane(),
-            sky_rot: self.state.view.sky_rot,
-            pre_exposure: self.pre_exposure.value(),
-        };
+            prepass.elapsed,
+            self.pass_lighting(),
+        );
         let view = &RaymarchView::for_gbuffer(&camera, gbuffer);
         let draws = surfaces().map(|(v, psos)| (psos.get(v.faces(view)), v.volume_cbuffer_gva));
         let (Some(&view_ptr), Some(view_cb), Some(lights), Some(shadow)) = (

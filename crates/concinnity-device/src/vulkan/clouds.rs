@@ -925,15 +925,12 @@ impl CloudState {
             return Ok(());
         }
         let attachments = [scene];
-        let info = vk::FramebufferCreateInfo::default()
-            .render_pass(self.composite_pass)
-            .attachments(&attachments)
-            .width(extent.width.max(1))
-            .height(extent.height.max(1))
-            .layers(1);
-        let framebuffer = device
-            .create_framebuffer(&info)
-            .map_err(|e| super::error::map_vk_result(e, "cloud composite framebuffer"))?;
+        let framebuffer = device.framebuffer(
+            self.composite_pass,
+            &attachments,
+            extent,
+            "cloud composite framebuffer",
+        )?;
         *slot = Some((scene, extent, framebuffer));
         Ok(())
     }

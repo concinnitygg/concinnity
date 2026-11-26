@@ -41,31 +41,6 @@ use super::context::VkContext;
 use super::post::SsaoResources;
 
 impl VkContext {
-    // Rebuild `features` to match `g`, between frames (the GraphicsSystem
-    // drain runs before the next `draw_frame`). A feature whose build fails
-    // keeps its previous state; the first error comes back once every feature
-    // has run.
-    fn rebuild_planned(&mut self, g: &ResolvedGraphics, features: RebuildSet) -> RenderResult<()> {
-        // TAA resources stay present while the built upscaler consumes the
-        // velocity pre-pass; the TAA resolve is then dropped from the graph.
-        let plan = FeaturePlan::resolve(
-            g,
-            BackendFacts {
-                rt_capable: self.hw.rt_capable,
-                upscaling: self.upscale.is_some(),
-            },
-        );
-        let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, g, &plan));
-        let ssr = if features.touches_reflections() {
-            self.rebuild_ssr(g, &plan)
-        } else {
-            Ok(())
-        };
-        let disocclusion = self.reconcile_disocclusion();
-        self.refresh_gates(g);
-        rebuilt.and(ssr).and(disocclusion)
-    }
-
     fn rebuild_feature(
         &mut self,
         feature: RebuildFeature,
@@ -416,31 +391,85 @@ impl SettingsTarget for VkContext {
         self.shadow.map_sizes()
     }
 
+    // Rebuild `features` to match `graphics`, between frames (the GraphicsSystem
+    // drain runs before the next `draw_frame`). A feature whose build fails
+    // keeps its previous state; the first error comes back once every feature
+    // has run.
     fn rebuild_features(
         &mut self,
         graphics: &ResolvedGraphics,
         features: RebuildSet,
     ) -> RenderResult<()> {
-        self.rebuild_planned(graphics, features)
+        // TAA resources stay present while the built upscaler consumes the
+        // velocity pre-pass; the TAA resolve is then dropped from the graph.
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: self.hw.rt_capable,
+                upscaling: self.upscale.is_some(),
+            },
+        );
+        let rebuilt = rebuild_each(features, |feature| {
+            self.rebuild_feature(feature, graphics, &plan)
+        });
+        let ssr = if features.touches_reflections() {
+            self.rebuild_ssr(graphics, &plan)
+        } else {
+            Ok(())
+        };
+        let disocclusion = self.reconcile_disocclusion();
+        self.refresh_gates(graphics);
+        rebuilt.and(ssr).and(disocclusion)
     }
 
+    // Update the live scalar tunables of the SSAO / SSR / SSGI / auto-exposure
+    // passes, read again next frame. Features not live are skipped. SSGI's trace
+    // resolution rides its rebuild, so only its intensity and distance change here.
     fn push_feature_params(&mut self, graphics: &ResolvedGraphics) {
-        self.update_quality_params(graphics);
+        if let (Some(live), Some(cur)) =
+            (graphics.ssao(), self.ssao.as_mut().map(|s| &mut s.settings))
+        {
+            *cur = live;
+        }
+        if let (Some(live), Some(cur)) = (
+            graphics.ssr(),
+            self.ssr.as_mut().and_then(|s| s.settings.as_mut()),
+        ) {
+            *cur = live;
+        }
+        if let (Some(live), Some(cur)) =
+            (graphics.ssgi(), self.ssgi.as_mut().map(|s| &mut s.settings))
+        {
+            cur.intensity = live.intensity;
+            cur.max_distance = live.max_distance;
+        }
+        if let (Some(live), Some(cur)) = (
+            graphics.auto_exposure(),
+            self.auto_exposure.adaptation.as_mut(),
+        ) {
+            cur.settings = live;
+        }
+        self.refresh_gates(graphics);
     }
 
+    // Replace the live post-process tunables, pushed to the bloom + composite
+    // shaders each frame. The composite's display-output flags are not part of
+    // the payload, so the EDR path negotiated at init survives every push.
     fn push_post_process(&mut self, tunables: render_types::PostProcessTunables) {
-        self.update_post_process(tunables);
+        self.post_process.set_tunables(tunables);
     }
 
+    // Set the live ambient (IBL) scale and re-arm every UBO slot. A no-op when the
+    // value is unchanged.
     fn push_ambient(&mut self, value: f32) {
-        self.set_ambient_intensity(value);
+        self.state.lights.set_ambient(value);
     }
 
     fn push_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
-        self.set_shadow_cadence(cadence);
+        self.state.planner.shadow.cadence = cadence;
     }
 
     fn push_vsync(&mut self, on: bool) {
-        self.set_vsync(on);
+        WindowControl::set_vsync(self, on);
     }
 }

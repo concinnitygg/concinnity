@@ -419,31 +419,6 @@ fn create_aerial_pass(device: &VkDevice, format: vk::Format) -> RenderResult<Own
         .map_err(|e| super::error::map_vk_result(e, "aerial perspective render pass"))
 }
 
-fn create_framebuffers(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    views: &[vk::ImageView],
-    frames: usize,
-    extent: vk::Extent2D,
-) -> RenderResult<Vec<OwnedFramebuffer>> {
-    views
-        .iter()
-        .take(frames)
-        .map(|&view| {
-            let attachments = [view];
-            let info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&attachments)
-                .width(extent.width.max(1))
-                .height(extent.height.max(1))
-                .layers(1);
-            device
-                .create_framebuffer(&info)
-                .map_err(|e| super::error::map_vk_result(e, "aerial perspective framebuffer"))
-        })
-        .collect()
-}
-
 fn compile_kernel(
     device: &VkDevice,
     layout: vk::PipelineLayout,
@@ -701,12 +676,11 @@ impl AtmosphereState {
                 .sampled_image_in(5, tables[MULTISCATTER].view, vk::ImageLayout::GENERAL)
                 .apply(device);
         }
-        let framebuffers = create_framebuffers(
-            device,
+        let framebuffers = device.single_view_framebuffers(
             aerial_pass.handle(),
-            targets.hdr_resolve_views,
-            frames,
+            targets.hdr_resolve_views.iter().copied().take(frames),
             targets.extent,
+            "aerial perspective framebuffer",
         )?;
         let clouds = build_clouds(
             gpu,
@@ -775,12 +749,14 @@ impl AtmosphereState {
         msaa: bool,
     ) -> RenderResult<()> {
         let device = gpu.device;
-        self.framebuffers = create_framebuffers(
-            device,
+        self.framebuffers = device.single_view_framebuffers(
             self.aerial_pass.handle(),
-            hdr_resolve_views,
-            self.params_ubos.len(),
+            hdr_resolve_views
+                .iter()
+                .copied()
+                .take(self.params_ubos.len()),
             extent,
+            "aerial perspective framebuffer",
         )?;
         let last_depth = depth_views.len().saturating_sub(1);
         for (i, &set) in self.aerial_sets.iter().enumerate() {

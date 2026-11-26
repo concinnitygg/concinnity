@@ -42,4 +42,4 @@ pub use transparent::{
     GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterOceanGpu, WaterParams,
     WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterWaveGpu,
 };
-pub use view::{FaceCamera, GBufferView, PassCamera, StandIns, ViewUniforms};
+pub use view::{FaceCamera, GBufferView, PassCamera, PassLighting, StandIns, ViewUniforms};

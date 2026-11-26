@@ -474,17 +474,15 @@ impl PropProbeGpu {
                 Some(c) => vec![c.view, depth.view, layer],
                 None => vec![layer, depth.view],
             };
-            let info = vk::FramebufferCreateInfo::default()
-                .render_pass(ctx.targets.main_render_pass.handle())
-                .attachments(&attachments)
-                .width(size)
-                .height(size)
-                .layers(1);
-            framebuffers.push(
-                device
-                    .create_framebuffer(&info)
-                    .map_err(|e| super::error::map_vk_result(e, "prop probe framebuffer"))?,
-            );
+            framebuffers.push(device.framebuffer(
+                ctx.targets.main_render_pass.handle(),
+                &attachments,
+                vk::Extent2D {
+                    width: size,
+                    height: size,
+                },
+                "prop probe framebuffer",
+            )?);
         }
 
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;

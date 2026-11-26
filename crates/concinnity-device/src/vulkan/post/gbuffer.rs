@@ -659,18 +659,15 @@ impl GbufferResources {
                 vk::SampleCountFlags::TYPE_1,
             )?;
             let attachments = [normal_depth.view, roughness.view, velocity.view, depth.view];
-            let framebuffer = device
-                .create_framebuffer(
-                    &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.prepass_render_pass.handle())
-                        .attachments(&attachments)
-                        .width(w)
-                        .height(h)
-                        .layers(1),
-                )
-                .map_err(|e| {
-                    crate::vulkan::error::map_vk_result(e, "gbuffer prepass framebuffer")
-                })?;
+            let framebuffer = device.framebuffer(
+                self.prepass_render_pass.handle(),
+                &attachments,
+                vk::Extent2D {
+                    width: w,
+                    height: h,
+                },
+                "gbuffer prepass framebuffer",
+            )?;
             self.normal_depth_images.push(normal_depth);
             self.roughness_images.push(roughness);
             self.velocity_images.push(velocity);

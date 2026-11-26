@@ -23,6 +23,7 @@ mod draw;
 mod error;
 mod feature_wires;
 mod fog;
+mod framebuffer;
 mod geometry_upload;
 mod glass;
 mod global_set;

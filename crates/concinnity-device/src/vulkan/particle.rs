@@ -227,15 +227,12 @@ fn create_framebuffers(
         .take(frames)
         .map(|(&scene, &mask)| {
             let attachments = device.writer_targets().views(scene, mask);
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&attachments)
-                .width(targets.extent.width.max(1))
-                .height(targets.extent.height.max(1))
-                .layers(1);
-            device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, "particle framebuffer"))
+            device.framebuffer(
+                render_pass,
+                &attachments,
+                targets.extent,
+                "particle framebuffer",
+            )
         })
         .collect()
 }
@@ -411,15 +408,12 @@ impl ParticleResources {
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         let attachments = device.writer_targets().views(scene, mask);
-        let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(self.render_passes.compatible())
-            .attachments(&attachments)
-            .width(extent.width.max(1))
-            .height(extent.height.max(1))
-            .layers(1);
-        let fb = device
-            .create_framebuffer(&fb_info)
-            .map_err(|e| super::error::map_vk_result(e, "particle framebuffer"))?;
+        let fb = device.framebuffer(
+            self.render_passes.compatible(),
+            &attachments,
+            extent,
+            "particle framebuffer",
+        )?;
         if let Some(slot) = self.late_framebuffers.get_mut(frame) {
             *slot = fb;
         }

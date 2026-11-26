@@ -66,7 +66,9 @@ pub(in crate::vulkan) use concinnity_engine::render::uniforms::{
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
 use crate::vulkan::record::Recorder;
-use concinnity_engine::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
+use concinnity_engine::render::uniforms::{
+    GBufferView, PassCamera, PassLighting, RaymarchShadowCascade,
+};
 
 mod swap;
 
@@ -1251,15 +1253,22 @@ impl VkContext {
         cam_pos: [f32; 3],
         time: f32,
     ) -> PassCamera {
-        PassCamera {
+        PassCamera::new(
             vp,
-            inv_vp: mat4_inverse(vp),
+            mat4_inverse(vp),
             cam_pos,
-            viewport: [
+            [
                 self.targets.render_extent.width as f32,
                 self.targets.render_extent.height as f32,
             ],
             time,
+            self.pass_lighting(),
+        )
+    }
+
+    // The frame's IBL and exposure, the same for every pass camera.
+    fn pass_lighting(&self) -> PassLighting {
+        PassLighting {
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,

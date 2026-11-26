@@ -162,15 +162,12 @@ impl LineResources {
                 .apply(device);
         }
 
-        let mut framebuffers = Vec::with_capacity(frames);
-        for &view in hdr_resolve_views.iter().take(frames) {
-            framebuffers.push(create_line_framebuffer(
-                device,
-                render_pass.handle(),
-                view,
-                extent,
-            )?);
-        }
+        let framebuffers = device.single_view_framebuffers(
+            render_pass.handle(),
+            hdr_resolve_views.iter().copied().take(frames),
+            extent,
+            "line framebuffer",
+        )?;
 
         Ok(Self {
             render_pass,
@@ -195,15 +192,12 @@ impl LineResources {
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
-        self.framebuffers.clear();
-        for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
-            self.framebuffers.push(create_line_framebuffer(
-                device,
-                self.render_pass.handle(),
-                view,
-                extent,
-            )?);
-        }
+        self.framebuffers = device.single_view_framebuffers(
+            self.render_pass.handle(),
+            hdr_resolve_views.iter().copied().take(self.view_ubos.len()),
+            extent,
+            "line framebuffer",
+        )?;
         for (i, &set) in self.view_sets.iter().enumerate() {
             SetWrites::new(set)
                 .sampled_image(1, depth_views[i.min(depth_views.len().saturating_sub(1))])
@@ -230,24 +224,6 @@ fn new_vertex_slot(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<Verte
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     Ok(VertexSlot { buffer, capacity })
-}
-
-fn create_line_framebuffer(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    view: vk::ImageView,
-    extent: vk::Extent2D,
-) -> RenderResult<OwnedFramebuffer> {
-    let attachments = [view];
-    let info = vk::FramebufferCreateInfo::default()
-        .render_pass(render_pass)
-        .attachments(&attachments)
-        .width(extent.width.max(1))
-        .height(extent.height.max(1))
-        .layers(1);
-    device
-        .create_framebuffer(&info)
-        .map_err(|e| super::error::map_vk_result(e, "line framebuffer"))
 }
 
 // Render pass / pipeline construction

@@ -175,16 +175,7 @@ impl PostPassCache {
         {
             return Ok(Arc::clone(fb));
         }
-        let fb = device
-            .create_framebuffer(
-                &vk::FramebufferCreateInfo::default()
-                    .render_pass(render_pass)
-                    .attachments(std::slice::from_ref(&view))
-                    .width(extent.width)
-                    .height(extent.height)
-                    .layers(1),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "post framebuffer"))?;
+        let fb = device.framebuffer(render_pass, &[view], extent, "post framebuffer")?;
         let fb = Arc::new(fb);
         fbs.push((view, render_pass, Arc::clone(&fb)));
         Ok(fb)

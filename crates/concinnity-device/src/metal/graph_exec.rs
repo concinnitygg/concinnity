@@ -87,7 +87,7 @@ use concinnity_engine::render::render_graph::{
     BatchRecorder, CompiledGraph, CompiledPass, PassId, PassQueue, PassScratch, batch_budget,
     execute_batches, plan_batches, presenter_index,
 };
-use concinnity_engine::render::uniforms::PassCamera;
+use concinnity_engine::render::uniforms::{PassCamera, PassLighting};
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -447,15 +447,22 @@ impl MtlContext {
     // frame's jittered VP and its inverse at the HDR target size, with this
     // frame's IBL and sky rotation.
     fn pass_camera(&self, params: &GraphFrameParams<'_>) -> PassCamera {
-        PassCamera {
-            vp: params.plan.camera.vp,
-            inv_vp: params.plan.camera.inv_vp,
-            cam_pos: params.plan.cam_pos,
-            viewport: [
+        PassCamera::new(
+            params.plan.camera.vp,
+            params.plan.camera.inv_vp,
+            params.plan.cam_pos,
+            [
                 self.targets.hdr.width as f32,
                 self.targets.hdr.height as f32,
             ],
-            time: narrow_f32(params.frame.elapsed),
+            narrow_f32(params.frame.elapsed),
+            self.pass_lighting(),
+        )
+    }
+
+    // The frame's IBL and exposure, the same for every pass camera.
+    fn pass_lighting(&self) -> PassLighting {
+        PassLighting {
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,

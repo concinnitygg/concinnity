@@ -1095,15 +1095,15 @@ impl BakeResources {
         } else {
             vec![color.view, depth.view]
         };
-        let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(ctx.targets.main_render_pass.handle())
-            .attachments(&fb_attachments)
-            .width(size)
-            .height(size)
-            .layers(1);
-        let framebuffer = device
-            .create_framebuffer(&fb_info)
-            .map_err(|e| super::error::map_vk_result(e, "probe framebuffer"))?;
+        let framebuffer = device.framebuffer(
+            ctx.targets.main_render_pass.handle(),
+            &fb_attachments,
+            vk::Extent2D {
+                width: size,
+                height: size,
+            },
+            "probe framebuffer",
+        )?;
 
         // Bake-owned cull ring, sized like the per-frame rings.
         let n = ctx.state.draw.record_count();

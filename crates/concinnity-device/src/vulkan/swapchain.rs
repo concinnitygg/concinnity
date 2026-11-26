@@ -995,15 +995,12 @@ pub(super) fn create_main_framebuffers(
                     resolve_images[i].view,
                 ]
             };
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&attachments)
-                .width(extent.width)
-                .height(extent.height)
-                .layers(1);
-            device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, &format!("framebuffer[{i}]")))
+            device.framebuffer(
+                render_pass,
+                &attachments,
+                extent,
+                &format!("framebuffer[{i}]"),
+            )
         })
         .collect()
 }
@@ -1019,15 +1016,12 @@ pub(super) fn create_composite_framebuffers(
         .iter()
         .enumerate()
         .map(|(i, &sc_view)| {
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(std::slice::from_ref(&sc_view))
-                .width(extent.width)
-                .height(extent.height)
-                .layers(1);
-            device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, &format!("composite framebuffer[{i}]")))
+            device.framebuffer(
+                render_pass,
+                &[sc_view],
+                extent,
+                &format!("composite framebuffer[{i}]"),
+            )
         })
         .collect()
 }
@@ -1139,20 +1133,15 @@ pub(super) fn create_shadow_framebuffers(
     shadow_map: &GpuImage,
     size: u32,
 ) -> RenderResult<Vec<OwnedFramebuffer>> {
-    let mut fbs = Vec::with_capacity(shadow_map.aux_views.len());
-    for &view in &shadow_map.aux_views {
-        let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(render_pass)
-            .attachments(std::slice::from_ref(&view))
-            .width(size)
-            .height(size)
-            .layers(1);
-        let fb = device
-            .create_framebuffer(&fb_info)
-            .map_err(|e| super::error::map_vk_result(e, "shadow framebuffer"))?;
-        fbs.push(fb);
-    }
-    Ok(fbs)
+    device.single_view_framebuffers(
+        render_pass,
+        shadow_map.aux_views.iter().copied(),
+        vk::Extent2D {
+            width: size,
+            height: size,
+        },
+        "shadow framebuffer",
+    )
 }
 
 #[cfg(test)]

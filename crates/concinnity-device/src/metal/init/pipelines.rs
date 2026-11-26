@@ -26,7 +26,7 @@ use crate::metal::error::allocation_failed;
 // Describes the per-vertex buffer layout so Metal can map [[stage_in]]:
 //   buffer(1): interleaved [float3 pos, float3 normal, float3 tangent, float3 color, float2 uv]
 //   stride = sizeof(Vertex) = 56 bytes
-pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
+pub(in crate::metal) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     vertex_descriptor(
         &[
             VertexAttr {

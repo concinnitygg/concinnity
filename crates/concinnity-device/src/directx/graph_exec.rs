@@ -53,7 +53,7 @@ use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, FAR_SHADOW_MAP_RESTS,
     GraphResourceClass, PassId, PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_engine::render::uniforms::PassCamera;
+use concinnity_engine::render::uniforms::{PassCamera, PassLighting};
 use concinnity_engine::render::{backend::pass_timing, render_graph};
 use concinnity_engine::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
@@ -918,12 +918,19 @@ impl DxContext {
     // The camera a screen-space pass reconstructs from: `vp` at the frame's
     // render size, with this frame's IBL and sky rotation.
     fn pass_camera(&self, params: &GraphFrameParams<'_>, vp: [[f32; 4]; 4]) -> PassCamera {
-        PassCamera {
+        PassCamera::new(
             vp,
-            inv_vp: mat4_inverse(vp),
-            cam_pos: params.plan.cam_pos,
-            viewport: [params.width as f32, params.height as f32],
-            time: narrow_f32(params.frame.elapsed),
+            mat4_inverse(vp),
+            params.plan.cam_pos,
+            [params.width as f32, params.height as f32],
+            narrow_f32(params.frame.elapsed),
+            self.pass_lighting(),
+        )
+    }
+
+    // The frame's IBL and exposure, the same for every pass camera.
+    pub(in crate::directx) fn pass_lighting(&self) -> PassLighting {
+        PassLighting {
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,

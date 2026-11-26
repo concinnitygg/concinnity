@@ -312,15 +312,12 @@ fn create_framebuffers(
         } else {
             vec![target.view, depth.view]
         };
-        let info = vk::FramebufferCreateInfo::default()
-            .render_pass(main_render_pass)
-            .attachments(&attachments)
-            .width(width.max(1))
-            .height(height.max(1))
-            .layers(1);
-        let fb = device
-            .create_framebuffer(&info)
-            .map_err(|e| super::error::map_vk_result(e, "planar framebuffer"))?;
+        let fb = device.framebuffer(
+            main_render_pass,
+            &attachments,
+            vk::Extent2D { width, height },
+            "planar framebuffer",
+        )?;
         out.push(fb);
     }
     Ok(out)

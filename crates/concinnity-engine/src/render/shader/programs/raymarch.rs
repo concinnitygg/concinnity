@@ -270,21 +270,23 @@ mod tests {
     // A camera at the origin looking down -Z through a 0.1 near plane.
     fn view_at_origin() -> RaymarchView {
         let proj = crate::render::depth::camera_projection(1.0, 16.0 / 9.0, 0.1);
-        let camera = crate::render::uniforms::PassCamera {
-            vp: proj,
-            inv_vp: crate::transform::mat4_inverse(proj),
-            cam_pos: [0.0; 3],
-            viewport: [1920.0, 1080.0],
-            time: 0.0,
-            prefilter_mip_count: 0.0,
-            irradiance: 0.0,
-            sky_rot: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-            ],
-            pre_exposure: 1.0,
-        };
+        let camera = crate::render::uniforms::PassCamera::new(
+            proj,
+            crate::transform::mat4_inverse(proj),
+            [0.0; 3],
+            [1920.0, 1080.0],
+            0.0,
+            crate::render::uniforms::PassLighting {
+                prefilter_mip_count: 0.0,
+                irradiance: 0.0,
+                sky_rot: [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ],
+                pre_exposure: 1.0,
+            },
+        );
         RaymarchView::new(&camera)
     }
 

@@ -819,16 +819,12 @@ impl GlassReflectionLayers {
         )?;
         let framebuffer = |color: &GpuImage| {
             let attachments = [color.view, depth.view];
-            device
-                .create_framebuffer(
-                    &vk::FramebufferCreateInfo::default()
-                        .render_pass(render_pass)
-                        .attachments(&attachments)
-                        .width(extent.width)
-                        .height(extent.height)
-                        .layers(1),
-                )
-                .map_err(|e| super::error::map_vk_result(e, "glass reflection framebuffer"))
+            device.framebuffer(
+                render_pass,
+                &attachments,
+                extent,
+                "glass reflection framebuffer",
+            )
         };
         let framebuffers = [framebuffer(&layers[0])?, framebuffer(&layers[1])?];
         Ok(Self {
@@ -1860,15 +1856,12 @@ impl TransparentResources {
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         let attachments = device.writer_targets().views(scene.0, mask);
-        let info = vk::FramebufferCreateInfo::default()
-            .render_pass(self.render_passes.compatible())
-            .attachments(&attachments)
-            .width(extent.width.max(1))
-            .height(extent.height.max(1))
-            .layers(1);
-        let fb = device
-            .create_framebuffer(&info)
-            .map_err(|e| super::error::map_vk_result(e, "transparent framebuffer"))?;
+        let fb = device.framebuffer(
+            self.render_passes.compatible(),
+            &attachments,
+            extent,
+            "transparent framebuffer",
+        )?;
         if let (Some(slot), Some(image)) = (
             self.framebuffers.get_mut(frame),
             self.scene_images.get_mut(frame),
@@ -1948,15 +1941,12 @@ fn create_framebuffers(
     let mut out = Vec::with_capacity(scene_views.len());
     for (&view, &mask) in scene_views.iter().zip(mask_views) {
         let attachments = device.writer_targets().views(view, mask);
-        let info = vk::FramebufferCreateInfo::default()
-            .render_pass(render_pass)
-            .attachments(&attachments)
-            .width(width.max(1))
-            .height(height.max(1))
-            .layers(1);
-        let fb = device
-            .create_framebuffer(&info)
-            .map_err(|e| super::error::map_vk_result(e, "transparent framebuffer"))?;
+        let fb = device.framebuffer(
+            render_pass,
+            &attachments,
+            vk::Extent2D { width, height },
+            "transparent framebuffer",
+        )?;
         out.push(fb);
     }
     Ok(out)

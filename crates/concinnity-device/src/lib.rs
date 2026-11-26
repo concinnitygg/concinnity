@@ -9,6 +9,15 @@
 //! `Box<dyn RenderBackend>` obtained from `init_backend`, never naming a concrete
 //! context type.
 
+// Rebuild a pipeline into a temporary when `$cond` says it is live; an error
+// aborts the shader reload before anything is swapped in.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+macro_rules! rebuild_if_live {
+    ($cond:expr_2021, $build:expr_2021 $(,)?) => {
+        if $cond { Some($build?) } else { None }
+    };
+}
+
 #[cfg(backend_dx)]
 pub(crate) mod directx;
 // Copying presented frames out and writing them as PNGs off the frame path.
@@ -18,9 +27,6 @@ pub(crate) mod frame_capture;
 // `RenderStats::gpu_wait_us` means the same thing on each.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod gpu_wait;
-// How a grass frame reaching a placement limit is logged, the same on every
-// backend.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
 #[cfg(backend_metal)]
 pub mod metal;
 #[cfg(any(backend_metal, backend_dx, backend_vk))]

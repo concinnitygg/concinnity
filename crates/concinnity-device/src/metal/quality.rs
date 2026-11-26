@@ -85,44 +85,6 @@ struct Wanted {
 }
 
 impl MtlContext {
-    // Replace the live post-process tunables, pushed every frame. The display
-    // output flags are not part of the payload, so the EDR path survives.
-    // Auto-exposure overwrites `exposure` each frame.
-    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
-        self.post_process.set_tunables(tunables);
-    }
-
-    // Set the live ambient light scale, uploaded every frame.
-    pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        self.state.lights.set_ambient(value);
-    }
-
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
-        self.state.planner.shadow.cadence = cadence;
-    }
-
-    // Update the live scalar tunables of the SSAO, SSR, SSGI and auto-exposure
-    // passes, read from the stored settings each frame. Only features that are
-    // on have settings to update; SSGI's resolution and ray count ride its
-    // rebuild.
-    pub(crate) fn update_quality_params(&mut self, g: &ResolvedGraphics) {
-        if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.settings.as_mut()) {
-            *cur = live;
-        }
-        if let (Some(live), Some(cur)) = (g.ssr(), self.ssr.settings.as_mut()) {
-            *cur = live;
-        }
-        if let (Some(live), Some(cur)) = (g.ssgi(), self.ssgi.settings.as_mut()) {
-            cur.intensity = live.intensity;
-            cur.max_distance = live.max_distance;
-        }
-        if let (Some(live), Some(cur)) = (g.auto_exposure(), self.auto_exposure.adaptation.as_mut())
-        {
-            cur.settings = live;
-        }
-        self.refresh_gates(g);
-    }
-
     // Gate the runtime-switched passes on `graphics` and what is built now.
     pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
         self.state
@@ -140,35 +102,6 @@ impl MtlContext {
             auto_exposure: self.auto_exposure.pipelines.is_some(),
             gbuffer: self.gbuffer.targets.is_some(),
         }
-    }
-
-    // Rebuild `features` to match `g`, between frames (the GraphicsSystem
-    // drain runs before the next `draw_frame`). A feature whose build fails
-    // keeps its previous state; the first error comes back once every feature
-    // has run.
-    fn rebuild_planned(&mut self, g: &ResolvedGraphics, features: RebuildSet) -> RenderResult<()> {
-        // The resolved settings never ask for ray tracing the device cannot
-        // run; a request that does is a probe / backend disagreement, reported
-        // and refused rather than built.
-        let plan = FeaturePlan::resolve(
-            g,
-            BackendFacts {
-                rt_capable: raytracing_supported(&self.hw.device),
-                upscaling: self.upscale.scaler.is_some(),
-            },
-        );
-        let mut settings = EffectSettings::new(g);
-        settings.rt_reflection = plan.rt;
-        let wanted = Wanted { settings, plan };
-        let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, &wanted));
-        let target = if features.touches_reflections() {
-            self.reconcile_reflection_target(&wanted.settings)
-        } else {
-            Ok(())
-        };
-        let disocclusion = self.reconcile_disocclusion();
-        self.refresh_gates(g);
-        rebuilt.and(target).and(disocclusion)
     }
 
     fn rebuild_feature(&mut self, feature: RebuildFeature, wanted: &Wanted) -> RenderResult<()> {
@@ -506,31 +439,80 @@ impl SettingsTarget for MtlContext {
         self.shadow.map_sizes()
     }
 
+    // Rebuild `features` to match `graphics`, between frames (the GraphicsSystem
+    // drain runs before the next `draw_frame`). A feature whose build fails
+    // keeps its previous state; the first error comes back once every feature
+    // has run.
     fn rebuild_features(
         &mut self,
         graphics: &ResolvedGraphics,
         features: RebuildSet,
     ) -> RenderResult<()> {
-        self.rebuild_planned(graphics, features)
+        // The resolved settings never ask for ray tracing the device cannot
+        // run; a request that does is a probe / backend disagreement, reported
+        // and refused rather than built.
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: raytracing_supported(&self.hw.device),
+                upscaling: self.upscale.scaler.is_some(),
+            },
+        );
+        let mut settings = EffectSettings::new(graphics);
+        settings.rt_reflection = plan.rt;
+        let wanted = Wanted { settings, plan };
+        let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, &wanted));
+        let target = if features.touches_reflections() {
+            self.reconcile_reflection_target(&wanted.settings)
+        } else {
+            Ok(())
+        };
+        let disocclusion = self.reconcile_disocclusion();
+        self.refresh_gates(graphics);
+        rebuilt.and(target).and(disocclusion)
     }
 
+    // Update the live scalar tunables of the SSAO, SSR, SSGI and auto-exposure
+    // passes, read from the stored settings each frame. Only features that are
+    // on have settings to update; SSGI's resolution and ray count ride its
+    // rebuild.
     fn push_feature_params(&mut self, graphics: &ResolvedGraphics) {
-        self.update_quality_params(graphics);
+        if let (Some(live), Some(cur)) = (graphics.ssao(), self.ssao.settings.as_mut()) {
+            *cur = live;
+        }
+        if let (Some(live), Some(cur)) = (graphics.ssr(), self.ssr.settings.as_mut()) {
+            *cur = live;
+        }
+        if let (Some(live), Some(cur)) = (graphics.ssgi(), self.ssgi.settings.as_mut()) {
+            cur.intensity = live.intensity;
+            cur.max_distance = live.max_distance;
+        }
+        if let (Some(live), Some(cur)) = (
+            graphics.auto_exposure(),
+            self.auto_exposure.adaptation.as_mut(),
+        ) {
+            cur.settings = live;
+        }
+        self.refresh_gates(graphics);
     }
 
+    // Replace the live post-process tunables, pushed every frame. The display
+    // output flags are not part of the payload, so the EDR path survives.
+    // Auto-exposure overwrites `exposure` each frame.
     fn push_post_process(&mut self, tunables: render_types::PostProcessTunables) {
-        self.update_post_process(tunables);
+        self.post_process.set_tunables(tunables);
     }
 
+    // Set the live ambient light scale, uploaded every frame.
     fn push_ambient(&mut self, value: f32) {
-        self.set_ambient_intensity(value);
+        self.state.lights.set_ambient(value);
     }
 
     fn push_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
-        self.set_shadow_cadence(cadence);
+        self.state.planner.shadow.cadence = cadence;
     }
 
     fn push_vsync(&mut self, on: bool) {
-        self.set_vsync(on);
+        WindowControl::set_vsync(self, on);
     }
 }

@@ -8,80 +8,23 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::cull::ShadowViewIcb;
-use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
-use objc2::rc::Retained;
-use objc2_metal::{MTLPixelFormat, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
+use objc2_metal::MTLPixelFormat;
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
 use super::cull::{build_cull_pipeline, build_shadow_cull_pipeline};
 use super::decal::build_decal_pipeline;
-use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
     BucketBuild, BucketPipelines, build_bindless_sampler_args, build_shadow_bindless_pipeline,
-    replacement,
+    make_vertex_descriptor, replacement,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::RtReflectionPipelines;
 use super::post::post_device::MtlPostDevice;
-
-// Rebuild a pipeline into a temporary when `$cond` says it is live; an error
-// aborts the reload before the swap.
-macro_rules! rebuild_if_live {
-    ($cond:expr_2021, $build:expr_2021 $(,)?) => {
-        if $cond { Some($build?) } else { None }
-    };
-}
-
-// Static-vertex-layout descriptor used by the velocity / SSAO / SSR pre-pass
-// rebuilds during hot-reload. Matches the layout `MtlContext::new` builds at
-// init; kept in sync by construction since both touch the 56-byte static
-// `Vertex` struct.
-fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    vertex_descriptor(
-        &[
-            VertexAttr {
-                index: 0,
-                format: MTLVertexFormat::Float3,
-                offset: 0,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 1,
-                format: MTLVertexFormat::Float3,
-                offset: 12,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 2,
-                format: MTLVertexFormat::Float3,
-                offset: 24,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 4,
-                format: MTLVertexFormat::Float2,
-                offset: 48,
-                buffer_index: 1,
-            },
-        ],
-        &[VertexLayout {
-            buffer_index: 1,
-            stride: size_of::<mesh_payload::Vertex>(),
-            step: MTLVertexStepFunction::PerVertex,
-        }],
-    )
-}
 
 impl MtlContext {
     // Rebuild every built-in pipeline from source into temporaries, swapping
@@ -192,7 +135,7 @@ impl MtlContext {
         );
 
         // The shadow pipeline needs the static vertex layout.
-        let static_vdesc = static_vertex_descriptor();
+        let static_vdesc = make_vertex_descriptor();
         let ssao = rebuild_if_live!(
             self.ssao.pass.is_some(),
             concinnity_engine::render::post::ssao::build_pipelines(&post_device)

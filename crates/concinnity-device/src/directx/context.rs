@@ -5,7 +5,7 @@
 use crate::gpu_wait::GpuWait;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
-    InstancedCluster, PostProcessParams, PostProcessTunables, ReceiverBounds, ShadowUniforms,
+    InstancedCluster, PostProcessParams, ReceiverBounds, ShadowUniforms,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBackend, WindowControl};
@@ -962,49 +962,6 @@ impl DxContext {
                 index: &self.scene.geometry.index_buffer,
             },
         )
-    }
-
-    // Replace the live post-process tunables, pushed to the bloom + composite
-    // shaders each frame. The composite's display-output flags are not part of
-    // the payload, so the EDR path negotiated at init survives every push.
-    pub(crate) fn update_post_process(&mut self, tunables: PostProcessTunables) {
-        self.post_process.set_tunables(tunables);
-    }
-
-    // Set the live ambient (IBL) scale and re-arm every CBV slot. A no-op when the
-    // value is unchanged.
-    pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        self.state.lights.set_ambient(value);
-    }
-
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
-        self.state.planner.shadow.cadence = cadence;
-    }
-
-    // Update the live scalar tunables of the SSAO / SSR / SSGI / auto-exposure
-    // passes, read again next frame. Features not live are skipped, including SSR
-    // without its resolve half. SSGI's trace resolution rides its rebuild.
-    pub(crate) fn update_quality_params(
-        &mut self,
-        g: &concinnity_engine::render::config::ResolvedGraphics,
-    ) {
-        if let (Some(live), Some(res)) = (g.ssao(), self.ssao.resources.as_mut()) {
-            res.settings = live;
-        }
-        if let (Some(live), Some(res)) = (g.ssr(), self.ssr.as_mut())
-            && let Some(r) = res.resolve.as_mut()
-        {
-            r.settings = live;
-        }
-        if let (Some(live), Some(res)) = (g.ssgi(), self.ssgi.as_mut()) {
-            res.settings.intensity = live.intensity;
-            res.settings.max_distance = live.max_distance;
-        }
-        if let (Some(live), Some(cur)) = (g.auto_exposure(), self.auto_exposure.adaptation.as_mut())
-        {
-            cur.settings = live;
-        }
-        self.refresh_gates(g);
     }
 }
 

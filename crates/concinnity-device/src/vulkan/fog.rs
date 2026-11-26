@@ -247,20 +247,12 @@ impl FogResources {
 
         // Per-frame framebuffers (one per frame slot binding that slot's
         // hdr_resolve view as the color attachment).
-        let mut framebuffers = Vec::with_capacity(frames);
-        for &view in hdr_resolve_views.iter().take(frames) {
-            let attachments = [view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass.handle())
-                .attachments(&attachments)
-                .width(extent.width.max(1))
-                .height(extent.height.max(1))
-                .layers(1);
-            let fb = device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, "fog framebuffer"))?;
-            framebuffers.push(fb);
-        }
+        let framebuffers = device.single_view_framebuffers(
+            render_pass.handle(),
+            hdr_resolve_views.iter().copied().take(frames),
+            extent,
+            "fog framebuffer",
+        )?;
 
         Ok(Self {
             render_pass,
@@ -290,20 +282,15 @@ impl FogResources {
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
-        self.framebuffers.clear();
-        for &view in hdr_resolve_views.iter().take(self.params_ubos.len()) {
-            let attachments = [view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(self.render_pass.handle())
-                .attachments(&attachments)
-                .width(extent.width.max(1))
-                .height(extent.height.max(1))
-                .layers(1);
-            let fb = device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, "fog framebuffer (rebuild)"))?;
-            self.framebuffers.push(fb);
-        }
+        self.framebuffers = device.single_view_framebuffers(
+            self.render_pass.handle(),
+            hdr_resolve_views
+                .iter()
+                .copied()
+                .take(self.params_ubos.len()),
+            extent,
+            "fog framebuffer (rebuild)",
+        )?;
         let last_depth = depth_views.len().saturating_sub(1);
         for (i, &set) in self.view_sets.iter().enumerate() {
             SetWrites::new(set)

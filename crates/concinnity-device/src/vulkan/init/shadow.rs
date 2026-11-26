@@ -107,16 +107,15 @@ fn build_far_shadow(
     let device = &hw.device;
     let map = create_far_shadow_map(&gpu.upload(), size)?;
     let render_pass = create_shadow_render_pass(device, vk::Format::D16_UNORM)?;
-    let framebuffer = device
-        .create_framebuffer(
-            &vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass.handle())
-                .attachments(std::slice::from_ref(&map.view))
-                .width(size)
-                .height(size)
-                .layers(1),
-        )
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "far shadow framebuffer"))?;
+    let framebuffer = device.framebuffer(
+        render_pass.handle(),
+        &[map.view],
+        vk::Extent2D {
+            width: size,
+            height: size,
+        },
+        "far shadow framebuffer",
+    )?;
 
     let ubo_size = size_of::<ShadowUniforms>() as u64;
     let mut ubos = Vec::with_capacity(frames);

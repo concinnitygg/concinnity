@@ -26,14 +26,6 @@ use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pip
 use super::post::post_device::PostPipeline;
 use crate::directx::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
-// Rebuild a feature's PSOs into a temporary when `$cond` says it is live,
-// propagating errors: `Some(build?)` when live, `None` otherwise.
-macro_rules! rebuild_if_live {
-    ($cond:expr_2021, $build:expr_2021 $(,)?) => {
-        if $cond { Some($build?) } else { None }
-    };
-}
-
 // The passes drawn through the shared post-pass seam, each rebuilt only when
 // live.
 struct SharedPostPipelines {
