@@ -36,6 +36,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::model_history_pass;
 use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
@@ -972,29 +973,35 @@ impl VkContext {
             PassId::MainLate => {
                 self.encode_main_pass_late(rec, params.frame_idx);
             }
-            PassId::GBufferPrepass => {
-                // The unified geometry pre-pass: normal+depth, roughness and motion for every
-                // screen-space consumer, rasterized with the jittered VP. Motion is real only
-                // when a consumer reads it.
+            PassId::GBufferPrepass | PassId::GBufferLate => {
                 let gb = self.gbuffer.as_ref().ok_or_else(|| {
-                    RenderError::Other(
-                        "graph executor (vulkan): GBufferPrepass emitted but self.gbuffer is None"
-                            .into(),
-                    )
+                    RenderError::Other(format!(
+                        "graph executor (vulkan): {pass_id:?} emitted but self.gbuffer is None"
+                    ))
                 })?;
-                self.encode_gbuffer_prepass(
-                    gb,
-                    rec,
-                    params.frame_idx,
-                    GbufferPrepassView {
-                        jittered_vp: params.plan.camera.vp,
-                        elapsed: narrow_f32(params.frame.elapsed),
-                        cam_pos: params.plan.cam_pos,
-                        frustum: &params.plan.camera.frustum,
-                    },
-                    &params.plan.gbuffer_view,
-                    grass_frame,
-                );
+                if pass_id == PassId::GBufferLate {
+                    self.encode_gbuffer_late(gb, rec, params.frame_idx, &params.plan.gbuffer_view);
+                } else {
+                    // The unified geometry pre-pass: normal+depth, roughness and motion for
+                    // every screen-space consumer, rasterized with the jittered VP. Motion is
+                    // real only when a consumer reads it.
+                    self.encode_gbuffer_prepass(
+                        gb,
+                        rec,
+                        params.frame_idx,
+                        GbufferPrepassView {
+                            jittered_vp: params.plan.camera.vp,
+                            elapsed: narrow_f32(params.frame.elapsed),
+                            cam_pos: params.plan.cam_pos,
+                            frustum: &params.plan.camera.frustum,
+                        },
+                        &params.plan.gbuffer_view,
+                        grass_frame,
+                    );
+                }
+                if model_history_pass(&params.plan.graph) == Some(pass_id) {
+                    self.encode_model_history(rec, params.frame_idx);
+                }
             }
         }
         Ok(())

@@ -15,7 +15,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::backend::{FrameParams, RenderBackend, WindowControl};
 use concinnity_engine::render::frame::plan::{FramePlan, drive_frame};
-use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::render_graph::{PassId, model_history_pass};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
 
@@ -272,10 +272,10 @@ impl DxContext {
         } else {
             None
         };
-        // A rebuild's prime request is spent only on a frame whose G-buffer
-        // pre-pass runs the history snapshot; any other frame leaves it pending.
-        // Taken after every other fallible step but the graph itself.
-        let prime_model_history = frame_graph.pass(PassId::GBufferPrepass).is_some()
+        // A rebuild's prime request is spent only on a frame that runs the
+        // history snapshot; any other frame leaves it pending. Taken after every
+        // other fallible step but the graph itself.
+        let prime_model_history = model_history_pass(frame_graph).is_some()
             && self.state.model_history.borrow_mut().take_prime();
         let frame_params = GraphFrameParams {
             plan,

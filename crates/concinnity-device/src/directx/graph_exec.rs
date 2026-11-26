@@ -48,6 +48,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::model_history_pass;
 use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, FAR_SHADOW_MAP_RESTS,
     GraphResourceClass, PassId, PassRecorder, PassScratch, execute_passes,
@@ -532,7 +533,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub local_lights_gva: u64,
     // Whether this frame's model-history snapshot fills every ring slot rather
     // than only its own: the rebuild's prime request, taken from the tracker
-    // before the fan-out. Consumed by GBufferPrepass.
+    // before the fan-out. Consumed by the snapshot after the last G-buffer pass.
     pub prime_model_history: bool,
     // Which planar mirrors this frame renders, and the screen rectangle each
     // covers; computed once from the camera so the mirror pass and the transparent
@@ -1188,25 +1189,31 @@ impl DxContext {
                     params.plan.effects.reflection_denoise.as_ref(),
                 );
             }
-            PassId::GBufferPrepass => {
-                // The unified geometry pre-pass: normal+depth, roughness and motion for every
-                // screen-space consumer, rasterized with the jittered VP. Motion is real only
-                // when a consumer reads it.
-                self.encode_gbuffer_prepass(
-                    cmd,
-                    params.frame_idx,
-                    crate::directx::post::gbuffer::GbufferPrepassView {
-                        jittered_vp: params.plan.camera.vp,
-                        elapsed: narrow_f32(params.frame.elapsed),
-                        cam_pos: params.plan.cam_pos,
-                        frustum: &params.plan.camera.frustum,
-                    },
-                    crate::directx::post::gbuffer::GbufferPrepassFrame {
-                        block: &params.plan.gbuffer_view,
-                        prime_history: params.prime_model_history,
-                        grass: grass_frame,
-                    },
-                );
+            PassId::GBufferPrepass | PassId::GBufferLate => {
+                if pass_id == PassId::GBufferLate {
+                    self.encode_gbuffer_late(cmd, params.frame_idx, &params.plan.gbuffer_view);
+                } else {
+                    // The unified geometry pre-pass: normal+depth, roughness and motion for
+                    // every screen-space consumer, rasterized with the jittered VP. Motion is
+                    // real only when a consumer reads it.
+                    self.encode_gbuffer_prepass(
+                        cmd,
+                        params.frame_idx,
+                        crate::directx::post::gbuffer::GbufferPrepassView {
+                            jittered_vp: params.plan.camera.vp,
+                            elapsed: narrow_f32(params.frame.elapsed),
+                            cam_pos: params.plan.cam_pos,
+                            frustum: &params.plan.camera.frustum,
+                        },
+                        crate::directx::post::gbuffer::GbufferPrepassFrame {
+                            block: &params.plan.gbuffer_view,
+                            grass: grass_frame,
+                        },
+                    );
+                }
+                if model_history_pass(&params.plan.graph) == Some(pass_id) {
+                    self.encode_model_history(cmd, params.frame_idx, params.prime_model_history);
+                }
             }
         }
         Ok(())

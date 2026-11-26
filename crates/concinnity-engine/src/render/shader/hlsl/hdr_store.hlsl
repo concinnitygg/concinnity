@@ -1,6 +1,6 @@
 // Writing radiance into a half-float target: the largest value a channel
 // keeps, and the cap that scales a brighter color down whole so it keeps its
-// hue. Mirrored in `render::radiance_storage`.
+// hue. Mirrored in `render::probe::radiance`.
 #ifndef HDR_STORE_SPLICED
 #define HDR_STORE_SPLICED
 

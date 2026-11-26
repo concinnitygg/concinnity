@@ -24,6 +24,9 @@ static const float CLOUD_DETAIL_MEAN = 0.48;
 static const uint CLOUD_TARGET_DIVISOR = 2u;
 static const uint CLOUD_PANORAMA_WIDTH = 256u;
 static const uint CLOUD_PANORAMA_HEIGHT = 128u;
+// The scale the panorama's light is stored at, so moonlit clouds keep their
+// half-float steps. Mirrors `render::probe::radiance::CLOUD_PANORAMA_STORAGE_SCALE`.
+static const float CLOUD_PANORAMA_STORAGE_SCALE = 1024.0;
 static const uint CLOUD_SHADOW_SIZE = 256u;
 // Texels along each edge of one of the weather map's six cube faces, and of
 // each face's block in the map: the face in a one-texel gutter holding the

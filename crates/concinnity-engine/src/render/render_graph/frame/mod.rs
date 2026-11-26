@@ -48,8 +48,8 @@ use super::types::BufferHandle;
 use super::{CompiledGraph, GraphBuilder, GraphError, PassId, PassKind, ReadStages, TextureHandle};
 
 use back::{
-    add_clouds, add_decorations, add_late_occlusion, add_late_particles, add_main,
-    add_reflections_and_transparent, add_temporal,
+    add_clouds, add_decorations, add_late_gbuffer, add_late_occlusion, add_late_particles,
+    add_main, add_reflections_and_transparent, add_temporal,
 };
 pub(crate) use descs::bloom_top_desc;
 pub use descs::{FAR_SHADOW_MAP_RESTS, FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
@@ -74,7 +74,9 @@ pub(crate) use inputs::GATED_FLAGS;
 // `hdr_resolve`'s version chain is the spine of the post stack, with short
 // chains branching off it. HizFinal is the terminal depth reader. Two-pass
 // occlusion adds `Main → HizEarly → CullLate → MainLate` ahead of
-// AutoExposure, and MainLate's write becomes the chain's head.
+// AutoExposure, and MainLate's write becomes the chain's head. With a
+// G-buffer, `CullLate → GBufferLate` draws the same late lists into it, and
+// every G-buffer reader after Main reads that version.
 
 // The four attachments the unified G-buffer pre-pass writes in one draw. They
 // are separate resources rather than one handle because their shapes differ
@@ -167,7 +169,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     let cull = add_cull_and_grass(&mut b, inputs, two_pass, hiz_pyramid);
     let prepass = add_prepasses(&mut b, inputs, &cull, &mut reactive_mask);
     let scene_inputs = add_scene_inputs(&mut b, inputs, &cull);
-    let front = FrontEnd {
+    let mut front = FrontEnd {
         cull,
         prepass,
         scene_inputs,
@@ -176,11 +178,15 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     let main_out = add_main(&mut b, hdr, &front);
 
     // Two-pass occlusion's late half: HizEarly, CullLate, MainLate. MainLate's
-    // `hdr_resolve` write becomes the chain's head.
+    // `hdr_resolve` write becomes the chain's head, and GBufferLate's
+    // G-buffer the one the passes after Main read.
     let (hiz_cur, scene_head) = if let (true, Some(hiz)) = (two_pass, hiz_pyramid) {
-        let (hiz_v1, scene) =
-            add_late_occlusion(&mut b, hiz, front.cull.cull_status, hdr.color, main_out);
-        (Some(hiz_v1), scene)
+        let late = add_late_occlusion(&mut b, hiz, front.cull.cull_status, hdr.color, main_out);
+        front.prepass.gbuffer = front
+            .prepass
+            .gbuffer
+            .map(|g| add_late_gbuffer(&mut b, late.draw_args, g));
+        (Some(late.hiz), late.scene)
     } else {
         (hiz_pyramid, main_out)
     };
@@ -292,6 +298,15 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     }
 
     b.compile()
+}
+
+/// The G-buffer pass the model-history snapshot follows in `graph`: the last
+/// one that reads the previous frame's models, so the snapshot never rewrites
+/// a slot a G-buffer pass has yet to read. `None` without a G-buffer.
+pub fn model_history_pass(graph: &CompiledGraph) -> Option<PassId> {
+    [PassId::GBufferLate, PassId::GBufferPrepass]
+        .into_iter()
+        .find(|&pass| graph.pass(pass).is_some())
 }
 
 // The engine-owned HDR imports Main writes into.

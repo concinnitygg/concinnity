@@ -431,11 +431,17 @@ pub(in crate::directx) struct GbufferPrepassFrame<'a> {
     // motion its previous frame is this one, so the motion channel is a harmless
     // zero.
     pub block: &'a GBufferView,
-    // The model-history snapshot fills every ring slot rather than only this
-    // frame's, because a rebuild left the ring unwritten.
-    pub prime_history: bool,
     // This frame's grass block, when the grass kernel ran.
     pub grass: Option<&'a crate::directx::grass::GrassFrame>,
+}
+
+// What one G-buffer raster draws: the G-buffer view block it reads, the
+// indirect commands it executes, and whether it writes real motion.
+#[derive(Clone, Copy)]
+struct PrepassDraw<'a> {
+    view_gva: u64,
+    indirect: &'a ID3D12Resource,
+    velocity_active: bool,
 }
 
 impl DxContext {
@@ -472,11 +478,7 @@ impl DxContext {
         view: GbufferPrepassView<'_>,
         frame: GbufferPrepassFrame<'_>,
     ) {
-        let GbufferPrepassFrame {
-            block,
-            prime_history,
-            grass,
-        } = frame;
+        let GbufferPrepassFrame { block, grass } = frame;
         let velocity_active = block.motion != 0;
         let Some(gb) = &self.gbuffer else {
             return;
@@ -494,34 +496,7 @@ impl DxContext {
             );
         }
         let view_gva = com::gpu_va(&gb.view_ubo_resources[frame_idx]);
-
-        let w = self.targets.extent.render_width;
-        let h = self.targets.extent.render_height;
-
-        // The three color targets are one graph resource (`gbuffer`), so the
-        // executor has already put them in RENDER_TARGET for this pass's write
-        // and the consumers' barrier takes them back out. `gb.depth` is not part
-        // of it and stays in DEPTH_WRITE throughout.
-        let rtvs = [gb.normal_depth_rtv, gb.roughness_rtv, gb.velocity_rtv];
-        let vp = D3D12_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: w as f32,
-            Height: h as f32,
-            MinDepth: 0.0,
-            MaxDepth: 1.0,
-        };
-        let scissor = RECT {
-            left: 0,
-            top: 0,
-            right: i32::saturating_from(w),
-            bottom: i32::saturating_from(h),
-        };
-        // SAFETY: the command list is recording; `rtvs` is a local array of three live RTVs in
-        // RENDER_TARGET, and `gb.depth_dsv` names a depth target in DEPTH_WRITE.
-        unsafe {
-            cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&raw const gb.depth_dsv));
-        }
+        self.bind_gbuffer_targets(cmd, gb);
         // Cleared alpha 0 marks "no geometry"; roughness 1.0 = non-reflective
         // background; velocity 0 = no motion.
         // SAFETY: the normal-depth RTV is live and bound above, and the clear color is a constant.
@@ -534,20 +509,20 @@ impl DxContext {
         unsafe {
             cmd.ClearDepthStencilView(gb.depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
         }
-        // SAFETY: the viewport slice is a local that outlives the call.
-        unsafe { cmd.RSSetViewports(&[vp]) };
-        // SAFETY: the scissor slice is a local that outlives the call.
-        unsafe { cmd.RSSetScissorRects(&[scissor]) };
-        // SAFETY: setting the topology only needs a recording command list.
-        unsafe {
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-        }
 
         // Reuses the main pass's indirect buffer with two draws (static + instance,
         // then the skinned tail). With nothing to draw the pass is just the clears.
-        self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
+        if let Some(indirect) = self.cull.indirect_cmd_buffers.get(frame_idx) {
+            self.encode_gbuffer_prepass_gpu_driven(
+                cmd,
+                frame_idx,
+                PrepassDraw {
+                    view_gva,
+                    indirect,
+                    velocity_active,
+                },
+            );
+        }
         if let Some(grass) = grass {
             self.encode_grass_prepass(cmd, frame_idx, view_gva, grass);
         }
@@ -558,18 +533,21 @@ impl DxContext {
             gb.sky.encode(cmd, view_gva);
             self.inc_draw_calls(1);
         }
-
-        // Snapshot this frame's models into this frame's history slot, AFTER the
-        // pass above read the previous one -- which is what keeps a single frame
-        // in flight (one slot, read then rewritten) correct.
-        self.encode_model_history(cmd, frame_idx, prime_history);
     }
 
     // Dispatch the model-history snapshot: one thread per cull record copying
     // `objects[i].model` into this frame's history slot, or into every slot when
-    // `prime` is set. The slot rests as a shader resource (the pre-pass reads it
-    // through a root SRV) and is transitioned to a UAV for the write and back.
-    fn encode_model_history(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize, prime: bool) {
+    // `prime` is set. The slot rests as a shader resource (the G-buffer passes
+    // read it through a root SRV) and is transitioned to a UAV for the write and
+    // back. The executor encodes it after the last G-buffer pass that reads the
+    // previous slot, which is what keeps a single frame in flight (one slot,
+    // read then rewritten) correct.
+    pub(in crate::directx) fn encode_model_history(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        prime: bool,
+    ) {
         let (Some(root_sig), Some(pso), true) = (
             self.cull.model_history_root_sig.as_ref(),
             self.cull.model_history_pso.as_ref(),
@@ -619,16 +597,92 @@ impl DxContext {
         }
     }
 
-    // The GPU-driven pre-pass raster: the static + instance prefix once per bucket
-    // over the static VB bound to both streams, then the skinned tail over the
-    // current and previous deformed VBs for per-vertex motion.
+    // Encode the late G-buffer pass: the late lists two-pass occlusion drew in
+    // `MainLate`, drawn over the pre-pass's G-buffer so the readers after the
+    // main pass see every surface it shows. The pre-pass already wrote this
+    // frame slot's view block.
+    pub(in crate::directx) fn encode_gbuffer_late(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        block: &GBufferView,
+    ) {
+        let (Some(gb), Some(indirect)) = (
+            &self.gbuffer,
+            self.cull.indirect_cmd_buffers_late.get(frame_idx),
+        ) else {
+            return;
+        };
+        if self.state.draw.record_count() == 0 {
+            return;
+        }
+        self.bind_gbuffer_targets(cmd, gb);
+        self.encode_gbuffer_prepass_gpu_driven(
+            cmd,
+            frame_idx,
+            PrepassDraw {
+                view_gva: com::gpu_va(&gb.view_ubo_resources[frame_idx]),
+                indirect,
+                velocity_active: block.motion != 0,
+            },
+        );
+    }
+
+    // Bind the G-buffer's three color targets and its depth, over the whole
+    // render extent. The color targets are graph resources, so the executor has
+    // already put them in RENDER_TARGET for the pass's write and the consumers'
+    // barrier takes them back out. `gb.depth` is not one and stays in
+    // DEPTH_WRITE throughout.
+    fn bind_gbuffer_targets(&self, cmd: &ID3D12GraphicsCommandList, gb: &GbufferResources) {
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
+        let rtvs = [gb.normal_depth_rtv, gb.roughness_rtv, gb.velocity_rtv];
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording; `rtvs` is a local array of three live RTVs in
+        // RENDER_TARGET, and `gb.depth_dsv` names a depth target in DEPTH_WRITE.
+        unsafe {
+            cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&raw const gb.depth_dsv));
+        }
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
+        unsafe {
+            cmd.IASetPrimitiveTopology(
+                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            );
+        }
+    }
+
+    // The GPU-driven pre-pass raster of `draw.indirect`'s lists: the static +
+    // instance prefix once per bucket over the static VB bound to both streams,
+    // then the skinned tail over the current and previous deformed VBs for
+    // per-vertex motion.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        view_gva: u64,
-        velocity_active: bool,
+        draw: PrepassDraw<'_>,
     ) {
+        let PrepassDraw {
+            view_gva,
+            indirect,
+            velocity_active,
+        } = draw;
         // Bucket 0's PSO is `None` when its pre-pass failed to build; the other
         // buckets still draw.
         let pso = self.cull.main_prepass_pso.as_ref();
@@ -639,7 +693,6 @@ impl DxContext {
         ) else {
             return;
         };
-        let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let main_view_gva = com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]);
 

@@ -15,7 +15,7 @@
 
 // The scale a probe's faces are drawn and its cube stored at, so a moonlit
 // capture stays out of half float's subnormal range; every tap divides it
-// back out. Mirrors `render::radiance_storage::PROBE_STORAGE_SCALE`.
+// back out. Mirrors `render::probe::radiance::PROBE_STORAGE_SCALE`.
 static const float PROBE_STORAGE_SCALE = 256.0;
 
 struct ProbeUniforms

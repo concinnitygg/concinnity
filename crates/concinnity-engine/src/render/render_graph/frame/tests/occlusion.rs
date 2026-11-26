@@ -266,6 +266,92 @@ fn two_pass_without_bindless_cull_is_noop() {
     assert!(!order.contains(&PassId::MainLate));
 }
 
+// Under two-pass occlusion the late lists are drawn into the G-buffer too,
+// after the late cull, and the reflection resolve reads that version rather
+// than the pre-pass's; the readers ahead of Main keep the pre-pass's.
+#[test]
+fn the_late_lists_reach_the_gbuffer_the_resolve_reads() {
+    let mut i = all_off();
+    i.bindless_cull_enabled = true;
+    i.two_pass_occlusion_enabled = true;
+    i.gbuffer_prepass_enabled = true;
+    i.ssr_prepass_enabled = true;
+    i.ssr_enabled = true;
+    i.ssao_enabled = true;
+    let g = build_frame_graph(&i).expect("compiles");
+    let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+    let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+    assert!(pos(PassId::CullLate) < pos(PassId::GBufferLate));
+    assert!(pos(PassId::SsaoBlur) < pos(PassId::GBufferLate));
+    assert!(pos(PassId::GBufferLate) < pos(PassId::SsrResolve));
+
+    let normal_depth = resource_of(&g, "gbuffer_normal_depth");
+    let read_version = |pass: PassId| {
+        g.passes[pos(pass)]
+            .reads
+            .iter()
+            .find(|r| r.resource_index() == normal_depth)
+            .map(|r| r.version())
+    };
+    assert_eq!(read_version(PassId::SsaoBlur), Some(1));
+    assert_eq!(read_version(PassId::SsrResolve), Some(2));
+    let late = &g.passes[pos(PassId::GBufferLate)];
+    for label in [
+        "gbuffer_normal_depth",
+        "gbuffer_roughness",
+        "gbuffer_velocity",
+        "gbuffer_depth",
+    ] {
+        let r = resource_of(&g, label);
+        assert!(
+            late.writes.iter().any(|w| w.resource_index() == r),
+            "{label}"
+        );
+    }
+    let draw_args_late = resource_of(&g, "draw_args_late");
+    assert!(
+        late.reads
+            .iter()
+            .any(|r| r.resource_index() == draw_args_late)
+    );
+}
+
+// The model-history snapshot follows the last G-buffer pass that reads the
+// previous frame's models: the late one under two-pass occlusion, else the
+// pre-pass, and none without a G-buffer.
+#[test]
+fn the_model_history_snapshot_follows_the_last_gbuffer_pass() {
+    let mut i = all_off();
+    i.bindless_cull_enabled = true;
+    i.ssr_prepass_enabled = true;
+    i.ssr_enabled = true;
+    let pass = |i: &FrameGraphInputs| model_history_pass(&build_frame_graph(i).expect("compiles"));
+    assert_eq!(pass(&i), None);
+    i.gbuffer_prepass_enabled = true;
+    assert_eq!(pass(&i), Some(PassId::GBufferPrepass));
+    i.two_pass_occlusion_enabled = true;
+    assert_eq!(pass(&i), Some(PassId::GBufferLate));
+}
+
+// Without two-pass occlusion, or without a G-buffer, there is no late
+// G-buffer pass.
+#[test]
+fn the_late_gbuffer_pass_needs_both_halves() {
+    for (two_pass, gbuffer) in [(false, true), (true, false)] {
+        let mut i = all_off();
+        i.bindless_cull_enabled = true;
+        i.two_pass_occlusion_enabled = two_pass;
+        i.gbuffer_prepass_enabled = gbuffer;
+        i.ssr_prepass_enabled = true;
+        i.ssr_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(
+            g.passes.iter().all(|p| p.id != PassId::GBufferLate),
+            "two_pass {two_pass}, gbuffer {gbuffer}"
+        );
+    }
+}
+
 #[test]
 fn two_pass_shifts_post_chain_head_to_main_late() {
     // AutoExposure + the RMW chain must read MainLate's hdr_resolve (v2),

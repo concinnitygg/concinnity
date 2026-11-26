@@ -82,6 +82,7 @@ use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
 use concinnity_engine::render::render_graph;
+use concinnity_engine::render::render_graph::model_history_pass;
 use concinnity_engine::render::render_graph::{
     BatchRecorder, CompiledGraph, CompiledPass, PassId, PassQueue, PassScratch, batch_budget,
     execute_batches, plan_batches, presenter_index,
@@ -480,6 +481,54 @@ impl MtlContext {
         }
     }
 
+    // A G-buffer node: the pre-pass (`GBufferPrepass`) or the late lists drawn
+    // over it (`GBufferLate`). The surfaces rasterize through the main pass's
+    // view block, so the vertex hook places them as the main pass will; the
+    // un-jittered cur/prev VPs drive the motion vector.
+    fn encode_gbuffer_node(
+        &self,
+        pass_id: PassId,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        params: &GraphFrameParams<'_>,
+    ) -> RenderResult<u32> {
+        let main_view = self.main_view_uniforms(&crate::metal::draw::main::MainPassCamera {
+            elapsed: narrow_f32(params.frame.elapsed),
+            vp: params.plan.camera.vp,
+            view: self.state.view.matrix,
+            cam_pos: params.plan.cam_pos,
+        });
+        let raymarch_view = super::raymarch::RaymarchView::for_gbuffer(
+            &self.pass_camera(params),
+            &params.plan.gbuffer_view,
+        );
+        let views = crate::metal::post::gbuffer::GbufferPrepassViews {
+            gbuffer: &params.plan.gbuffer_view,
+            main: &main_view,
+            raymarch: &raymarch_view,
+            frustum: &params.plan.camera.frustum,
+        };
+        let gpu = crate::metal::post::gbuffer::GbufferGpuBuffers {
+            object_buffer: params.object_buffer,
+            material_params: params.material_params,
+            bindless_tex_args: params.bindless_tex_args,
+            prev_model_buffer: params.prev_model_buffer,
+            draw_args_buffer: params.draw_args_buffer,
+            history_targets: params.history_targets,
+            deformed_current: params.deformed_skinned,
+            deformed_prev: params.deformed_prev,
+            grass: params.grass,
+        };
+        let draws = if pass_id == PassId::GBufferLate {
+            self.encode_gbuffer_late(cmd_buf, views, gpu, params.plan.motion_read)?
+        } else {
+            self.encode_gbuffer_prepass(cmd_buf, views, gpu, params.plan.motion_read)?
+        };
+        if model_history_pass(&params.plan.graph) == Some(pass_id) {
+            self.encode_model_history_snapshot(cmd_buf, gpu)?;
+        }
+        Ok(draws)
+    }
+
     // `&self` so it can be called from both the main-thread Composite path
     // and the rayon-spawned per-pass workers.
     fn encode_pass_into(
@@ -595,42 +644,8 @@ impl MtlContext {
                 let scene_color = pass_input(params.scene_color, PassId::Bloom, "scene_color")?;
                 self.encode_bloom(cmd_buf, scene_color)?
             }
-            PassId::GBufferPrepass => {
-                // The surfaces rasterize through the main pass's view block, so
-                // the vertex hook places them as the main pass will; the
-                // un-jittered cur/prev VPs drive the motion vector.
-                let main_view =
-                    self.main_view_uniforms(&crate::metal::draw::main::MainPassCamera {
-                        elapsed: narrow_f32(params.frame.elapsed),
-                        vp: params.plan.camera.vp,
-                        view: self.state.view.matrix,
-                        cam_pos: params.plan.cam_pos,
-                    });
-                let raymarch_view = super::raymarch::RaymarchView::for_gbuffer(
-                    &self.pass_camera(params),
-                    &params.plan.gbuffer_view,
-                );
-                self.encode_gbuffer_prepass(
-                    cmd_buf,
-                    crate::metal::post::gbuffer::GbufferPrepassViews {
-                        gbuffer: &params.plan.gbuffer_view,
-                        main: &main_view,
-                        raymarch: &raymarch_view,
-                        frustum: &params.plan.camera.frustum,
-                    },
-                    crate::metal::post::gbuffer::GbufferGpuBuffers {
-                        object_buffer: params.object_buffer,
-                        material_params: params.material_params,
-                        bindless_tex_args: params.bindless_tex_args,
-                        prev_model_buffer: params.prev_model_buffer,
-                        draw_args_buffer: params.draw_args_buffer,
-                        history_targets: params.history_targets,
-                        deformed_current: params.deformed_skinned,
-                        deformed_prev: params.deformed_prev,
-                        grass: params.grass,
-                    },
-                    params.plan.motion_read,
-                )?
+            PassId::GBufferPrepass | PassId::GBufferLate => {
+                self.encode_gbuffer_node(pass_id, cmd_buf, params)?
             }
             PassId::TaaResolve => {
                 let scene_pre_taa =

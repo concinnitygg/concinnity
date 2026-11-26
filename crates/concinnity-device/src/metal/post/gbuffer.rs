@@ -187,6 +187,32 @@ pub(in crate::metal) struct GbufferGpuBuffers<'a> {
     pub grass: Option<&'a crate::metal::grass::GrassFrame>,
 }
 
+// Whether a G-buffer pass starts the G-buffer afresh or draws over what the
+// pre-pass left.
+#[derive(Clone, Copy)]
+enum GbufferLoad {
+    Clear,
+    Load,
+}
+
+impl GbufferLoad {
+    // The timing slot the pass records into.
+    fn timing(self) -> crate::metal::pass_timing::PassId {
+        match self {
+            Self::Clear => crate::metal::pass_timing::PassId::GBufferPrepass,
+            Self::Load => crate::metal::pass_timing::PassId::GBufferLate,
+        }
+    }
+}
+
+// The cull lists a G-buffer pass draws: each bucket's ICB and where each
+// stream's execution range sits in them.
+#[derive(Clone, Copy)]
+struct PrepassLists<'a> {
+    icbs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
+    regions: crate::metal::cull::BucketRegions<'a>,
+}
+
 impl MtlContext {
     // Encode the G-buffer pre-pass: normal and linear depth, roughness and
     // motion, plus a sampleable depth, before the main pass. Without velocity
@@ -198,8 +224,100 @@ impl MtlContext {
         gpu: GbufferGpuBuffers<'_>,
         velocity_active: bool,
     ) -> RenderResult<u32> {
-        let Some(targets) = &self.gbuffer.targets else {
+        let Some(desc) = self.gbuffer_pass_desc(GbufferLoad::Clear)? else {
             return Ok(0);
+        };
+        let draw_calls = {
+            let enc = ScopedEncoder::new(
+                cmd_buf
+                    .renderCommandEncoderWithDescriptor(&desc)
+                    .ok_or_else(|| {
+                        RenderError::Other("failed to get G-buffer pre-pass encoder".to_string())
+                    })?,
+                ns_string!("g-buffer prepass"),
+            );
+
+            // The encoder above cleared all four attachments, so a world with
+            // nothing in the cull records still leaves the consumers a clean
+            // "no geometry" G-buffer to read.
+            let grass = gpu.grass;
+            let lists = PrepassLists {
+                icbs: &self.cull.icbs,
+                regions: self.main_regions(),
+            };
+            let mut draws =
+                self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active, lists);
+            if let Some(frame) = grass {
+                draws += self.encode_grass_prepass(&enc, frame, views.main, views.gbuffer);
+            }
+            draws += self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
+            // The sky keeps the "no geometry" depth and roughness and adds the
+            // camera's motion where nothing was drawn.
+            if self.draws_sky(self.state.view.mode) {
+                self.encode_sky_velocity(&enc, views.gbuffer);
+            }
+            draws
+        };
+        Ok(draw_calls)
+    }
+
+    // Snapshot this frame's models into the history slots `gpu` names, for the
+    // next frame's motion. It runs after the last G-buffer pass that reads the
+    // previous frame's slot, so a single frame in flight reads it before it is
+    // overwritten.
+    pub(in crate::metal) fn encode_model_history_snapshot(
+        &self,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        gpu: GbufferGpuBuffers<'_>,
+    ) -> RenderResult<()> {
+        let Some(objects) = gpu.object_buffer else {
+            return Ok(());
+        };
+        self.encode_model_history(cmd_buf, objects, gpu.history_targets, self.cull_count())
+    }
+
+    // Encode the late G-buffer pass: the late lists two-pass occlusion drew in
+    // `MainLate`, drawn over the pre-pass's G-buffer so the readers after the
+    // main pass see every surface it shows.
+    pub(in crate::metal) fn encode_gbuffer_late(
+        &self,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        views: GbufferPrepassViews<'_>,
+        gpu: GbufferGpuBuffers<'_>,
+        velocity_active: bool,
+    ) -> RenderResult<u32> {
+        if self.cull.icbs_late.is_empty() {
+            return Ok(0);
+        }
+        let Some(desc) = self.gbuffer_pass_desc(GbufferLoad::Load)? else {
+            return Ok(0);
+        };
+        let enc = ScopedEncoder::new(
+            cmd_buf
+                .renderCommandEncoderWithDescriptor(&desc)
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get late G-buffer encoder".to_string())
+                })?,
+            ns_string!("g-buffer late"),
+        );
+        let lists = PrepassLists {
+            icbs: &self.cull.icbs_late,
+            regions: crate::metal::cull::BucketRegions {
+                ranges: self.cull.ranges_late.as_deref(),
+                ..self.main_regions()
+            },
+        };
+        Ok(self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active, lists))
+    }
+
+    // The pass descriptor over the G-buffer's four attachments, cleared to "no
+    // geometry" or loaded, all stored. `None` without the targets.
+    fn gbuffer_pass_desc(
+        &self,
+        load: GbufferLoad,
+    ) -> RenderResult<Option<Retained<MTLRenderPassDescriptor>>> {
+        let Some(targets) = &self.gbuffer.targets else {
+            return Ok(None);
         };
         // The color channels are pool-owned; the pool is built under the same
         // gate as `targets`, so all three are present whenever it is. A missing
@@ -216,101 +334,56 @@ impl MtlContext {
                     .to_string(),
             ));
         };
-
+        let action = match load {
+            GbufferLoad::Clear => MTLLoadAction::Clear,
+            GbufferLoad::Load => MTLLoadAction::Load,
+        };
+        let clear = |red| MTLClearColor {
+            red,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        };
+        // Alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers, roughness
+        // 1.0 leaves the background non-reflective, and the background has no
+        // motion.
+        let channels = [
+            (normal_depth, clear(0.0)),
+            (roughness, clear(1.0)),
+            (velocity, clear(0.0)),
+        ];
         let desc = MTLRenderPassDescriptor::new();
-        // SAFETY: color attachment 0 (normal + depth) is one of the descriptor's fixed slots.
-        let ca0 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
-        ca0.setTexture(Some(normal_depth));
-        ca0.setLoadAction(MTLLoadAction::Clear);
-        ca0.setStoreAction(MTLStoreAction::Store);
-        // Cleared alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers.
-        ca0.setClearColor(MTLClearColor {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        });
-        // SAFETY: slot 1 (roughness) is likewise within the color attachment array.
-        let ca1 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(1) };
-        ca1.setTexture(Some(roughness));
-        ca1.setLoadAction(MTLLoadAction::Clear);
-        ca1.setStoreAction(MTLStoreAction::Store);
-        // Background roughness 1.0 -> non-reflective, so the border emits no SSR.
-        ca1.setClearColor(MTLClearColor {
-            red: 1.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        });
-        // SAFETY: slot 2 (velocity) is within the array's eight color attachments.
-        let ca2 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(2) };
-        ca2.setTexture(Some(velocity));
-        ca2.setLoadAction(MTLLoadAction::Clear);
-        ca2.setStoreAction(MTLStoreAction::Store);
-        // Zero motion for the cleared background.
-        ca2.setClearColor(MTLClearColor {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        });
+        for (i, (texture, color)) in channels.into_iter().enumerate() {
+            // SAFETY: slots 0 to 2 are within the descriptor's eight color attachments.
+            let ca = unsafe { desc.colorAttachments().objectAtIndexedSubscript(i) };
+            ca.setTexture(Some(texture));
+            ca.setLoadAction(action);
+            ca.setStoreAction(MTLStoreAction::Store);
+            ca.setClearColor(color);
+        }
         let da = desc.depthAttachment();
         da.setTexture(Some(targets.depth.as_ref()));
-        da.setLoadAction(MTLLoadAction::Clear);
+        da.setLoadAction(action);
         da.setClearDepth(CLEAR_DEPTH);
         // Stored (not DontCare): the MetalFX upscaler samples this depth.
         da.setStoreAction(MTLStoreAction::Store);
         if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_render(&desc, crate::metal::pass_timing::PassId::GBufferPrepass);
+            t.attach_render(&desc, load.timing());
         }
-        // Kept past the encode below, which consumes `gpu`: the snapshot that
-        // fills the next frame's history runs after this frame has read the
-        // previous one, so a single frame in flight reads before it overwrites.
-        let snapshot = gpu.object_buffer.cloned();
-        let history_targets = gpu.history_targets;
-        let draw_calls = {
-            let enc = ScopedEncoder::new(
-                cmd_buf
-                    .renderCommandEncoderWithDescriptor(&desc)
-                    .ok_or_else(|| {
-                        RenderError::Other("failed to get G-buffer pre-pass encoder".to_string())
-                    })?,
-                ns_string!("g-buffer prepass"),
-            );
-
-            // The encoder above cleared all four attachments, so a world with
-            // nothing in the cull records still leaves the consumers a clean
-            // "no geometry" G-buffer to read.
-            let grass = gpu.grass;
-            let mut draws =
-                self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active);
-            if let Some(frame) = grass {
-                draws += self.encode_grass_prepass(&enc, frame, views.main, views.gbuffer);
-            }
-            draws += self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
-            // The sky keeps the "no geometry" depth and roughness and adds the
-            // camera's motion where nothing was drawn.
-            if self.draws_sky(self.state.view.mode) {
-                self.encode_sky_velocity(&enc, views.gbuffer);
-            }
-            draws
-        };
-        if let Some(objects) = snapshot.as_ref() {
-            self.encode_model_history(cmd_buf, objects, history_targets, self.cull_count())?;
-        }
-        Ok(draw_calls)
+        Ok(Some(desc))
     }
 
-    // Execute each bucket's early ICB under its pre-pass pipeline, split like
-    // `execute_bindless_static_icb`: the static prefix with the static VB on both
-    // streams, then the skinned tail with the previous deformed buffer on stream
-    // 1. Returns the draws issued.
+    // Execute each bucket's ICB in `lists` under its pre-pass pipeline, split
+    // like `execute_bindless_static_icb`: the static prefix with the static VB
+    // on both streams, then the skinned tail with the previous deformed buffer
+    // on stream 1. Returns the draws issued.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         views: GbufferPrepassViews<'_>,
         gpu: GbufferGpuBuffers<'_>,
         velocity_active: bool,
+        lists: PrepassLists<'_>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
         use std::sync::atomic::Ordering;
@@ -341,9 +414,9 @@ impl MtlContext {
         else {
             return 0;
         };
-        if self.cull.icbs.is_empty() {
+        let Some(first_icb) = lists.icbs.first() else {
             return 0;
-        }
+        };
         enc.set_depth_stencil(&self.targets.depth_state);
         // The main pass's view, records and parameter table at their slots, the
         // pre-pass view at buffer 3, model history at 17, draw args at 18, and
@@ -380,7 +453,7 @@ impl MtlContext {
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, main::MESH_VERTICES.index);
 
         let counts = self.draw_record_counts();
-        let regions = self.main_regions();
+        let regions = lists.regions;
         let mut draw_calls = 0u32;
 
         // The prefix per bucket; a bucket the main pass skips is skipped here
@@ -393,7 +466,7 @@ impl MtlContext {
             );
             // A bucket without a pre-pass pipeline (one failed to build) is
             // skipped too: it shades, but adds nothing to the G-buffer.
-            for (b, icb) in self.cull.icbs.iter().enumerate() {
+            for (b, icb) in lists.icbs.iter().enumerate() {
                 if !regions.draws(b) {
                     continue;
                 }
@@ -442,7 +515,7 @@ impl MtlContext {
             }
             draw_calls += crate::metal::draw::main::execute_list(
                 enc,
-                &self.cull.icbs[0],
+                first_icb,
                 regions,
                 concinnity_engine::gfx::render_types::SKINNED_STREAM,
             );

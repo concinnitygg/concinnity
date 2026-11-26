@@ -164,6 +164,12 @@ pass_ids! {
     /// `AutoExposure` / Decals / Fog / SSR see the combined result). Gated on
     /// `FrameGraphInputs::two_pass_occlusion_enabled`.
     MainLate => "main_late",
+    /// Late G-buffer pass for two-pass occlusion. Loads the pre-pass's
+    /// G-buffer and draws into it the same late lists `MainLate` draws, so
+    /// every reader after the main pass (the reflection resolves and their
+    /// composite, the temporal pass and the upscaler) sees each surface the
+    /// scene shows. Present when both `MainLate` and `GBufferPrepass` are.
+    GBufferLate => "gbuffer_late",
     /// Screen-space global illumination. A refinement of SSR: it reuses the
     /// SSR depth + normal pre-pass G-buffer and screen-space ray-march, but
     /// integrates bounced radiance over a cosine-weighted hemisphere instead

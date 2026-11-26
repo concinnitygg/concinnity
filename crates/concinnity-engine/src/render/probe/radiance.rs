@@ -1,17 +1,18 @@
 //! Radiance kept in half-float targets: the cap every scene writer applies,
-//! the fixed scales the baked reflection cubes are stored at, and the scale
-//! each off-camera face is drawn at.
+//! the fixed scales the baked reflection cubes and the clouds' panorama are
+//! stored at, and the scale each off-camera face is drawn at.
 //!
 //! The scene chain is written at the frame's pre-exposure, so it always sits
 //! near the middle of half float's range. A planar mirror is drawn again every
 //! frame, so it takes the frame's pre-exposure too. Probe faces and the atmosphere's
 //! sky cube are drawn once and read for many frames, so they cannot carry a
-//! frame's exposure. Stored absolute, a moonlit scene (about 1e-7 of the
-//! sunlight) falls into half float's subnormal range, where it bands, and the
-//! Milky Way (about 3e-8) below its smallest step, where it vanishes. Each
-//! cube kind is written at its own constant scale instead and divided back
-//! on read. Mirrored in `shaders/hdr_store.hlsl`, `probe_types.hlsl` and
-//! `atmosphere.hlsl`.
+//! frame's exposure, and neither can the clouds' panorama, which blends each
+//! frame into what earlier frames left. Stored absolute, a moonlit scene
+//! (about 1e-7 of the sunlight) falls into half float's subnormal range, where
+//! it bands, and the Milky Way (about 3e-8) below its smallest step, where it
+//! vanishes. Each kind is written at its own constant scale instead and
+//! divided back on read. Mirrored in `shaders/hdr_store.hlsl`,
+//! `probe_types.hlsl`, `atmosphere.hlsl` and `cloud_types.hlsl`.
 
 use crate::gfx::auto_exposure::PreExposure;
 use concinnity_core::math::log2;
@@ -32,6 +33,14 @@ pub const PROBE_STORAGE_SCALE: f32 = 256.0;
 /// disc, so a daylight sky stays far under the cap (about 58 after scaling)
 /// while the Milky Way's faint floor keeps distinct half-float steps.
 pub const SKY_CUBE_STORAGE_SCALE: f32 = 1024.0;
+
+/// The scale the clouds' panorama around the camera is stored at. Each march
+/// moves a texel a quarter of the way to its fresh ray, and absolute moonlit
+/// clouds sit so deep in half float's subnormal range that the step rounds
+/// away, so a texel that went dark would stay dark. Like the sky cube it
+/// holds no sun disc, so a daylit cloud stays far under the cap.
+#[cfg(test)]
+const CLOUD_PANORAMA_STORAGE_SCALE: f32 = 1024.0;
 
 /// The scale an off-camera face's radiance is written at, and the clear that
 /// goes with it. Every face the main shading draws into carries one, through
@@ -187,11 +196,27 @@ mod tests {
         assert!(worst_error([floor].into_iter(), SKY_CUBE_STORAGE_SCALE) < 0.05);
     }
 
+    // A panorama texel left dark climbs toward moonlit clouds a quarter of
+    // the way each march: stored absolute, each step rounds back to nothing;
+    // at the panorama's scale it settles on them.
+    #[test]
+    fn a_dark_panorama_texel_climbs_back_to_moonlit_clouds() {
+        let settle = |target: f32, scale: f32| {
+            (0..48).fold(0.0, |texel: f32, _| {
+                half(texel + 0.25 * (target * scale - texel))
+            }) / scale
+        };
+        let moonlit = 1e-7;
+        assert_eq!(settle(moonlit, 1.0), 0.0);
+        let stored = settle(moonlit, CLOUD_PANORAMA_STORAGE_SCALE);
+        assert!((stored - moonlit).abs() / moonlit < 0.01, "{stored}");
+    }
+
     // By day the scales change nothing the prefilter keeps: its firefly clamp
     // (12, scaled with the cube) still fits half float, and a color the store
     // cap scales down stays above it, so the clamp makes it the same.
     #[test]
-    fn day_radiance_fits_both_scales() {
+    fn day_radiance_fits_every_scale() {
         let firefly = 12.0;
         let min_luminance_share = 0.0722;
         for scale in [PROBE_STORAGE_SCALE, SKY_CUBE_STORAGE_SCALE] {
@@ -199,6 +224,7 @@ mod tests {
         }
         assert!(HDR_STORE_MAX / PROBE_STORAGE_SCALE * min_luminance_share > firefly);
         const { assert!(HDR_STORE_MAX / SKY_CUBE_STORAGE_SCALE > 50.0) };
+        const { assert!(HDR_STORE_MAX / CLOUD_PANORAMA_STORAGE_SCALE > 50.0) };
         assert!((round_trip(1.0, SKY_CUBE_STORAGE_SCALE) - 1.0).abs() < 1e-3);
         assert!((round_trip(1.0, PROBE_STORAGE_SCALE) - 1.0).abs() < 1e-3);
     }
@@ -285,7 +311,7 @@ mod tests {
 
     #[test]
     fn the_constants_match_the_shaders() {
-        use crate::render::shader::embedded::{ATMOSPHERE, HDR_STORE, PROBE_TYPES};
+        use crate::render::shader::embedded::{ATMOSPHERE, CLOUD_TYPES, HDR_STORE, PROBE_TYPES};
         assert_eq!(float(HDR_STORE, "HDR_STORE_MAX"), HDR_STORE_MAX);
         assert_eq!(
             float(PROBE_TYPES, "PROBE_STORAGE_SCALE"),
@@ -294,6 +320,10 @@ mod tests {
         assert_eq!(
             float(ATMOSPHERE, "SKY_CUBE_STORAGE_SCALE"),
             SKY_CUBE_STORAGE_SCALE
+        );
+        assert_eq!(
+            float(CLOUD_TYPES, "CLOUD_PANORAMA_STORAGE_SCALE"),
+            CLOUD_PANORAMA_STORAGE_SCALE
         );
     }
 }

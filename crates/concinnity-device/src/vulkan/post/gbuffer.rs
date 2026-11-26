@@ -73,55 +73,57 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
 pub(in crate::vulkan) fn create_prepass_render_pass(
     device: &VkDevice,
 ) -> RenderResult<OwnedRenderPass> {
+    prepass_render_pass(device, false)
+}
+
+// The late G-buffer pass's render pass: the pre-pass's attachments in the
+// layouts it left them, loaded rather than cleared, so the late lists draw over
+// what it drew. Render-pass-compatible with the pre-pass, so its framebuffers
+// and pipelines serve both.
+fn create_prepass_late_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
+    prepass_render_pass(device, true)
+}
+
+// The G-buffer render pass, cleared or loaded (`load`).
+fn prepass_render_pass(device: &VkDevice, load: bool) -> RenderResult<OwnedRenderPass> {
+    let load_op = if load {
+        vk::AttachmentLoadOp::LOAD
+    } else {
+        vk::AttachmentLoadOp::CLEAR
+    };
+    let initial = |rest| {
+        if load {
+            rest
+        } else {
+            vk::ImageLayout::UNDEFINED
+        }
+    };
+    let attachment = |format, rest| {
+        vk::AttachmentDescription::default()
+            .format(format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(load_op)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(initial(rest))
+            .final_layout(rest)
+    };
+    let color_rest = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
     let attachments = [
-        vk::AttachmentDescription::default()
-            .format(GBUFFER_NORMAL_DEPTH_FORMAT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-        vk::AttachmentDescription::default()
-            .format(GBUFFER_ROUGHNESS_FORMAT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-        vk::AttachmentDescription::default()
-            .format(GBUFFER_VELOCITY_FORMAT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-        vk::AttachmentDescription::default()
-            .format(vk::Format::D32_SFLOAT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+        attachment(GBUFFER_NORMAL_DEPTH_FORMAT, color_rest),
+        attachment(GBUFFER_ROUGHNESS_FORMAT, color_rest),
+        attachment(GBUFFER_VELOCITY_FORMAT, color_rest),
+        attachment(
+            vk::Format::D32_SFLOAT,
+            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        ),
     ];
-    let color_refs = [
+    let color_refs = [0, 1, 2].map(|attachment| {
         vk::AttachmentReference::default()
-            .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-        vk::AttachmentReference::default()
-            .attachment(1)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-        vk::AttachmentReference::default()
-            .attachment(2)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-    ];
+            .attachment(attachment)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+    });
     let depth_ref = vk::AttachmentReference::default()
         .attachment(3)
         .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
@@ -129,30 +131,49 @@ pub(in crate::vulkan) fn create_prepass_render_pass(
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(&color_refs)
         .depth_stencil_attachment(&depth_ref);
-    let dep = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ)
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
+    let dependencies = prepass_dependencies();
     let info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(std::slice::from_ref(&dep));
+        .dependencies(&dependencies);
     device
         .create_render_pass(&info)
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer prepass render pass"))
+}
+
+// The G-buffer render passes' dependencies, the same for the cleared and the
+// loaded pass, since render pass compatibility requires identical ones. In:
+// the last readers of the attachments done, and a loaded pass's earlier writes
+// landed, before the pass writes them. Out: its writes visible to the readers
+// after it, which sample in fragment and compute shaders.
+fn prepass_dependencies() -> [vk::SubpassDependency; 2] {
+    let writes =
+        vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
+    let stages = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
+    [
+        vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(stages | vk::PipelineStageFlags::FRAGMENT_SHADER)
+            .src_access_mask(vk::AccessFlags::SHADER_READ | writes)
+            .dst_stage_mask(stages)
+            .dst_access_mask(
+                writes
+                    | vk::AccessFlags::COLOR_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ,
+            ),
+        vk::SubpassDependency::default()
+            .src_subpass(0)
+            .dst_subpass(vk::SUBPASS_EXTERNAL)
+            .src_stage_mask(stages)
+            .src_access_mask(writes)
+            .dst_stage_mask(
+                vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
+            )
+            .dst_access_mask(vk::AccessFlags::SHADER_READ),
+    ]
 }
 
 // The pre-pass's three MRT targets: normal+depth, roughness, velocity. All three
@@ -506,6 +527,8 @@ pub(in crate::vulkan) struct GbufferFrame {
 pub(in crate::vulkan) struct GbufferResources {
     // Render pass.
     pub(in crate::vulkan) prepass_render_pass: OwnedRenderPass,
+    // The late G-buffer pass's, which loads what the pre-pass left.
+    late_render_pass: OwnedRenderPass,
 
     // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat),
     // host-mapped. The pre-pass pipeline's set 0 and the sky's per-frame sets
@@ -557,6 +580,7 @@ impl GbufferResources {
         // `extent` below and reads width/height itself.
         let GbufferExtent { frames, .. } = extent;
         let prepass_render_pass = create_prepass_render_pass(device)?;
+        let late_render_pass = create_prepass_late_render_pass(device)?;
 
         // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat).
         let mut view_ubo_buffers = Vec::with_capacity(frames);
@@ -577,6 +601,7 @@ impl GbufferResources {
 
         let mut me = Self {
             prepass_render_pass,
+            late_render_pass,
             view_ubo_buffers,
             normal_depth_images: Vec::new(),
             roughness_images: Vec::new(),
@@ -738,6 +763,20 @@ pub(in crate::vulkan) struct GbufferPrepassView<'a> {
     pub frustum: &'a Frustum,
 }
 
+// Negative-height viewport: matches the main pass so the G-buffer lines up with
+// the main pass at pixel coordinates; the fragment shader's upright-UV math
+// expects this orientation.
+fn prepass_viewport(extent: vk::Extent2D) -> vk::Viewport {
+    vk::Viewport {
+        x: 0.0,
+        y: extent.height as f32,
+        width: extent.width as f32,
+        height: -(extent.height as f32),
+        min_depth: 0.0,
+        max_depth: 1.0,
+    }
+}
+
 impl VkContext {
     // The G-buffer while it has targets to draw into and sample.
     pub(in crate::vulkan) fn gbuffer_targets(&self) -> Option<&GbufferResources> {
@@ -830,24 +869,19 @@ impl VkContext {
             &clears,
         );
 
-        // Negative-height viewport: matches the main pass so the G-buffer lines
-        // up with the main pass at pixel coordinates; the fragment shader's
-        // upright-UV math expects this orientation.
-        let vp = vk::Viewport {
-            x: 0.0,
-            y: extent.height as f32,
-            width: extent.width as f32,
-            height: -(extent.height as f32),
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D::default().extent(extent);
-        rec.set_viewport(&vp);
-        rec.set_scissor(&scissor);
+        rec.set_viewport(&prepass_viewport(extent));
+        rec.set_scissor(&vk::Rect2D::default().extent(extent));
 
         // Reuses the main pass's indirect buffer with two draws (static + instance,
         // then the skinned tail). With nothing to draw the pass is just the clears.
-        self.encode_gbuffer_prepass_gpu_driven(rec, frame_idx, velocity_active);
+        if let Some(indirect) = self.cull.indirect_buffers.get(frame_idx) {
+            self.encode_gbuffer_prepass_gpu_driven(
+                rec,
+                frame_idx,
+                indirect.buffer(),
+                velocity_active,
+            );
+        }
         if let Some(grass) = grass {
             self.encode_grass_prepass(rec, frame_idx, grass);
         }
@@ -860,17 +894,15 @@ impl VkContext {
         }
 
         rec.end_render_pass();
-
-        // Snapshot this frame's models into this frame's history slot, AFTER the
-        // pass above read the previous one -- which is what keeps a single frame
-        // in flight (one slot, read then rewritten) correct.
-        self.encode_model_history(rec, frame_idx);
     }
 
     // Copy each record's model into this frame's history slot. That slot was read
-    // by a pre-pass `frames_in_flight - 1` frames ago, so the write waits on those
-    // vertex reads and is released to the next frame's pre-pass.
-    fn encode_model_history(&self, rec: &Recorder<'_>, frame_idx: usize) {
+    // by the G-buffer passes `frames_in_flight - 1` frames ago, so the write waits
+    // on those vertex reads and is released to the next frame's. The executor
+    // encodes it after the last G-buffer pass that reads the previous slot, which
+    // is what keeps a single frame in flight (one slot, read then rewritten)
+    // correct.
+    pub(in crate::vulkan) fn encode_model_history(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(history) = self.cull.model_history.as_ref() else {
             return;
         };
@@ -960,27 +992,60 @@ impl VkContext {
         );
     }
 
-    // The GPU-driven pre-pass raster inside the caller's render pass: the static +
-    // instance prefix once per shader bucket over the static VB bound to both
-    // bindings, then the skinned tail over the current and previous deformed VBs.
+    // Encode the late G-buffer pass: the late lists two-pass occlusion drew in
+    // `MainLate`, drawn over the pre-pass's G-buffer so the readers after the
+    // main pass see every surface it shows.
+    pub(in crate::vulkan) fn encode_gbuffer_late(
+        &self,
+        gb: &GbufferResources,
+        rec: &Recorder<'_>,
+        frame_idx: usize,
+        block: &GBufferView,
+    ) {
+        let (Some(framebuffer), Some(indirect)) = (
+            gb.framebuffers.get(frame_idx),
+            self.cull.indirect_buffers_late.get(frame_idx),
+        ) else {
+            return;
+        };
+        if self.state.draw.n_objects == 0 {
+            return;
+        }
+        let extent = self.targets.render_extent;
+        // The pre-pass wrote this frame slot's view block; the late pass draws
+        // through the same one. A loaded render pass takes no clear values.
+        rec.begin_render_pass(
+            &gb.late_render_pass,
+            framebuffer,
+            vk::Rect2D::default().extent(extent),
+            &[],
+        );
+        rec.set_viewport(&prepass_viewport(extent));
+        rec.set_scissor(&vk::Rect2D::default().extent(extent));
+        self.encode_gbuffer_prepass_gpu_driven(
+            rec,
+            frame_idx,
+            indirect.buffer(),
+            block.motion != 0,
+        );
+        rec.end_render_pass();
+    }
+
+    // The GPU-driven pre-pass raster of `indirect`'s lists inside the caller's
+    // render pass: the static + instance prefix once per shader bucket over the
+    // static VB bound to both bindings, then the skinned tail over the current
+    // and previous deformed VBs.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         rec: &Recorder<'_>,
         frame_idx: usize,
+        indirect: vk::Buffer,
         velocity_active: bool,
     ) {
         // Bucket 0's pipeline is `None` when its pre-pass failed to build; the
         // other buckets still draw.
         let pipeline = self.cull.prepass_pipeline.as_ref();
         let Some(prepass) = self.cull.prepass_layout.as_ref() else {
-            return;
-        };
-        let Some(indirect) = self
-            .cull
-            .indirect_buffers
-            .get(frame_idx)
-            .map(PooledBuffer::buffer)
-        else {
             return;
         };
         let Some(&gset) = self.cull.gbuffer_sets.get(frame_idx) else {

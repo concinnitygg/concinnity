@@ -60,15 +60,24 @@ pub(super) fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) 
     }
 }
 
-// The two-pass occlusion late pass over Main's output, returning the rebuilt
-// pyramid and MainLate's scene versions.
+// What two-pass occlusion's late half leaves the rest of the frame.
+pub(super) struct LateOcclusion {
+    // The pyramid rebuilt from the early depth.
+    pub(super) hiz: TextureHandle,
+    // MainLate's scene versions.
+    pub(super) scene: SceneVersions,
+    // The late draw arguments, which the late G-buffer pass draws too.
+    pub(super) draw_args: BufferHandle,
+}
+
+// The two-pass occlusion late pass over Main's output.
 pub(super) fn add_late_occlusion(
     b: &mut GraphBuilder,
     hiz: TextureHandle,
     cull_status: Option<BufferHandle>,
     hdr_color: Option<TextureHandle>,
     main_out: SceneVersions,
-) -> (TextureHandle, SceneVersions) {
+) -> LateOcclusion {
     // HizEarly (compute): read early depth, write the Hi-Z pyramid.
     // The depth RAW edge pins it after Main; the pyramid write is a WAR
     // against Cull's read of the previous frame's contents.
@@ -97,7 +106,30 @@ pub(super) fn add_late_occlusion(
         let _ = main_late.write_texture(h);
     }
     let resolve = main_late.write_texture(main_out.resolve);
-    (hiz_v1, SceneVersions { resolve, depth })
+    LateOcclusion {
+        hiz: hiz_v1,
+        scene: SceneVersions { resolve, depth },
+        draw_args: draw_args_late_v1,
+    }
+}
+
+// GBufferLate (render): draw the late arguments into the G-buffer the pre-pass
+// left, returning its new versions. The draw_args_late RAW edge pins it after
+// CullLate, and the G-buffer writes pin it after the pre-pass's readers ahead
+// of Main.
+pub(super) fn add_late_gbuffer(
+    b: &mut GraphBuilder,
+    draw_args_late: BufferHandle,
+    gbuffer: GBufferHandles,
+) -> GBufferHandles {
+    let mut late = b.add_pass(PassId::GBufferLate, PassKind::Render);
+    late.read_buffer(draw_args_late);
+    GBufferHandles {
+        normal_depth: late.write_texture(gbuffer.normal_depth),
+        roughness: late.write_texture(gbuffer.roughness),
+        velocity: late.write_texture(gbuffer.velocity),
+        depth: late.write_texture(gbuffer.depth),
+    }
 }
 
 // The post-Main `hdr_resolve` chain, Raymarch, Decals, Fog, ParticlesDraw,

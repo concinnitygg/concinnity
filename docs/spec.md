@@ -746,7 +746,6 @@ Everything the engine writes for a project lives under one state directory.
 |-- cache/           regenerable, deletable at any time   see 8.2
 |   |-- 0            runtime cache segment                runtime-writable
 |   `-- 1            build cache segment                  cook only
-|-- assets/          source assets                        authored
 |-- *.jsonl          asset files and applications         authored
 |-- saves/           runtime save files                   runtime-writable
 |-- crash.log        the latest run's crashes (25.1)      runtime-writable
@@ -754,12 +753,12 @@ Everything the engine writes for a project lives under one state directory.
 ```
 
 The tree has four roots, and a host that keeps them together gets the layout
-above. The **content** root holds what a person authors (`assets/`, `.jsonl`
-files); the **build** root holds what a build produces (`data/`, with
-`data/shaders` in an exported app, and `cook-lock.json`); the
-**writable** root holds what a run writes (`saves/`, `settings`, `crash.log`); the
-**cache** root holds the regenerable segments. Each of the last three defaults
-to the content root and may be split away on its own.
+above. The **content** root holds what a person authors (the `.jsonl` files and
+the sources they name); the **build** root holds what a build produces
+(`data/`, with `data/shaders` in an exported app, and `cook-lock.json`); the
+**writable** root holds what a run writes (`saves/`, `settings`, `crash.log`);
+the **cache** root holds the regenerable segments. Each of the last three
+defaults to the content root and may be split away on its own.
 
 ### 8.1 Root resolution
 
@@ -771,7 +770,7 @@ scatters state beside whatever directory it was launched from.
 
 | Host        | Root                                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Development | The CLI roots the project at the directory it was run from, so `assets/` and the `.jsonl` files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output; it also marks the directory as the root a file's paths resolve against (5.3). With no `-f`, a command uses the application under that directory (5.1). |
+| Development | The CLI roots the project at the directory it was run from, so the `.jsonl` files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output; it also marks the directory as the root a file's paths resolve against (5.3). With no `-f`, a command uses the application under that directory (5.1). |
 | Shipped     | The player installs the directory beside its own executable (or `Contents/Resources` inside a macOS bundle).                                                                                               |
 | Embedded    | A world loaded from a blob path anchors the tree beside that blob, stepping out of a directory named `data`. A host that names its own directory overrides that.                                          |
 

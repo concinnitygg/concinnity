@@ -112,9 +112,9 @@
 {REFLECTION_MISS}
 {REFLECTION_HIT}
 // The sky around the camera, the clouds around it (`(light, transmittance)`,
-// absolute) that the ground's water reflects, and the reflection rays to
-// shade with the arguments that listed them: groups in x, y and z, then the
-// listed count. The reflection output is `cloud_out`.
+// read through `cloud_panorama_at`) that the ground's water reflects, and the
+// reflection rays to shade with the arguments that listed them: groups in x,
+// y and z, then the listed count. The reflection output is `cloud_out`.
 [[vk::binding(12, 0)]] Texture2D<float4> sky_view_lut : register(t8);
 #ifdef CN_BACKEND_DIRECTX
 StructuredBuffer<ReflectionMiss> reflection_misses : register(t9);
@@ -140,7 +140,8 @@ StructuredBuffer<uint> reflection_miss_args : register(t10);
 #endif
 #if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 [[vk::binding(3, 0)]] Texture2D<float4> sky_view_lut : register(t2);
-// The clouds around the camera, `(light, transmittance)`, absolute.
+// The clouds around the camera, `(light, transmittance)`, read through
+// `cloud_panorama_at`.
 [[vk::binding(6, 0)]] Texture2D<float4> cloud_panorama : register(t4);
 #endif
 [[vk::binding(4, 0)]] SamplerState lut_sampler : register(s0);
@@ -475,6 +476,14 @@ float3 surface_sky_light(uint lane)
     return surface_sky_shared;
 }
 
+// The clouds around the camera along `dir`, `(light, transmittance)`,
+// absolute, for the camera's unit `up`.
+float4 cloud_panorama_at(float3 dir, float3 up)
+{
+    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir, up), 0.0);
+    return float4(c.rgb / CLOUD_PANORAMA_STORAGE_SCALE, c.a);
+}
+
 // `light` seen along `dir` behind the clouds around the camera.
 float3 behind_clouds(float3 dir, float3 light)
 {
@@ -482,7 +491,7 @@ float3 behind_clouds(float3 dir, float3 light)
     {
         return light;
     }
-    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir, atmo_camera_up()), 0.0);
+    float4 c = cloud_panorama_at(dir, atmo_camera_up());
     return light * c.a + c.rgb;
 }
 
@@ -527,7 +536,7 @@ float3 surface_sea_reflected(float3 dir, float3 up, float alpha)
         float3 l = reflect(dir, h);
         if (dot(l, up) > 0.0)
         {
-            clouds += cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(l, camera_up), 0.0);
+            clouds += cloud_panorama_at(l, camera_up);
             taps += 1.0;
         }
     }
@@ -609,7 +618,7 @@ bool surface_seen_along(float3 dir)
 
 #ifdef ATMOSPHERE_SKY_CUBE
 // The scale the cube is stored at, so a night sky's faint glow keeps its
-// half-float steps. Mirrors `render::radiance_storage::SKY_CUBE_STORAGE_SCALE`.
+// half-float steps. Mirrors `render::probe::radiance::SKY_CUBE_STORAGE_SCALE`.
 static const float SKY_CUBE_STORAGE_SCALE = 1024.0;
 
 // One thread per texel of the cube's top mip, six faces deep: the sky-view
@@ -1235,7 +1244,7 @@ void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
 #ifdef CLOUD_PANORAMA
 // The clouds along a direction inside panorama texel `texel` from the camera,
 // at half the view march's steps and without the detail, hazed by the air in
-// front of them, absolute, as the cubes hold their light. The point inside
+// front of them, their light at the panorama's storage scale. The point inside
 // the texel and the march's step offset turn each frame.
 float4 cloud_panorama_texel(uint2 texel)
 {
@@ -1252,7 +1261,7 @@ float4 cloud_panorama_texel(uint2 texel)
         float4 haze = aerial_march(dir, air.x, max(sight.distance - air.x, 0.0));
         seen = seen * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w * (1.0 - sight.transmittance);
     }
-    return float4(seen, sight.transmittance);
+    return float4(hdr_store_cap(seen * CLOUD_PANORAMA_STORAGE_SCALE), sight.transmittance);
 }
 
 // One thread per 2x2 block of texels. A filled panorama marches the block's

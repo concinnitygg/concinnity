@@ -77,7 +77,7 @@ pub struct ViewUniforms {
     /// declares no `SkyRotation`. Every cubemap sample helper applies it, so
     /// the sky, the ambient fill and the glossy reflections turn together.
     /// One `float4` per row; row 0's `w` is the environment prefilter cube's
-    /// storage scale as a base-2 log (`radiance_storage::with_sky_cube_scale`).
+    /// storage scale as a base-2 log (`render::probe::radiance::with_sky_cube_scale`).
     pub sky_rot: [[f32; 4]; 3],
     /// 1.0 when the bound irradiance cube holds the environment's diffuse
     /// light (an environment map's, or an atmosphere's), so surfaces take

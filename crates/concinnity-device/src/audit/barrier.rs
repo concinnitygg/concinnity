@@ -324,10 +324,12 @@ const AUDITS: &[BackendAudit] = &[
                 2,
                 Reason::AttachmentLayout,
             ),
+            // One attachment builder for the G-buffer's cleared and loaded
+            // render passes.
             (
                 "post/gbuffer.rs",
                 ".final_layout(",
-                4,
+                1,
                 Reason::AttachmentLayout,
             ),
             (

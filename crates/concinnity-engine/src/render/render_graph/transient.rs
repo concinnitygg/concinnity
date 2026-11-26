@@ -727,13 +727,12 @@ mod tests {
     }
 
     #[test]
-    fn the_prepass_depth_is_short_lived_only_in_the_planning_graph() {
-        // `gbuffer_depth` looks like a one-pass lifetime, but only because
-        // Upscale substitutes for TaaResolve and the planning graph models the
-        // TAA branch. With upscaling it lives until Upscale and overlaps
-        // `hdr_depth`, so neither may be pooled with it.
+    fn the_prepass_depth_outlives_the_main_pass() {
+        // `gbuffer_depth` is written by the pre-pass ahead of Main and again by
+        // the late G-buffer pass after it, and with upscaling it lives on until
+        // Upscale reads it. Either way it overlaps `hdr_depth`, so neither may
+        // be pooled with it.
         let build = build_inputs(true, true);
-        let planned = build_frame_graph(&planning_inputs(&build)).expect("compiles");
         let life = |g: &CompiledGraph, label: &str| {
             let r = g
                 .resources
@@ -742,26 +741,21 @@ mod tests {
                 .unwrap_or_else(|| panic!("{label} declared"));
             (r.lifetime.first, r.lifetime.last)
         };
-        let (first, last) = life(&planned, "gbuffer_depth");
-        assert_eq!(
-            first, last,
-            "the planning graph gives the pre-pass depth a one-pass lifetime"
-        );
-
         let mut upscaling = build;
         upscaling.upscale_enabled = true;
-        let real = build_frame_graph(&planning_inputs(&upscaling)).expect("compiles");
-        let (up_first, up_last) = life(&real, "gbuffer_depth");
-        assert!(
-            up_last > up_first,
-            "the upscaler reads the pre-pass depth, so its real lifetime spans passes"
-        );
-        let (hdr_first, hdr_last) = life(&real, "hdr_depth");
-        assert!(
-            up_first <= hdr_last && hdr_first <= up_last,
-            "the two depth targets overlap once the upscale branch is modeled: \
-             gbuffer_depth [{up_first},{up_last}] vs hdr_depth [{hdr_first},{hdr_last}]"
-        );
+        for (inputs, what) in [(build, "taa"), (upscaling, "upscaling")] {
+            let g = build_frame_graph(&planning_inputs(&inputs)).expect("compiles");
+            let (first, last) = life(&g, "gbuffer_depth");
+            let main = g
+                .pass_index(crate::render::render_graph::PassId::Main)
+                .expect("present");
+            assert!(first < main && main < last, "{what}: [{first},{last}]");
+            let (hdr_first, hdr_last) = life(&g, "hdr_depth");
+            assert!(
+                first <= hdr_last && hdr_first <= last,
+                "{what}: gbuffer_depth [{first},{last}] vs hdr_depth [{hdr_first},{hdr_last}]"
+            );
+        }
     }
 
     // Every gated flag, mirroring `validate::tests::FLAGS`: the sweep is only

@@ -122,6 +122,11 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
     world(PassId::HizEarly, &[Has(TwoPass)], &[PassId::Cull]),
     world(PassId::CullLate, &[Has(TwoPass)], &[PassId::Cull]),
     world(PassId::MainLate, &[Has(TwoPass)], &[PassId::Cull]),
+    world(
+        PassId::GBufferLate,
+        &[Has(TwoPass)],
+        &[PassId::Cull, PassId::GBufferPrepass],
+    ),
     world(PassId::AutoExposure, &[Has(AutoExposure)], &[]),
     world(PassId::Raymarch, &[Has(Volumes)], &[]),
     world(

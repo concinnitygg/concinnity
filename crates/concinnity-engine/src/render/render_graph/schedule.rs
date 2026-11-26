@@ -657,13 +657,15 @@ mod tests {
             .map(|p| p.id)
             .collect();
         // The two pre-Main compute passes, the ones producer-side placement
-        // freed (FogFroxel, HizFinal), and the ocean simulation.
+        // freed (FogFroxel, HizFinal), the ocean simulation, and AutoExposure,
+        // which reads only the scene and so runs beside the late G-buffer pass.
         for id in [
             PassId::LightCull,
             PassId::ParticlesSim,
             PassId::FogFroxel,
             PassId::HizFinal,
             PassId::WaterSim,
+            PassId::AutoExposure,
         ] {
             assert!(
                 async_passes.contains(&id),
@@ -676,7 +678,6 @@ mod tests {
             PassId::Cull,
             PassId::HizEarly,
             PassId::CullLate,
-            PassId::AutoExposure,
             PassId::Upscale,
         ] {
             let i = g.pass_index(id).expect("present");
