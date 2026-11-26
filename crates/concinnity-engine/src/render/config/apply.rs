@@ -5,10 +5,12 @@
 //! every backend shares.
 
 use alloc::vec::Vec;
+use core::fmt::Display;
 
 use crate::ecs::asset_fields::ParamChange;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::backend::feature_plan::{BackendFacts, FeaturePlan};
 use crate::render::backend::init::{ShadowCadence, ShadowMapSizes};
 use crate::render::config::ResolvedGraphics;
 
@@ -158,14 +160,86 @@ pub fn rebuild_each(
 ) -> RenderResult<()> {
     let mut first = Ok(());
     for feature in features.iter() {
-        if let Err(e) = rebuild(feature) {
-            if first.is_ok() {
-                first = Err(e);
-            } else {
-                tracing::error!("rebuilding {feature:?}: {e}");
-            }
+        keep_first(&mut first, format_args!("{feature:?}"), rebuild(feature));
+    }
+    first
+}
+
+// Keep `result` in `first` when it is the first error, and log any later one.
+fn keep_first(first: &mut RenderResult<()>, step: impl Display, result: RenderResult<()>) {
+    if let Err(e) = result {
+        if first.is_ok() {
+            *first = Err(e);
+        } else {
+            tracing::error!("rebuilding {step}: {e}");
         }
     }
+}
+
+/// A renderer whose toggle-controlled features [`rebuild_planned`] reallocates:
+/// the per-feature builds and the shared steps that follow them.
+pub trait FeatureRebuild {
+    /// What the device can build, which resolves the [`FeaturePlan`].
+    fn backend_facts(&self) -> BackendFacts;
+    /// Bring `feature` to `plan`. A feature that fails keeps its previous state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the feature's GPU resources cannot be reallocated.
+    fn rebuild_feature(
+        &mut self,
+        feature: RebuildFeature,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()>;
+    /// Bring the reflection resources SSR, SSGI and ray tracing share to
+    /// `plan`, once the features of a set that touches them have rebuilt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the shared resources cannot be reallocated.
+    fn reconcile_reflections(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()>;
+    /// Bring the disocclusion mark in line with the G-buffer now built.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pass cannot be built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()>;
+    /// Gate the runtime-switched passes on `graphics` and what is built now.
+    fn refresh_gates(&mut self, graphics: &ResolvedGraphics);
+}
+
+/// Reallocate `features` on `target` to match `graphics`, between frames:
+/// every feature in [`RebuildFeature::ALL`] order, then the shared reflection
+/// resources when the set touches them, then the disocclusion mark, and last
+/// the pass gates. A step that fails does not stop the rest.
+///
+/// # Errors
+///
+/// Returns the first error a step returned.
+pub fn rebuild_planned<T: FeatureRebuild + ?Sized>(
+    target: &mut T,
+    graphics: &ResolvedGraphics,
+    features: RebuildSet,
+) -> RenderResult<()> {
+    let plan = FeaturePlan::resolve(graphics, target.backend_facts());
+    let rebuilt = rebuild_each(features, |feature| {
+        target.rebuild_feature(feature, graphics, &plan)
+    });
+    let reflections = if features.touches_reflections() {
+        target.reconcile_reflections(graphics, &plan)
+    } else {
+        Ok(())
+    };
+    let disocclusion = target.reconcile_disocclusion();
+    target.refresh_gates(graphics);
+    let mut first = rebuilt;
+    keep_first(&mut first, "reflections", reflections);
+    keep_first(&mut first, "disocclusion", disocclusion);
     first
 }
 

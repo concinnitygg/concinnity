@@ -6,7 +6,6 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::feature_plan::FeatureChange;
 use concinnity_engine::render::post::disocclusion::{
     self, DisocclusionInputs, DisocclusionPass, MASK_FORMAT,
 };
@@ -22,31 +21,11 @@ pub(in crate::vulkan) type VkDisocclusionPass = DisocclusionPass<PostPipeline, P
 impl VkContext {
     // Whether the pass is wanted beside the upscaler (when there is one) and
     // the G-buffer.
-    fn disocclusion_wanted(&self) -> bool {
+    pub(in crate::vulkan) fn disocclusion_wanted(&self) -> bool {
         disocclusion::wanted(
             self.gbuffer_targets().is_some(),
             self.upscale.as_ref().map(|u| u.reactive_reader().reads()),
         )
-    }
-
-    // Build or drop the pass to follow a settings change, at the current
-    // render extent. A drop first forgets the cached framebuffers that name the
-    // snapshots' views.
-    pub(in crate::vulkan) fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
-        match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
-            FeatureChange::Build => {
-                self.disocclusion = Some(DisocclusionPass::new(
-                    &self.post_device(0),
-                    post_extent(self.targets.render_extent),
-                )?);
-            }
-            FeatureChange::Drop => {
-                self.post.cache.forget_views();
-                self.disocclusion = None;
-            }
-            FeatureChange::Update | FeatureChange::Absent => {}
-        }
-        Ok(())
     }
 
     // Build, resize or drop the pass to match the upscaler and the G-buffer at

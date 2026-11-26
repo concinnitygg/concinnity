@@ -179,3 +179,106 @@ fn only_the_reflection_features_touch_the_reflection_target() {
     }
     assert!(!RebuildSet::default().touches_reflections());
 }
+
+// A renderer recording the rebuild steps it was asked for, in order.
+#[derive(Default)]
+struct RebuildLog {
+    steps: Vec<String>,
+    upscaling: bool,
+    planned_taa_resolve: Option<bool>,
+    fail: Vec<&'static str>,
+}
+
+impl RebuildLog {
+    fn step(&mut self, name: String) -> RenderResult<()> {
+        let result = if self.fail.iter().any(|f| *f == name) {
+            Err(RenderError::Other(name.clone()))
+        } else {
+            Ok(())
+        };
+        self.steps.push(name);
+        result
+    }
+}
+
+impl FeatureRebuild for RebuildLog {
+    fn backend_facts(&self) -> BackendFacts {
+        BackendFacts {
+            rt_capable: false,
+            upscaling: self.upscaling,
+        }
+    }
+    fn rebuild_feature(
+        &mut self,
+        feature: RebuildFeature,
+        _: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        self.planned_taa_resolve = Some(plan.taa_resolve);
+        self.step(alloc::format!("{feature:?}"))
+    }
+    fn reconcile_reflections(&mut self, _: &ResolvedGraphics, _: &FeaturePlan) -> RenderResult<()> {
+        self.step("reflections".into())
+    }
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        self.step("disocclusion".into())
+    }
+    fn refresh_gates(&mut self, _: &ResolvedGraphics) {
+        self.steps.push("gates".into());
+    }
+}
+
+#[test]
+fn a_rebuild_runs_the_features_then_the_shared_steps() {
+    use RebuildFeature::{GBuffer, Ssr};
+    let mut log = RebuildLog::default();
+    rebuild_planned(&mut log, &ResolvedGraphics::default(), set(&[Ssr, GBuffer])).unwrap();
+    assert_eq!(
+        log.steps,
+        ["GBuffer", "Ssr", "reflections", "disocclusion", "gates"]
+    );
+}
+
+#[test]
+fn a_set_clear_of_the_reflections_skips_their_reconcile() {
+    use RebuildFeature::{AutoExposure, Ssao};
+    let mut log = RebuildLog::default();
+    rebuild_planned(
+        &mut log,
+        &ResolvedGraphics::default(),
+        set(&[Ssao, AutoExposure]),
+    )
+    .unwrap();
+    assert_eq!(log.steps, ["Ssao", "AutoExposure", "disocclusion", "gates"]);
+}
+
+#[test]
+fn a_failed_step_does_not_stop_the_rest_and_the_first_error_comes_back() {
+    use RebuildFeature::{Ssao, Ssgi};
+    let mut log = RebuildLog {
+        fail: alloc::vec!["Ssgi", "disocclusion"],
+        ..RebuildLog::default()
+    };
+    let err = rebuild_planned(&mut log, &ResolvedGraphics::default(), set(&[Ssao, Ssgi]))
+        .expect_err("the failure is reported");
+    assert_eq!(
+        log.steps,
+        ["Ssao", "Ssgi", "reflections", "disocclusion", "gates"]
+    );
+    assert!(err.to_string().contains("Ssgi"), "{err}");
+}
+
+#[test]
+fn the_plan_resolves_against_the_backend_facts_so_an_upscaler_drops_the_taa_resolve() {
+    let mut log = RebuildLog {
+        upscaling: true,
+        ..RebuildLog::default()
+    };
+    rebuild_planned(
+        &mut log,
+        &ResolvedGraphics::default(),
+        set(&[RebuildFeature::Ssao]),
+    )
+    .unwrap();
+    assert_eq!(log.planned_taa_resolve, Some(false));
+}

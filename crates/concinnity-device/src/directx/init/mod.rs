@@ -28,6 +28,7 @@ use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::init::{BackendInit, PlanarBudget, WorldShader};
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::config::apply::FeatureRebuild as _;
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
 use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;

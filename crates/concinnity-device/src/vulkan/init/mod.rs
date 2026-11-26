@@ -37,6 +37,7 @@ use concinnity_engine::render::backend::init::{
 };
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::config::apply::FeatureRebuild as _;
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;

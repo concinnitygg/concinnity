@@ -26,7 +26,7 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChan
 use concinnity_engine::render::backend::init;
 use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::config::apply::{
-    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
+    FeatureRebuild, RebuildFeature, RebuildSet, SettingsTarget, rebuild_planned,
 };
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::disocclusion::DisocclusionPass;
@@ -80,25 +80,6 @@ pub(in crate::directx) enum RetiredEffect {
 }
 
 impl DxContext {
-    fn rebuild_feature(
-        &mut self,
-        feature: RebuildFeature,
-        g: &ResolvedGraphics,
-        plan: &FeaturePlan,
-    ) -> RenderResult<()> {
-        match feature {
-            RebuildFeature::GBuffer => self.rebuild_gbuffer(plan.gbuffer),
-            RebuildFeature::Taa => self.rebuild_taa(plan.temporal),
-            RebuildFeature::Ssao => self.rebuild_ssao(g),
-            // After the loop, with SSGI and RT, which share its resources.
-            RebuildFeature::Ssr => Ok(()),
-            RebuildFeature::Ssgi => self.rebuild_ssgi(g),
-            RebuildFeature::RtReflections => self.rebuild_rt(plan.rt),
-            RebuildFeature::ReflectionComposite => self.rebuild_reflection_composite(g, plan),
-            RebuildFeature::AutoExposure => self.rebuild_auto_exposure(g, plan.auto_exposure),
-        }
-    }
-
     // Park `effect` until the frames recorded so far have retired.
     fn retire_effect(&mut self, effect: RetiredEffect) {
         self.retired_effects.push(effect);
@@ -144,24 +125,6 @@ impl DxContext {
         Ok(())
     }
 
-    // The disocclusion mark follows the G-buffer and the TAA resources the
-    // features above left built.
-    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
-        match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
-            FeatureChange::Build => {
-                let extent = self.disocclusion_extent();
-                self.disocclusion = Some(DisocclusionPass::new(&self.post_device(0), extent)?);
-            }
-            FeatureChange::Drop => {
-                if let Some(old) = self.disocclusion.take() {
-                    self.retire_effect(RetiredEffect::Disocclusion(old));
-                }
-            }
-            FeatureChange::Update | FeatureChange::Absent => {}
-        }
-        Ok(())
-    }
-
     // The TAA resources, present while TAA or the upscaler consumes velocity.
     fn rebuild_taa(&mut self, wanted: bool) -> RenderResult<()> {
         match FeatureChange::of(wanted, self.taa.is_some()) {
@@ -175,32 +138,6 @@ impl DxContext {
                 }
             }
             FeatureChange::Update | FeatureChange::Absent => {}
-        }
-        Ok(())
-    }
-
-    // The SSR resources: built whenever SSR, SSGI or RT runs, with the resolve
-    // half only while SSR itself does. A change in either builds a fresh set.
-    fn rebuild_ssr(&mut self, g: &ResolvedGraphics, plan: &FeaturePlan) -> RenderResult<()> {
-        let has_resolve = self.ssr.as_ref().map(|s| s.resolve.is_some());
-        let wanted = plan.ssr_resources.then_some(plan.ssr);
-        if wanted == has_resolve {
-            return Ok(());
-        }
-        let fresh = match wanted {
-            Some(resolve) => {
-                let (width, height) = self.render_size();
-                Some(SsrResources::new(
-                    &self.post_device(0),
-                    width,
-                    height,
-                    g.ssr().filter(|_| resolve),
-                )?)
-            }
-            None => None,
-        };
-        if let Some(old) = std::mem::replace(&mut self.ssr, fresh) {
-            self.retire_effect(RetiredEffect::Ssr(old));
         }
         Ok(())
     }
@@ -384,19 +321,6 @@ impl DxContext {
         Ok(())
     }
 
-    // Gate the runtime-switched passes on `graphics` and what is built now.
-    // Every scene target set carries the reactive mask, and the post chain
-    // picks its scene input each frame.
-    pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
-        let traits = BackendTraits {
-            reactive_mask: true,
-            composite_scene_fixed: false,
-        };
-        self.state
-            .planner
-            .configure(graphics, &self.build_status(), traits);
-    }
-
     fn build_status(&self) -> BuildStatus {
         BuildStatus {
             taa: self.taa.is_some(),
@@ -440,6 +364,102 @@ impl DxContext {
     }
 }
 
+impl FeatureRebuild for DxContext {
+    // RT is gated on the GPU reporting the DXR 1.1 tier. TAA resources stay
+    // present while the built upscaler consumes the velocity pre-pass; the
+    // TAA resolve is then dropped from the graph.
+    fn backend_facts(&self) -> BackendFacts {
+        BackendFacts {
+            rt_capable: self.hw.rt_capable,
+            upscaling: self.upscale.backend.is_some(),
+        }
+    }
+
+    fn rebuild_feature(
+        &mut self,
+        feature: RebuildFeature,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        match feature {
+            RebuildFeature::GBuffer => self.rebuild_gbuffer(plan.gbuffer),
+            RebuildFeature::Taa => self.rebuild_taa(plan.temporal),
+            RebuildFeature::Ssao => self.rebuild_ssao(graphics),
+            // After the loop, with SSGI and RT, which share its resources.
+            RebuildFeature::Ssr => Ok(()),
+            RebuildFeature::Ssgi => self.rebuild_ssgi(graphics),
+            RebuildFeature::RtReflections => self.rebuild_rt(plan.rt),
+            RebuildFeature::ReflectionComposite => {
+                self.rebuild_reflection_composite(graphics, plan)
+            }
+            RebuildFeature::AutoExposure => {
+                self.rebuild_auto_exposure(graphics, plan.auto_exposure)
+            }
+        }
+    }
+
+    // The SSR resources: built whenever SSR, SSGI or RT runs, with the resolve
+    // half only while SSR itself does. A change in either builds a fresh set.
+    fn reconcile_reflections(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        let has_resolve = self.ssr.as_ref().map(|s| s.resolve.is_some());
+        let wanted = plan.ssr_resources.then_some(plan.ssr);
+        if wanted == has_resolve {
+            return Ok(());
+        }
+        let fresh = match wanted {
+            Some(resolve) => {
+                let (width, height) = self.render_size();
+                Some(SsrResources::new(
+                    &self.post_device(0),
+                    width,
+                    height,
+                    graphics.ssr().filter(|_| resolve),
+                )?)
+            }
+            None => None,
+        };
+        if let Some(old) = std::mem::replace(&mut self.ssr, fresh) {
+            self.retire_effect(RetiredEffect::Ssr(old));
+        }
+        Ok(())
+    }
+
+    // The disocclusion mark follows the G-buffer and the TAA resources the
+    // features above left built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                let extent = self.disocclusion_extent();
+                self.disocclusion = Some(DisocclusionPass::new(&self.post_device(0), extent)?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.disocclusion.take() {
+                    self.retire_effect(RetiredEffect::Disocclusion(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
+        }
+        Ok(())
+    }
+
+    // Gate the runtime-switched passes on `graphics` and what is built now.
+    // Every scene target set carries the reactive mask, and the post chain
+    // picks its scene input each frame.
+    fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
+        let traits = BackendTraits {
+            reactive_mask: true,
+            composite_scene_fixed: false,
+        };
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), traits);
+    }
+}
+
 impl SettingsTarget for DxContext {
     fn built_shadow_maps(&self) -> init::ShadowMapSizes {
         self.shadow.map_sizes()
@@ -454,27 +474,7 @@ impl SettingsTarget for DxContext {
         graphics: &ResolvedGraphics,
         features: RebuildSet,
     ) -> RenderResult<()> {
-        // RT is gated on the GPU reporting the DXR 1.1 tier. TAA resources stay
-        // present while the built upscaler consumes the velocity pre-pass; the
-        // TAA resolve is then dropped from the graph.
-        let plan = FeaturePlan::resolve(
-            graphics,
-            BackendFacts {
-                rt_capable: self.hw.rt_capable,
-                upscaling: self.upscale.backend.is_some(),
-            },
-        );
-        let rebuilt = rebuild_each(features, |feature| {
-            self.rebuild_feature(feature, graphics, &plan)
-        });
-        let ssr = if features.touches_reflections() {
-            self.rebuild_ssr(graphics, &plan)
-        } else {
-            Ok(())
-        };
-        let disocclusion = self.reconcile_disocclusion();
-        self.refresh_gates(graphics);
-        rebuilt.and(ssr).and(disocclusion)
+        rebuild_planned(self, graphics, features)
     }
 
     // Update the live scalar tunables of the SSAO / SSR / SSGI / auto-exposure

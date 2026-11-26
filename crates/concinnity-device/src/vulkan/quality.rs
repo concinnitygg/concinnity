@@ -32,38 +32,17 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChan
 use concinnity_engine::render::backend::init;
 use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::config::apply::{
-    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
+    FeatureRebuild, RebuildFeature, RebuildSet, SettingsTarget, rebuild_planned,
 };
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::post::rt_reflections;
 use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus};
 
 use super::context::VkContext;
 use super::post::SsaoResources;
+use super::post::post_device::post_extent;
 
 impl VkContext {
-    fn rebuild_feature(
-        &mut self,
-        feature: RebuildFeature,
-        g: &ResolvedGraphics,
-        plan: &FeaturePlan,
-    ) -> RenderResult<()> {
-        match feature {
-            RebuildFeature::GBuffer => self.rebuild_gbuffer(plan.gbuffer),
-            RebuildFeature::Taa => self.rebuild_taa(plan.temporal),
-            RebuildFeature::Ssao => self.rebuild_ssao(g),
-            // After the loop, with SSGI and RT, which share its resources.
-            RebuildFeature::Ssr => Ok(()),
-            RebuildFeature::Ssgi => self.rebuild_ssgi(g),
-            RebuildFeature::RtReflections => self.rebuild_rt(plan.rt),
-            // Follows the post-build RT state, so a failed RT enable falls back
-            // to the SSR resolve.
-            RebuildFeature::ReflectionComposite => {
-                self.reconcile_reflection_composite(g.reflection_blur_scale())
-            }
-            RebuildFeature::AutoExposure => self.rebuild_auto_exposure(g),
-        }
-    }
-
     // The unified G-buffer pre-pass. Kept alive once built (a later toggle-off
     // of the last consumer leaves it resident until the next launch), which is
     // harmless: with no consumer the graph omits its readers. Its three color
@@ -117,33 +96,6 @@ impl VkContext {
                 self.taa = None;
             }
             FeatureChange::Update | FeatureChange::Absent => {}
-        }
-        Ok(())
-    }
-
-    // The SSR resolve + reflection target. Built whenever SSR / SSGI / RT is
-    // on; its settings carry whether SSR itself is authored, so a build kept
-    // alive for SSGI or RT takes an SSR toggle through them alone.
-    fn rebuild_ssr(&mut self, g: &ResolvedGraphics, plan: &FeaturePlan) -> RenderResult<()> {
-        match FeatureChange::of(plan.ssr_resources, self.ssr.is_some()) {
-            FeatureChange::Build => {
-                let ssr = super::post::ssr::SsrResources::new(
-                    &self.post_device(0),
-                    g.ssr(),
-                    self.targets.render_extent,
-                )?;
-                self.ssr = Some(ssr);
-            }
-            FeatureChange::Drop => {
-                // The cached framebuffers name the reflection target's view.
-                self.post.cache.forget_views();
-                self.ssr = None;
-            }
-            FeatureChange::Update | FeatureChange::Absent => {
-                if let Some(ssr) = self.ssr.as_mut() {
-                    ssr.settings = g.ssr();
-                }
-            }
         }
         Ok(())
     }
@@ -270,19 +222,6 @@ impl VkContext {
         Ok(())
     }
 
-    // Gate the runtime-switched passes on `graphics` and what is built now.
-    // The post chain reads the reflection composite's output as its scene
-    // through sets written ahead of the frame.
-    pub(in crate::vulkan) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
-        let traits = BackendTraits {
-            reactive_mask: self.hw.device.writer_targets().carries_mask(),
-            composite_scene_fixed: true,
-        };
-        self.state
-            .planner
-            .configure(graphics, &self.build_status(), traits);
-    }
-
     fn build_status(&self) -> BuildStatus {
         BuildStatus {
             taa: self.taa.is_some(),
@@ -386,6 +325,104 @@ impl VkContext {
     }
 }
 
+impl FeatureRebuild for VkContext {
+    // TAA resources stay present while the built upscaler consumes the
+    // velocity pre-pass; the TAA resolve is then dropped from the graph.
+    fn backend_facts(&self) -> BackendFacts {
+        BackendFacts {
+            rt_capable: self.hw.rt_capable,
+            upscaling: self.upscale.is_some(),
+        }
+    }
+
+    fn rebuild_feature(
+        &mut self,
+        feature: RebuildFeature,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        match feature {
+            RebuildFeature::GBuffer => self.rebuild_gbuffer(plan.gbuffer),
+            RebuildFeature::Taa => self.rebuild_taa(plan.temporal),
+            RebuildFeature::Ssao => self.rebuild_ssao(graphics),
+            // After the loop, with SSGI and RT, which share its resources.
+            RebuildFeature::Ssr => Ok(()),
+            RebuildFeature::Ssgi => self.rebuild_ssgi(graphics),
+            RebuildFeature::RtReflections => self.rebuild_rt(plan.rt),
+            // Follows the post-build RT state, so a failed RT enable falls back
+            // to the SSR resolve.
+            RebuildFeature::ReflectionComposite => {
+                self.reconcile_reflection_composite(graphics.reflection_blur_scale())
+            }
+            RebuildFeature::AutoExposure => self.rebuild_auto_exposure(graphics),
+        }
+    }
+
+    // The SSR resolve + reflection target. Built whenever SSR / SSGI / RT is
+    // on; its settings carry whether SSR itself is authored, so a build kept
+    // alive for SSGI or RT takes an SSR toggle through them alone.
+    fn reconcile_reflections(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        match FeatureChange::of(plan.ssr_resources, self.ssr.is_some()) {
+            FeatureChange::Build => {
+                let ssr = super::post::ssr::SsrResources::new(
+                    &self.post_device(0),
+                    graphics.ssr(),
+                    self.targets.render_extent,
+                )?;
+                self.ssr = Some(ssr);
+            }
+            FeatureChange::Drop => {
+                // The cached framebuffers name the reflection target's view.
+                self.post.cache.forget_views();
+                self.ssr = None;
+            }
+            FeatureChange::Update | FeatureChange::Absent => {
+                if let Some(ssr) = self.ssr.as_mut() {
+                    ssr.settings = graphics.ssr();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Build or drop the pass to follow a settings change, at the current
+    // render extent. A drop first forgets the cached framebuffers that name the
+    // snapshots' views.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                self.disocclusion = Some(DisocclusionPass::new(
+                    &self.post_device(0),
+                    post_extent(self.targets.render_extent),
+                )?);
+            }
+            FeatureChange::Drop => {
+                self.post.cache.forget_views();
+                self.disocclusion = None;
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
+        }
+        Ok(())
+    }
+
+    // Gate the runtime-switched passes on `graphics` and what is built now.
+    // The post chain reads the reflection composite's output as its scene
+    // through sets written ahead of the frame.
+    fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
+        let traits = BackendTraits {
+            reactive_mask: self.hw.device.writer_targets().carries_mask(),
+            composite_scene_fixed: true,
+        };
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), traits);
+    }
+}
+
 impl SettingsTarget for VkContext {
     fn built_shadow_maps(&self) -> init::ShadowMapSizes {
         self.shadow.map_sizes()
@@ -400,26 +437,7 @@ impl SettingsTarget for VkContext {
         graphics: &ResolvedGraphics,
         features: RebuildSet,
     ) -> RenderResult<()> {
-        // TAA resources stay present while the built upscaler consumes the
-        // velocity pre-pass; the TAA resolve is then dropped from the graph.
-        let plan = FeaturePlan::resolve(
-            graphics,
-            BackendFacts {
-                rt_capable: self.hw.rt_capable,
-                upscaling: self.upscale.is_some(),
-            },
-        );
-        let rebuilt = rebuild_each(features, |feature| {
-            self.rebuild_feature(feature, graphics, &plan)
-        });
-        let ssr = if features.touches_reflections() {
-            self.rebuild_ssr(graphics, &plan)
-        } else {
-            Ok(())
-        };
-        let disocclusion = self.reconcile_disocclusion();
-        self.refresh_gates(graphics);
-        rebuilt.and(ssr).and(disocclusion)
+        rebuild_planned(self, graphics, features)
     }
 
     // Update the live scalar tunables of the SSAO / SSR / SSGI / auto-exposure

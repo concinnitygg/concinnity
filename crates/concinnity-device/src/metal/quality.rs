@@ -20,7 +20,7 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChan
 use concinnity_engine::render::backend::init;
 use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::config::apply::{
-    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
+    FeatureRebuild, RebuildFeature, RebuildSet, SettingsTarget, rebuild_planned,
 };
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::disocclusion::DisocclusionPass;
@@ -77,21 +77,15 @@ pub(super) enum RetiredEffect {
     Disocclusion(MtlDisocclusionPass),
 }
 
-// What a rebuild reads besides the context: the per-feature settings and the
-// features the settings want built on this device.
-struct Wanted {
-    settings: EffectSettings,
-    plan: FeaturePlan,
+// The per-feature settings a rebuild builds to, with ray tracing only as the
+// plan allows it on this device.
+fn effect_settings(graphics: &ResolvedGraphics, plan: &FeaturePlan) -> EffectSettings {
+    let mut settings = EffectSettings::new(graphics);
+    settings.rt_reflection = plan.rt;
+    settings
 }
 
 impl MtlContext {
-    // Gate the runtime-switched passes on `graphics` and what is built now.
-    pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
-        self.state
-            .planner
-            .configure(graphics, &self.build_status(), METAL_TRAITS);
-    }
-
     fn build_status(&self) -> BuildStatus {
         BuildStatus {
             taa: self.taa.pass.is_some(),
@@ -101,21 +95,6 @@ impl MtlContext {
             ssgi: self.ssgi.pass.is_some(),
             auto_exposure: self.auto_exposure.pipelines.is_some(),
             gbuffer: self.gbuffer.targets.is_some(),
-        }
-    }
-
-    fn rebuild_feature(&mut self, feature: RebuildFeature, wanted: &Wanted) -> RenderResult<()> {
-        match feature {
-            RebuildFeature::GBuffer => self.rebuild_gbuffer(wanted.plan.gbuffer),
-            RebuildFeature::Taa => self.rebuild_taa(wanted.plan.taa_resolve),
-            RebuildFeature::Ssao => self.rebuild_ssao(&wanted.settings),
-            RebuildFeature::Ssr => self.rebuild_ssr_resolve(&wanted.settings),
-            RebuildFeature::Ssgi => self.rebuild_ssgi(&wanted.settings),
-            RebuildFeature::RtReflections => self.rebuild_rt(&wanted.settings),
-            RebuildFeature::ReflectionComposite => {
-                self.rebuild_reflection_composite(&wanted.settings)
-            }
-            RebuildFeature::AutoExposure => self.rebuild_auto_exposure(&wanted.settings),
         }
     }
 
@@ -191,27 +170,6 @@ impl MtlContext {
             FeatureChange::Update | FeatureChange::Absent => {}
         }
         self.taa.enabled = wanted;
-        Ok(())
-    }
-
-    // The disocclusion mark follows the G-buffer the features above left
-    // built.
-    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
-        let wanted = disocclusion_wanted(&self.upscale, self.gbuffer.targets.is_some());
-        match FeatureChange::of(wanted, self.disocclusion.is_some()) {
-            FeatureChange::Build => {
-                self.disocclusion = Some(DisocclusionPass::new(
-                    &self.build_device(),
-                    self.render_extent(),
-                )?);
-            }
-            FeatureChange::Drop => {
-                if let Some(old) = self.disocclusion.take() {
-                    self.retire_effect(RetiredEffect::Disocclusion(old));
-                }
-            }
-            FeatureChange::Update | FeatureChange::Absent => {}
-        }
         Ok(())
     }
 
@@ -294,32 +252,6 @@ impl MtlContext {
         {
             self.retire_effect(RetiredEffect::Composite(old));
         }
-        Ok(())
-    }
-
-    // The reflection target SSR, SSGI and RT write, present while any of them
-    // runs and reduced to the RT trace resolution when RT fills it.
-    fn reconcile_reflection_target(&mut self, settings: &EffectSettings) -> RenderResult<()> {
-        let wanted = settings.reflections();
-        let trace_scale = settings.rt_reflection.map_or(1, |rt| rt.divisor.max(1));
-        let rescaled = trace_scale != self.ssr.trace_scale;
-        let change = FeatureChange::of(wanted, self.ssr.reflection.is_some());
-        if change == FeatureChange::Build || (change == FeatureChange::Update && rescaled) {
-            let fresh = create_reflection_target(
-                &self.hw.device,
-                self.targets.hdr.width,
-                self.targets.hdr.height,
-                trace_scale,
-            )?;
-            if let Some(old) = self.ssr.reflection.replace(fresh) {
-                self.retire_effect(RetiredEffect::Reflection(old));
-            }
-        } else if change == FeatureChange::Drop
-            && let Some(old) = self.ssr.reflection.take()
-        {
-            self.retire_effect(RetiredEffect::Reflection(old));
-        }
-        self.ssr.trace_scale = trace_scale;
         Ok(())
     }
 
@@ -434,6 +366,96 @@ impl MtlContext {
     }
 }
 
+impl FeatureRebuild for MtlContext {
+    // The resolved settings never ask for ray tracing the device cannot run; a
+    // request that does is a probe / backend disagreement, reported and refused
+    // rather than built.
+    fn backend_facts(&self) -> BackendFacts {
+        BackendFacts {
+            rt_capable: raytracing_supported(&self.hw.device),
+            upscaling: self.upscale.scaler.is_some(),
+        }
+    }
+
+    fn rebuild_feature(
+        &mut self,
+        feature: RebuildFeature,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        let settings = effect_settings(graphics, plan);
+        match feature {
+            RebuildFeature::GBuffer => self.rebuild_gbuffer(plan.gbuffer),
+            RebuildFeature::Taa => self.rebuild_taa(plan.taa_resolve),
+            RebuildFeature::Ssao => self.rebuild_ssao(&settings),
+            RebuildFeature::Ssr => self.rebuild_ssr_resolve(&settings),
+            RebuildFeature::Ssgi => self.rebuild_ssgi(&settings),
+            RebuildFeature::RtReflections => self.rebuild_rt(&settings),
+            RebuildFeature::ReflectionComposite => self.rebuild_reflection_composite(&settings),
+            RebuildFeature::AutoExposure => self.rebuild_auto_exposure(&settings),
+        }
+    }
+
+    // The reflection target SSR, SSGI and RT write, present while any of them
+    // runs and reduced to the RT trace resolution when RT fills it.
+    fn reconcile_reflections(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        let settings = effect_settings(graphics, plan);
+        let wanted = settings.reflections();
+        let trace_scale = settings.rt_reflection.map_or(1, |rt| rt.divisor.max(1));
+        let rescaled = trace_scale != self.ssr.trace_scale;
+        let change = FeatureChange::of(wanted, self.ssr.reflection.is_some());
+        if change == FeatureChange::Build || (change == FeatureChange::Update && rescaled) {
+            let fresh = create_reflection_target(
+                &self.hw.device,
+                self.targets.hdr.width,
+                self.targets.hdr.height,
+                trace_scale,
+            )?;
+            if let Some(old) = self.ssr.reflection.replace(fresh) {
+                self.retire_effect(RetiredEffect::Reflection(old));
+            }
+        } else if change == FeatureChange::Drop
+            && let Some(old) = self.ssr.reflection.take()
+        {
+            self.retire_effect(RetiredEffect::Reflection(old));
+        }
+        self.ssr.trace_scale = trace_scale;
+        Ok(())
+    }
+
+    // The disocclusion mark follows the G-buffer the features above left
+    // built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        let wanted = disocclusion_wanted(&self.upscale, self.gbuffer.targets.is_some());
+        match FeatureChange::of(wanted, self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                self.disocclusion = Some(DisocclusionPass::new(
+                    &self.build_device(),
+                    self.render_extent(),
+                )?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.disocclusion.take() {
+                    self.retire_effect(RetiredEffect::Disocclusion(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
+        }
+        Ok(())
+    }
+
+    // Gate the runtime-switched passes on `graphics` and what is built now.
+    fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), METAL_TRAITS);
+    }
+}
+
 impl SettingsTarget for MtlContext {
     fn built_shadow_maps(&self) -> init::ShadowMapSizes {
         self.shadow.map_sizes()
@@ -448,28 +470,7 @@ impl SettingsTarget for MtlContext {
         graphics: &ResolvedGraphics,
         features: RebuildSet,
     ) -> RenderResult<()> {
-        // The resolved settings never ask for ray tracing the device cannot
-        // run; a request that does is a probe / backend disagreement, reported
-        // and refused rather than built.
-        let plan = FeaturePlan::resolve(
-            graphics,
-            BackendFacts {
-                rt_capable: raytracing_supported(&self.hw.device),
-                upscaling: self.upscale.scaler.is_some(),
-            },
-        );
-        let mut settings = EffectSettings::new(graphics);
-        settings.rt_reflection = plan.rt;
-        let wanted = Wanted { settings, plan };
-        let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, &wanted));
-        let target = if features.touches_reflections() {
-            self.reconcile_reflection_target(&wanted.settings)
-        } else {
-            Ok(())
-        };
-        let disocclusion = self.reconcile_disocclusion();
-        self.refresh_gates(graphics);
-        rebuilt.and(target).and(disocclusion)
+        rebuild_planned(self, graphics, features)
     }
 
     // Update the live scalar tunables of the SSAO, SSR, SSGI and auto-exposure
@@ -514,5 +515,24 @@ impl SettingsTarget for MtlContext {
 
     fn push_vsync(&mut self, on: bool) {
         WindowControl::set_vsync(self, on);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effect_settings_take_the_graphics_with_ray_tracing_from_the_plan() {
+        let graphics = ResolvedGraphics::default();
+        assert!(graphics.rt_reflections().is_some());
+        let facts = BackendFacts {
+            rt_capable: false,
+            upscaling: false,
+        };
+        let plan = FeaturePlan::resolve(&graphics, facts);
+        let settings = effect_settings(&graphics, &plan);
+        assert_eq!(settings.rt_reflection, None);
+        assert_eq!(settings.ssao, graphics.ssao());
     }
 }
