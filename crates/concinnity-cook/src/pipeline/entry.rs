@@ -10,8 +10,8 @@ use concinnity_host::thread::asset_id;
 use std::path::Path;
 
 use super::desugar::{
-    desugar_animation_imports, desugar_fbx_meshes, desugar_fbx_skinned_meshes, desugar_gltf_meshes,
-    desugar_gltf_skinned_meshes, desugar_root_motion, pending_imports,
+    desugar_animation_imports, desugar_meshes, desugar_root_motion, desugar_skinned_meshes,
+    pending_imports,
 };
 use super::hot_reload_sources::hot_reload_sources;
 use super::lock_provenance::lock_provenance;
@@ -263,15 +263,12 @@ fn compile_world(
         pending => progress.stage(BuildStage::Import, pending),
     };
 
-    // Expand any glTF-sourced SkinnedMesh and Mesh assets into inline geometry
+    // Expand source-backed SkinnedMesh and Mesh assets into inline geometry
     // before anything else looks at their args. Animations expand after the
     // skinned-mesh pass so an importer that wanted to share state could read
-    // already-imported skeletons; today both passes parse the .glb fresh,
-    // but the ordering keeps that option open without an API churn.
-    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache, root, &imports)?;
-    desugar_fbx_skinned_meshes(&mut assets, &mesh_cache, root, &imports)?;
-    desugar_gltf_meshes(&mut assets, &mesh_cache, root, &imports)?;
-    desugar_fbx_meshes(&mut assets, &mesh_cache, root, &imports)?;
+    // already-imported skeletons.
+    desugar_skinned_meshes(&mut assets, &mesh_cache, root, &imports)?;
+    desugar_meshes(&mut assets, &mesh_cache, root, &imports)?;
     desugar_animation_imports(&mut assets, root, &imports)?;
     desugar_root_motion(&mut assets)?;
     crate::compile::character_shape::warn_unresolved(&assets);

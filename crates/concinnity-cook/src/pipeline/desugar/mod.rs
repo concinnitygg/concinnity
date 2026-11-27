@@ -3,15 +3,13 @@
 //! tracks in the asset's own args. Runs before anything else reads them.
 
 mod animation;
-mod fbx;
-mod gltf;
+mod mesh;
 
 #[cfg(test)]
 mod fixtures;
 
 pub(in crate::pipeline) use animation::{desugar_animation_imports, desugar_root_motion};
-pub(in crate::pipeline) use fbx::{desugar_fbx_meshes, desugar_fbx_skinned_meshes};
-pub(in crate::pipeline) use gltf::{desugar_gltf_meshes, desugar_gltf_skinned_meshes};
+pub(in crate::pipeline) use mesh::{desugar_meshes, desugar_skinned_meshes};
 
 use super::pack::MeshCacheEntry;
 use crate::authoring::registry::RegisteredType;
@@ -25,33 +23,16 @@ pub(in crate::pipeline) fn pending_imports(
     assets: &[WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> u32 {
-    let cached = |asset: &WorldJsonlAsset| {
-        matches!(
-            mesh_cache.get(&asset.id),
-            Some(MeshCacheEntry { bytes: Some(_), .. })
-        )
-    };
-    let source = |asset: &WorldJsonlAsset| {
-        asset
-            .args
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_lowercase()
-    };
     let pending = assets.iter().filter(|asset| match asset.asset_type {
         RegisteredType::Mesh => {
-            let source = source(asset);
-            [".glb", ".gltf", ".fbx"]
-                .iter()
-                .any(|ext| source.ends_with(ext))
-                && !cached(asset)
+            mesh::MeshFormat::of(mesh::source_arg(asset)).is_some()
+                && !mesh::cached(mesh_cache, asset)
         }
         RegisteredType::SkinnedMesh => {
-            (asset.args.get("character_model").is_some() || !source(asset).is_empty())
-                && !cached(asset)
+            (asset.args.get("character_model").is_some() || !mesh::source_arg(asset).is_empty())
+                && !mesh::cached(mesh_cache, asset)
         }
-        RegisteredType::Animation => !source(asset).is_empty(),
+        RegisteredType::Animation => !mesh::source_arg(asset).is_empty(),
         _ => false,
     });
     u32::saturating_from(pending.count())
