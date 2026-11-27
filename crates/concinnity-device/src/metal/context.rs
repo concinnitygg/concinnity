@@ -744,7 +744,7 @@ impl MtlContext {
     // (its window was moved into the successor), which is dropped without any
     // further window access.
     #[inline]
-    pub(super) fn window(&self) -> &WindowState {
+    pub(super) fn window_state(&self) -> &WindowState {
         self.hw
             .window
             .as_ref()
@@ -752,7 +752,7 @@ impl MtlContext {
     }
 
     #[inline]
-    pub(super) fn window_mut(&mut self) -> &mut WindowState {
+    pub(super) fn window_state_mut(&mut self) -> &mut WindowState {
         self.hw
             .window
             .as_mut()

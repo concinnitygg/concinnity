@@ -242,7 +242,7 @@ fn vsync_cycles_live_and_persists() {
         f.state.resolved.graphics.frame_pacing.vsync,
         "the row cycled Off -> On"
     );
-    assert!(f.saw(&Call::SetVsync(true)), "applied live");
+    assert!(f.saw(&Call::PushVsync(true)), "applied live");
     assert_eq!(f.shown(SettingKey::Vsync), "On");
     assert_eq!(f.persisted().graphics.vsync, Some(true));
 }
@@ -1650,7 +1650,7 @@ fn step_drains_into_the_op_queue_and_reparks() {
             .expect("the op queue is parked again");
     queues.ops.replay(&mut f.backend);
     assert!(
-        f.calls.lock().saw(&Call::SetVsync(true)),
+        f.calls.lock().saw(&Call::PushVsync(true)),
         "the drained command reaches the backend at replay"
     );
 }

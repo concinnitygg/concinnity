@@ -5,7 +5,6 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::memory::InlineVec;
 use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
-use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::{FrameParams, error};
 use concinnity_engine::render::config::apply::SettingsTarget as _;
 use concinnity_engine::render::frame::plan::{
@@ -101,23 +100,6 @@ impl MtlContext {
         )
     }
 
-    // Returns false once the window has closed.
-    pub(super) fn pump_window_events(&mut self, mtm: objc2::MainThreadMarker) -> bool {
-        // Drain pending NSEvents unless the host owns event delivery (the
-        // preview tab), where pumping would steal its clicks.
-        if self.window().appkit.pump_events() {
-            self.window_mut().appkit.pump_ns_events(mtm);
-            if self.window_closed() {
-                return false;
-            }
-        }
-
-        // Hold the chosen display mode while fullscreen and restore the desktop
-        // mode otherwise, including OS-driven exits.
-        self.window_mut().appkit.reconcile_display_mode();
-        true
-    }
-
     // None when no drawable is ready, which skips the frame.
     pub(super) fn acquire_frame(&mut self, world_hidden: bool) -> Option<AcquiredFrame> {
         // Frames-in-flight gate, unless `prepare_frame` already reserved the
@@ -143,8 +125,8 @@ impl MtlContext {
         // still with the compositor, which is the display-paced half of the
         // frame's GPU wait.
         let drawable = gpu_wait.measure(|| {
-            self.window().view.draw();
-            self.window().view.currentDrawable()
+            self.window_state().view.draw();
+            self.window_state().view.currentDrawable()
         });
         self.diagnostics.frame_stats.gpu_wait_us = gpu_wait.micros();
         // drawable not yet available -- skip this frame silently
@@ -419,7 +401,7 @@ impl MtlContext {
         // Main pass prep: resize off-screen targets.
         // Resize the HDR targets if the drawable size changed (window resize
         // or initial layout). The drawable was just refreshed by window.view.draw().
-        let draw_size = self.window().view.drawableSize();
+        let draw_size = self.window_state().view.drawableSize();
         // Geometry-less worlds keep their off-screen targets pinned at 1x1
         // (see MtlContext::new); the composite pass still uses the full drawable.
         let (want_w, want_h) = if self.targets.geometry_less {

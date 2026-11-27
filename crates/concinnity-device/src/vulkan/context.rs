@@ -1142,7 +1142,7 @@ impl VkContext {
     // only on the outgoing context of a `reload_world` (its window was moved
     // into the successor), which is dropped without any further window access.
     #[inline]
-    pub(super) fn window(&self) -> &super::window::PlatformWindow {
+    pub(super) fn platform_window(&self) -> &super::window::PlatformWindow {
         self.hw
             .window
             .as_ref()
@@ -1150,7 +1150,7 @@ impl VkContext {
     }
 
     #[inline]
-    pub(super) fn window_mut(&mut self) -> &mut super::window::PlatformWindow {
+    pub(super) fn platform_window_mut(&mut self) -> &mut super::window::PlatformWindow {
         self.hw
             .window
             .as_mut()
@@ -1161,7 +1161,7 @@ impl VkContext {
     // and swapchain rebuilds wait.
     #[inline]
     pub(super) fn is_minimized(&self) -> bool {
-        let (w, h) = self.window().framebuffer_size();
+        let (w, h) = self.platform_window().framebuffer_size();
         extent_minimized(w, h)
     }
 

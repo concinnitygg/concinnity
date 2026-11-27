@@ -8,4 +8,5 @@ pub(crate) mod chrome;
 pub(crate) mod clipboard;
 pub(crate) mod display_mode;
 pub(crate) mod input;
+pub(crate) mod platform_window;
 pub(crate) mod window;

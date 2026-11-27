@@ -18,8 +18,7 @@ use crate::directx::context::{BACK_BUFFERS, DxHardware};
 use crate::directx::error::map_hresult;
 use crate::directx::streamline::DxStreamline;
 use crate::directx::texture::HDR_FORMAT;
-use crate::win32::display_mode::FullscreenDisplayMode;
-use crate::win32::window::create_window;
+use crate::win32::platform_window::Win32Window;
 
 // The DXGI swapchain as created on the window, before its back buffers are
 // wrapped in the frame's RTV heap. A live reload hands the retained one to the
@@ -86,8 +85,9 @@ pub(super) fn setup(
 
     // Win32 window (create_window also registers raw mouse input and installs
     // the GWLP_USERDATA state pointer for the wnd_proc).
-    let (hwnd, win_state) =
-        create_window(title, width, height, title_bar).map_err(RenderError::Other)?;
+    let window =
+        Win32Window::create(title, width, height, title_bar).map_err(RenderError::Other)?;
+    let hwnd = window.state().hwnd;
 
     // DXGI factory
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional
@@ -323,8 +323,7 @@ pub(super) fn setup(
         info_queue,
         hdr_mode,
         swapchain_config,
-        fullscreen_display: FullscreenDisplayMode::new(),
-        win_state: Some(win_state),
+        window: Some(window),
     };
     let swapchain = DxgiSwapchain {
         handle: swapchain,

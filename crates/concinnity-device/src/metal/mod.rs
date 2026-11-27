@@ -74,7 +74,6 @@ mod view_samples;
 mod water;
 mod water_sim;
 mod water_wake;
-mod window;
 mod world_shaders;
 
 pub(crate) use context::MtlContext;

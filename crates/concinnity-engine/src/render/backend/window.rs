@@ -1,7 +1,7 @@
 //! The window a backend renders into, as the settings menu sees it.
 //!
-//! The close request and the input sampled from the window, vsync, window
-//! mode and size, the display-mode list, the overlay's logical size, the
+//! The close request and the input sampled from the window, the window mode
+//! and size, the display-mode list, the overlay's logical size, the
 //! cursor state the UI drives, and the system clipboard. Every method here is
 //! about the surface and its input, never about the scene drawn on it.
 
@@ -10,7 +10,7 @@ use crate::window::clipboard::Clipboard;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-/// The presentation surface and its input: the close request, input, vsync,
+/// The presentation surface and its input: the close request, input, the
 /// window mode and size, the display modes the target supports, and the
 /// cursor.
 ///
@@ -104,14 +104,6 @@ pub trait WindowControl {
     /// Default no-op: the startup capture decision stands.
     fn set_camera_capture(&mut self, capture: bool) {
         let _ = capture;
-    }
-
-    /// Turn display sync (vsync) on or off at runtime, applied to presentation.
-    /// Edge-triggered by the backend, so calling it with the unchanged value is
-    /// cheap. Default no-op: a backend that only honors vsync at init ignores
-    /// runtime changes.
-    fn set_vsync(&mut self, on: bool) {
-        let _ = on;
     }
 
     /// Switch the window between windowed / borderless / fullscreen at runtime.

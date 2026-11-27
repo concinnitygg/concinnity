@@ -14,7 +14,6 @@
 //! RT enable seeds.
 
 use concinnity_engine::gfx::render_types;
-use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
@@ -513,8 +512,9 @@ impl SettingsTarget for MtlContext {
         self.state.planner.shadow.cadence = cadence;
     }
 
+    // A cheap CAMetalLayer property write, with no swapchain rebuild.
     fn push_vsync(&mut self, on: bool) {
-        WindowControl::set_vsync(self, on);
+        super::init::set_display_sync(&self.window_state().view, on);
     }
 }
 

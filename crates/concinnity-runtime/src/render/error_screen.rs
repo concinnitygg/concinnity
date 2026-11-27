@@ -71,11 +71,11 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
     let mut hovered = false;
 
     loop {
-        if backend.window_closed() {
+        if backend.window_mut().window_closed() {
             return;
         }
 
-        let (win_w, win_h) = backend.logical_size();
+        let (win_w, win_h) = backend.window().logical_size();
         let screen = error_screen::build(message, win_w, win_h, fonts, FONT_HANDLE, hovered);
         let text_calls = build_text_calls(&screen.labels, fonts, [win_w, win_h]);
 
@@ -93,7 +93,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             return;
         }
 
-        let input = backend.take_input();
+        let input = backend.window_mut().take_input();
         hovered = screen.quit_hit(input.mouse_x, input.mouse_y);
         if dismissed(&input, hovered) {
             return;

@@ -71,7 +71,7 @@ impl VkContext {
                 .get_physical_device_surface_capabilities(self.hw.physical_device, self.hw.surface)
         }
         .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;
-        let (width, height) = self.window().framebuffer_size();
+        let (width, height) = self.platform_window().framebuffer_size();
         Ok(resolve_swapchain_extent(
             &caps,
             u32::saturating_from(width),
@@ -97,7 +97,7 @@ impl VkContext {
         self.swapchain.last_present_index = None;
         self.destroy_swapchain_resources();
 
-        let (width, height) = self.window().framebuffer_size();
+        let (width, height) = self.platform_window().framebuffer_size();
         // re-query present family
         let present_family = {
             let (_, pf) = query_queue_families(

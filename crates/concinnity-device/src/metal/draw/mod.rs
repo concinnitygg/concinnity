@@ -25,7 +25,7 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::projection::focal_px;
 use concinnity_engine::gfx::render_types::ReceiverBounds;
 use concinnity_engine::profile::FrameSpans;
-use concinnity_engine::render::backend::{FrameParams, RenderBackend};
+use concinnity_engine::render::backend::{FrameParams, RenderBackend, WindowControl};
 use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::rt_accel::RtUpdate;
@@ -41,6 +41,14 @@ use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 
 impl RenderBackend for MtlContext {
+    fn window(&self) -> &dyn WindowControl {
+        &self.window_state().appkit
+    }
+
+    fn window_mut(&mut self) -> &mut dyn WindowControl {
+        &mut self.window_state_mut().appkit
+    }
+
     // Block until the GPU has finished all in-flight work.
     fn wait_idle(&self) {
         if let Some(cmd_buf) = self.hw.command_queue.commandBuffer() {
@@ -53,15 +61,8 @@ impl RenderBackend for MtlContext {
     // retires an older frame. A minimized window draws nothing, so it reserves
     // nothing; a slot already reserved is kept.
     fn prepare_frame(&mut self) {
-        if self.prepared_slot.is_none() && !self.window().appkit.window_minimized() {
+        if self.prepared_slot.is_none() && !self.window_state().appkit.window_minimized() {
             self.prepared_slot = Some(self.frame_pacing.acquire());
-        }
-    }
-
-    // Pump the window's pending events outside the draw.
-    fn pump_events(&mut self) {
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
-            self.pump_window_events(mtm);
         }
     }
 
@@ -134,16 +135,18 @@ impl FrameDevice for MtlContext {
     }
 
     fn begin(&mut self, params: &FrameParams<'_>) -> error::RenderResult<Option<MtlFrame>> {
-        let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
-            error::RenderError::Other("draw_frame must be called from the main thread".into())
-        })?;
+        if objc2::MainThreadMarker::new().is_none() {
+            return Err(error::RenderError::Other(
+                "draw_frame must be called from the main thread".into(),
+            ));
+        }
         let pass_timing_slot = self.begin_frame_stats();
-        if !self.pump_window_events(mtm) {
+        if self.window_state().appkit.closed() {
             return Ok(None);
         }
         // Nothing a minimized window draws can be seen; park the frame until
         // it is restored.
-        if self.window().appkit.window_minimized() {
+        if self.window_state().appkit.window_minimized() {
             return Ok(None);
         }
         let Some(acquired) = self.acquire_frame(params.world_hidden) else {

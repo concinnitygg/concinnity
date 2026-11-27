@@ -1,4 +1,4 @@
-//! D3D12 swapchain + render-target resize handler. Polls `win_state.width/height`
+//! D3D12 swapchain + render-target resize handler. Polls the window's client size
 //! at the top of each frame and, when the dimensions diverged from the live
 //! render-target sizing, rebuilds every render-resolution-sized GPU resource and
 //! rewrites the descriptors that point at them. The descriptor *slots* never move
@@ -29,8 +29,9 @@ impl DxContext {
     // Rebuild every render-target-sized resource if the client area changed. A
     // minimized window skips the resize until a non-zero size returns.
     pub(super) fn maybe_handle_resize(&mut self) -> RenderResult<()> {
-        let new_w = u32::saturating_from(self.win().width.max(0));
-        let new_h = u32::saturating_from(self.win().height.max(0));
+        let (width, height) = self.platform_window().framebuffer_size();
+        let new_w = u32::saturating_from(width.max(0));
+        let new_h = u32::saturating_from(height.max(0));
         if new_w == 0 || new_h == 0 {
             return Ok(());
         }

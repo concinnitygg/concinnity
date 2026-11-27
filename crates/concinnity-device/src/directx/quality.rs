@@ -20,7 +20,6 @@
 //! geometry), so a live enable hitches once proportional to triangle count.
 
 use concinnity_engine::gfx::{auto_exposure, render_types};
-use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
@@ -519,7 +518,9 @@ impl SettingsTarget for DxContext {
         self.state.planner.shadow.cadence = cadence;
     }
 
+    // Only the sync interval changes. Tearing needs the swapchain created with
+    // vsync off; otherwise interval 0 presents uncapped without it.
     fn push_vsync(&mut self, on: bool) {
-        WindowControl::set_vsync(self, on);
+        self.swapchain.present_sync_interval = u32::from(on);
     }
 }

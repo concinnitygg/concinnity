@@ -159,7 +159,7 @@ pub enum Call {
     SetMenuMode(bool),
     SetCameraCapture(bool),
     SetReflectionProbes(Vec<capture::ProbePlacement>, bool),
-    SetVsync(bool),
+    PushVsync(bool),
     SetWindowMode(WindowMode),
     SetWindowSize(u32, u32),
     SetDisplayMode(display_mode::DisplayMode),
@@ -404,6 +404,14 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl RenderBackend for RecordingBackend {
+    fn window(&self) -> &dyn WindowControl {
+        self
+    }
+
+    fn window_mut(&mut self) -> &mut dyn WindowControl {
+        self
+    }
+
     fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
         self.record(Call::UpdateDirectionalLights(
             lights
@@ -698,10 +706,6 @@ impl WindowControl for RecordingBackend {
         self.record(Call::SetCameraCapture(capture));
     }
 
-    fn set_vsync(&mut self, on: bool) {
-        self.record(Call::SetVsync(on));
-    }
-
     fn set_window_mode(&mut self, mode: WindowMode) {
         self.record(Call::SetWindowMode(mode));
     }
@@ -744,7 +748,7 @@ impl SettingsTarget for RecordingBackend {
     }
 
     fn push_vsync(&mut self, on: bool) {
-        self.record(Call::SetVsync(on));
+        self.record(Call::PushVsync(on));
     }
 }
 
@@ -812,20 +816,20 @@ mod tests {
     #[test]
     fn calls_are_recorded_in_order() {
         let (state, mut backend) = recording_backend();
-        backend.set_vsync(true);
+        backend.push_vsync(true);
         backend.update_visibility(DrawIndex(3), false);
         let s = state.lock();
         assert_eq!(
             s.calls,
             [
-                Call::SetVsync(true),
+                Call::PushVsync(true),
                 Call::UpdateVisibility {
                     draw_idx: DrawIndex(3),
                     visible: false
                 }
             ]
         );
-        assert!(s.saw(&Call::SetVsync(true)));
+        assert!(s.saw(&Call::PushVsync(true)));
         assert_eq!(s.visibility.get(&DrawIndex(3)), Some(&false));
         assert_eq!(s.draw_frames(), 0);
         assert!(s.last_draw_frame().is_none());

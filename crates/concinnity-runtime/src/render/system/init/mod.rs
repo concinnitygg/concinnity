@@ -207,16 +207,16 @@ impl GraphicsSystem {
         let reported = crate::render::system::reach(&mut self.backend).map(|backend| {
             // No-op in embedded mode (the backend owns no window there).
             if let Some(mode) = settings.startup_window_mode() {
-                backend.set_window_mode(mode);
+                backend.window_mut().set_window_mode(mode);
             }
             let report = DisplayReport {
-                modes: backend.display_modes(),
-                current: backend.current_display_mode(),
+                modes: backend.window().display_modes(),
+                current: backend.window().current_display_mode(),
             };
             if let Some(resolution) = settings.resolution() {
-                backend.set_display_mode(resolution);
+                backend.window_mut().set_display_mode(resolution);
             }
-            (report, backend.display_refresh())
+            (report, backend.window().display_refresh())
         });
         let (reported, refresh) = reported.unzip();
         if let Some(refresh) = refresh.flatten() {
@@ -252,7 +252,7 @@ impl GraphicsSystem {
                 gpu.unified_memory,
                 gpu.discrete,
             );
-            backend.set_menu_mode(cursor.menu_mode);
+            backend.window_mut().set_menu_mode(cursor.menu_mode);
             // Push the effective ambient scale (world value or persisted
             // override). The backend already seeds the world value at its own
             // init, so this is the path that applies a persisted Ambient-slider
@@ -265,7 +265,7 @@ impl GraphicsSystem {
                 tracing::error!("GraphicsSystem: ambient push failed: {e}");
             }
             if cursor.capture_at_start {
-                backend.request_cursor_capture();
+                backend.window_mut().request_cursor_capture();
             }
         }
         self.caps = device_caps;
@@ -567,7 +567,7 @@ impl GraphicsSystem {
             // Text editors reach the window's clipboard, whichever thread
             // steps them.
             if ctx.resource::<HostClipboard>().is_none()
-                && let Some(clipboard) = backend.shared_clipboard()
+                && let Some(clipboard) = backend.window().shared_clipboard()
             {
                 ctx.insert_resource(HostClipboard(clipboard));
             }

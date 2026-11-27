@@ -29,6 +29,12 @@ impl SceneHost for NullBackend {
 }
 
 impl RenderBackend for NullBackend {
+    fn window(&self) -> &dyn WindowControl {
+        self
+    }
+    fn window_mut(&mut self) -> &mut dyn WindowControl {
+        self
+    }
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
         Ok(())

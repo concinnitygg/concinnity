@@ -14,10 +14,8 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::WindowMode;
-use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::window::clipboard::Clipboard;
-use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSView};
@@ -78,8 +76,17 @@ impl AppKitVkWindow {
             layer,
         };
         this.sync_drawable_size();
-        this.set_window_mode(mode);
+        this.win.set_window_mode(mode);
         Ok(this)
+    }
+
+    // The window as the engine drives it.
+    pub(crate) fn control(&self) -> &dyn WindowControl {
+        &self.win
+    }
+
+    pub(crate) fn control_mut(&mut self) -> &mut dyn WindowControl {
+        &mut self.win
     }
 
     // Push the view's pixel size onto the layer's `drawableSize`, which AppKit
@@ -104,102 +111,12 @@ impl AppKitVkWindow {
         (i32::saturating_from(w), i32::saturating_from(h))
     }
 
-    // Drain pending AppKit events; true when the window should close.
-    pub(crate) fn poll(&mut self) -> bool {
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
-            self.win.pump_ns_events(mtm);
-        }
-        // Hold the chosen display mode while fullscreen and restore the desktop
-        // mode on leaving it, mirroring the Metal backend's per-frame reconcile.
-        self.win.reconcile_display_mode();
-        self.win.closed()
-    }
-
-    pub(crate) fn take_input(&mut self) -> InputSnapshot {
-        self.win.take_input()
-    }
-
-    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
-        self.win.clipboard()
-    }
-
-    #[expect(
-        clippy::unnecessary_wraps,
-        clippy::unused_self,
-        reason = "every platform window answers alike, and GLFW's has none"
-    )]
-    pub(crate) fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
-        Some(Box::new(crate::appkit::clipboard::SystemClipboard))
-    }
-
-    pub(crate) fn request_cursor_capture(&mut self) {
-        self.win.capture_cursor();
-    }
-
-    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        self.win.set_ui_cursor_hidden(hidden);
-    }
-
-    pub(crate) fn set_menu_mode(&mut self, on: bool) {
-        self.win.set_menu_mode(on);
-    }
-
-    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
-        self.win.set_camera_capture(capture);
-    }
-
-    pub(crate) fn cursor_outside_window(&self) -> bool {
-        self.win.cursor_outside_window()
-    }
-
-    pub(crate) fn window_minimized(&self) -> bool {
-        self.win.window_minimized()
-    }
-
-    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
-        self.win.set_window_mode(mode);
-    }
-
-    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        self.win.set_window_size(width, height);
-    }
-
-    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
-        self.win.display_modes()
-    }
-
-    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
-        self.win.current_display_mode()
-    }
-
-    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
-        self.win.display_refresh()
-    }
-
-    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
-        self.win.set_display_mode(mode);
-    }
-
     // The framebuffer size in pixels, the extent the swapchain is sized to.
     // Also the point at which the layer's drawable size is refreshed, so a
     // resize reaches MoltenVK's reported surface capabilities before the
     // swapchain is rebuilt from them.
     pub(crate) fn framebuffer_size(&self) -> (i32, i32) {
         self.sync_drawable_size()
-    }
-
-    // The overlay coordinate space: the view's size in points, larger than
-    // `framebuffer_size` by the backing scale on a retina display. Comes from
-    // the shared AppKit layer, which reports the cursor in the same units.
-    pub(crate) fn logical_size(&self) -> (f32, f32) {
-        self.win.logical_size()
-    }
-
-    // The window chrome overlapping the top of the frame, from the same shared
-    // AppKit layer: a title-bar-less macOS window floats its buttons over the
-    // render whichever backend fills it.
-    pub(crate) fn top_content_inset(&self) -> f32 {
-        self.win.top_content_inset()
     }
 
     // Create the presentation surface from the hosted CAMetalLayer.

@@ -41,8 +41,7 @@ use super::post::upscale::UpscaleState;
 use super::resources::skinning::SkinnedState;
 use super::texture::{EnvironmentMapTextures, GpuResource, StreamedUploadRetire};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
-use crate::win32::window;
-use crate::win32::window::WindowState;
+use crate::win32::platform_window::Win32Window;
 
 // Constants
 // Swapchain back buffers. Indexed by `GetCurrentBackBufferIndex`, independent of
@@ -529,14 +528,9 @@ pub(super) struct DxHardware {
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches.
     pub swapchain_config: init::SwapchainConfig,
-    // The user's chosen fullscreen display mode, held on the monitor while the
-    // window is in (borderless) fullscreen and restored on exit / drop.
-    // Reconciled once per frame in `window_closed`.
-    pub fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
-    // Win32 window. `Option` so a live `cn edit` world reload can MOVE the
-    // window (and its live cursor / menu / keymap state) into the rebuilt
-    // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
-    pub win_state: Option<Box<WindowState>>,
+    // The window, moved into the successor context on `reload_world`; `None`
+    // only on the outgoing context.
+    pub window: Option<Win32Window>,
 }
 
 impl DxHardware {
@@ -546,14 +540,10 @@ impl DxHardware {
     // places into a fresh allocator; the outgoing world releases into its own.
     pub(super) fn hand_over(&mut self) -> RenderResult<Self> {
         Ok(Self {
-            win_state: Some(
-                self.win_state.take().ok_or_else(|| {
+            window: Some(
+                self.window.take().ok_or_else(|| {
                     RenderError::Other("reload_world: window already taken".into())
                 })?,
-            ),
-            fullscreen_display: std::mem::replace(
-                &mut self.fullscreen_display,
-                crate::win32::display_mode::FullscreenDisplayMode::new(),
             ),
             alloc: DeviceAllocator::new(
                 &self.device,
@@ -936,19 +926,19 @@ impl DxContext {
     // outgoing context of a `reload_world` (which has moved the window into its
     // successor and calls no window method afterward), so the unwrap never fires.
     #[inline]
-    pub(super) fn win(&self) -> &WindowState {
+    pub(super) fn platform_window(&self) -> &Win32Window {
         self.hw
-            .win_state
+            .window
             .as_ref()
-            .expect("DxContext window state present")
+            .expect("DxContext window taken by reload_world")
     }
 
     #[inline]
-    pub(super) fn win_mut(&mut self) -> &mut WindowState {
+    pub(super) fn platform_window_mut(&mut self) -> &mut Win32Window {
         self.hw
-            .win_state
+            .window
             .as_mut()
-            .expect("DxContext window state present")
+            .expect("DxContext window taken by reload_world")
     }
 
     // Submit every staged geometry write. Queue order puts the copies ahead of
@@ -1035,7 +1025,7 @@ impl FrameDevice for DxContext {
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<DxFrame>> {
         // Nothing a minimized window draws can be seen; park the frame until
         // it is restored. `window_closed` keeps pumping messages meanwhile.
-        if self.window_minimized() {
+        if self.platform_window().window_minimized() {
             return Ok(None);
         }
         self.size_grass()?;
@@ -1226,20 +1216,14 @@ impl Drop for DxContext {
         // The upscaler first: a DLSS viewport is freed through the Streamline
         // session the hardware holds.
         self.upscale.backend = None;
-        // Persist and release the pipeline library. `win_state` is `None` only
+        // Persist and release the pipeline library. `window` is `None` only
         // on the outgoing context of a `reload_world`, whose successor keeps
         // the device and the installed library.
-        if self.hw.win_state.is_some() {
+        if self.hw.window.is_some() {
             super::pso_library::shutdown();
             // Also writes whatever shader artifacts were compiled lazily since
             // init's own checkpoint.
             crate::shader::runtime_cache::checkpoint();
-        }
-        // Restore cursor clip + visibility so the OS isn't left in a bad state
-        // if the caller didn't release explicitly. `None` on the outgoing context
-        // of a `reload_world` (the window moved to its successor), so guard it.
-        if let Some(ws) = self.hw.win_state.as_mut() {
-            window::release_cursor(ws);
         }
         // Unmap persistent CBV mappings (view + shadow).
         self.uniforms.unmap();

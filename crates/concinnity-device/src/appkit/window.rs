@@ -10,6 +10,7 @@
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::components::{KeyEvent, KeyPress, WindowMode};
 use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::window::clipboard::Clipboard;
 use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::rc::Retained;
@@ -124,12 +125,6 @@ impl AppKitWindow {
         }
     }
 
-    // The general pasteboard, reachable in every window mode: it is the
-    // system's, not the window's.
-    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
-        &mut self.clipboard
-    }
-
     // The view the backend renders into, for the presentation resources it owns
     // (Metal's drawable, Vulkan's surface) and for size queries.
     #[cfg(backend_vk)] // Metal reaches its MTKView directly
@@ -142,53 +137,9 @@ impl AppKitWindow {
         self.window.as_deref()
     }
 
-    // Whether the frame loop should pump NSEvents and honor cursor capture.
-    #[cfg(backend_metal)] // the Vulkan adapter always pumps
-    pub(crate) fn pump_events(&self) -> bool {
-        self.pump_events
-    }
-
     // Whether native fullscreen is active, as tracked by the window delegate.
     pub(crate) fn is_fullscreen(&self) -> bool {
         self.signals.is_fullscreen()
-    }
-
-    // The overlay coordinate space on macOS: the view's size in points, the same
-    // units `cursor_in_content` reports the cursor in. Both macOS backends read
-    // it from here, so the drawable's backing scale never leaks into UI space
-    // (see `WindowControl::logical_size`).
-    pub(crate) fn logical_size(&self) -> (f32, f32) {
-        let s = self.view.bounds().size;
-        (narrow_f32(s.width), narrow_f32(s.height))
-    }
-
-    // How much of the frame's top edge the window chrome sits over, in the same
-    // points as `logical_size`. A title-bar-less window uses a full-size content
-    // view, so the traffic lights float over the render; `contentLayoutRect` is
-    // the part of that content the chrome leaves clear, and the shortfall is
-    // what UI anchored to the top has to start below. Zero for a window whose
-    // title bar is drawn above its content, for a borderless window whose
-    // buttons are hidden, and in embedded mode, where the host owns the window.
-    pub(crate) fn top_content_inset(&self) -> f32 {
-        let Some(window) = self.window.as_ref() else {
-            return 0.0;
-        };
-        if window_buttons_hidden(window) {
-            return 0.0;
-        }
-        let content_h = window.contentRectForFrameRect(window.frame()).size.height;
-        let laid_out_h = window.contentLayoutRect().size.height;
-        narrow_f32(content_h - laid_out_h).max(0.0)
-    }
-
-    // Whether the window is off screen: minimized to the Dock, or its app
-    // hidden. Occlusion does not count, so a covered window or a sleeping
-    // display keeps running. False in embedded mode, where the host owns the
-    // window.
-    pub(crate) fn window_minimized(&self) -> bool {
-        self.window
-            .as_ref()
-            .is_some_and(|w| w.isMiniaturized() || !w.isVisible())
     }
 
     // Whether the window has closed. Hiding the app or minimizing the window
@@ -199,7 +150,7 @@ impl AppKitWindow {
 
     // Hold the display at the chosen fullscreen mode, or restore the desktop
     // mode when fullscreen ends. Driven once per frame by the backend.
-    pub(crate) fn reconcile_display_mode(&mut self) {
+    fn reconcile_display_mode(&mut self) {
         let fullscreen = self.is_fullscreen();
         self.fullscreen_display
             .reconcile(self.window.as_deref(), fullscreen);
@@ -221,7 +172,7 @@ impl AppKitWindow {
     // for the preview tab (pump_events=false), where the cursor must remain
     // usable for a host UI's tab bar and sidebar controls. Also a no-op when
     // no host window is yet attached.
-    pub(crate) fn capture_cursor(&mut self) {
+    fn capture_cursor(&mut self) {
         if !self.pump_events {
             return;
         }
@@ -245,29 +196,6 @@ impl AppKitWindow {
         self.keys.discard_next_motion = true;
         self.cursor_captured = true;
         self.recapture_on_click = false;
-    }
-
-    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
-    // without engaging camera capture. Edge-triggered: NSCursor hide/unhide are
-    // ref-counted, so we only toggle on a state change. No-op for the preview
-    // tab (pump_events=false), which must keep the system cursor usable.
-    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        if !self.pump_events || hidden == self.ui_cursor_hidden {
-            return;
-        }
-        self.ui_cursor_hidden = hidden;
-        if hidden {
-            NSCursor::hide();
-        } else {
-            NSCursor::unhide();
-        }
-    }
-
-    // Whether the real cursor has left the window so the renderer should stop
-    // drawing the in-engine UI cursor. Recomputed each frame by
-    // `update_ui_cursor_confinement`.
-    pub(crate) fn cursor_outside_window(&self) -> bool {
-        self.keys.cursor_outside_window
     }
 
     // Per-frame bookkeeping for an in-engine UI cursor (a menu): report whether
@@ -354,186 +282,10 @@ impl AppKitWindow {
         self.keys.mouse_y = my;
     }
 
-    // A togglable menu coexists with a captured camera; see
-    // `WindowControl::set_menu_mode`.
-    pub(crate) fn set_menu_mode(&mut self, on: bool) {
-        self.menu_mode = on;
-    }
-
-    // Edge-triggered capture: capture for camera control, release while a menu
-    // is open. GraphicsSystem calls this each frame in menu mode.
-    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
-        if capture == self.cursor_captured {
-            return;
-        }
-        if capture {
-            self.capture_cursor();
-        } else {
-            self.release_cursor();
-        }
-    }
-
-    // Switch the engine-created window between windowed / borderless /
-    // fullscreen. Only `self.window` is touched: in embedded mode (the preview
-    // tab or a host-owned window) this is a no-op so we never restyle a host
-    // window. The change flows through the backend's per-frame resize
-    // detection, so no render targets are rebuilt here.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
-    )]
-    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
-        let Some(window) = self.window.as_ref() else {
-            return;
-        };
-        // Read the fullscreen state from the flag the NSWindowDelegate keeps in
-        // sync (it flips at the start of the animation via
-        // windowWillEnter/ExitFullScreen). This does not lag the way the
-        // style-mask bit does, so stepping the Window Mode row faster than the
-        // ~1s native-fullscreen animation no longer toggles the wrong way.
-        let is_fullscreen = self.is_fullscreen();
-        // Record the intended fullscreen state synchronously so a second step
-        // issued before the delegate callback lands still decides correctly;
-        // the delegate's did-callbacks reconcile this with reality at the end
-        // of the transition (and capture OS-driven toggles like the green
-        // traffic-light button).
-        self.signals
-            .set_fullscreen(matches!(mode, WindowMode::Fullscreen));
-        match mode {
-            WindowMode::Windowed => {
-                if is_fullscreen {
-                    window.toggleFullScreen(None);
-                }
-                window.setStyleMask(windowed_style_mask(self.title_bar));
-                apply_title_bar(window, self.title_bar);
-            }
-            WindowMode::Borderless => {
-                if is_fullscreen {
-                    window.toggleFullScreen(None);
-                }
-                // Keep the window key-window-eligible (a pure Borderless,
-                // non-panel window cannot become key, which kills keyboard
-                // input): a Titled + full-size-content window with a
-                // transparent, hidden title bar and hidden traffic-light
-                // buttons reads as borderless but still receives key events.
-                window.setStyleMask(
-                    NSWindowStyleMask::Titled
-                        | NSWindowStyleMask::Closable
-                        | NSWindowStyleMask::Resizable
-                        | NSWindowStyleMask::FullSizeContentView,
-                );
-                window.setTitlebarAppearsTransparent(true);
-                window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
-                set_window_buttons_hidden(window, true);
-                // Borderless covers the window's current display.
-                if let Some(screen) = window.screen() {
-                    window.setFrame_display(screen.frame(), true);
-                }
-            }
-            WindowMode::Fullscreen => {
-                // Native fullscreen animates from a windowed window and keeps
-                // its authored chrome: macOS hides the title bar while
-                // fullscreen regardless, and preserving the style here means an
-                // OS-driven exit (the green button, which set_window_mode never
-                // sees) lands back on the style the world asked for rather than
-                // reinstating a title bar it turned off.
-                window.setStyleMask(windowed_style_mask(self.title_bar));
-                apply_title_bar(window, self.title_bar);
-                if !is_fullscreen {
-                    window.toggleFullScreen(None);
-                }
-            }
-        }
-        // Re-acquire key + front so keyboard input keeps flowing after a restyle.
-        window.makeKeyAndOrderFront(None);
-    }
-
-    // The display modes (pixel resolution + refresh rate) of the display the
-    // engine window sits on. Empty in embedded mode: the host owns the window,
-    // so the engine never switches its display and the Resolution row falls
-    // back to the windowed presets.
-    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
-        if self.window.is_none() {
-            return Vec::new();
-        }
-        display_mode::enumerate(self.window.as_deref())
-    }
-
-    // The mode the engine window's display is currently running (what the
-    // Resolution row shows before the user ever picks one). None in embedded
-    // mode, matching display_modes.
-    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
-        let window = self.window.as_deref()?;
-        display_mode::current(Some(window))
-    }
-
-    // How fast the engine window's screen can refresh. None in embedded mode,
-    // matching display_modes.
-    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
-        display_mode::refresh(self.window.as_deref()?)
-    }
-
-    // Remember the display mode to hold while the window is in native
-    // fullscreen. Applied by the per-frame `reconcile_display_mode` (which also
-    // restores the desktop mode on leaving fullscreen), so a choice made in
-    // any window mode takes effect when fullscreen is (or becomes) active.
-    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
-        self.fullscreen_display.set_desired(mode);
-    }
-
-    // Resize the engine-created window's content area (windowed mode only).
-    // No-op in embedded mode or while in native fullscreen.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
-    )]
-    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        // Resizing the content area is meaningless while in native fullscreen;
-        // read the delegate-tracked flag (not the lagging style-mask bit).
-        if self.is_fullscreen() {
-            return;
-        }
-        let Some(window) = self.window.as_ref() else {
-            return;
-        };
-        window.setContentSize(NSSize::new(f64::from(width), f64::from(height)));
-    }
-
-    // Snapshot the current input state for this frame.
-    // InputKey booleans reflect what is held right now; mouse deltas are cleared
-    // after being read so they don't accumulate across frames.
-    // The one-frame pulses are true for exactly one frame per press then cleared.
-    pub(crate) fn take_input(&mut self) -> InputSnapshot {
-        let snapshot = InputSnapshot {
-            held: self.keys.held,
-            mouse_dx: self.keys.mouse_dx,
-            mouse_dy: self.keys.mouse_dy,
-            scroll_delta: self.keys.scroll_delta,
-            mouse_x: self.keys.mouse_x,
-            mouse_y: self.keys.mouse_y,
-            left_click: self.keys.left_click_pulse,
-            // Held state: read but not cleared here (cleared on LeftMouseUp).
-            left_button_down: self.keys.left_button_down,
-            right_click: self.keys.right_click_pulse,
-            hud_toggle: self.keys.hud_toggle_pulse,
-            escape: self.keys.escape_pulse,
-            cmd: self.keys.command_down,
-            key_events: std::mem::take(&mut self.keys.events),
-        };
-        self.keys.mouse_dx = 0.0;
-        self.keys.mouse_dy = 0.0;
-        self.keys.scroll_delta = 0.0;
-        self.keys.left_click_pulse = false;
-        self.keys.right_click_pulse = false;
-        self.keys.hud_toggle_pulse = false;
-        self.keys.escape_pulse = false;
-        snapshot
-    }
-
     // Dequeue all pending NSEvents and update input state. Sets the closed flag
     // on a window-will-close application event. InputKey events update the persistent
     // key state; mouse moved events accumulate deltas if the cursor is captured.
-    pub(crate) fn pump_ns_events(&mut self, mtm: objc2::MainThreadMarker) {
+    fn pump_ns_events(&mut self, mtm: objc2::MainThreadMarker) {
         let ns_app = NSApplication::sharedApplication(mtm);
         loop {
             let event = ns_app.nextEventMatchingMask_untilDate_inMode_dequeue(
@@ -745,4 +497,262 @@ fn menu_claims_key(ns_app: &NSApplication, event: &NSEvent) -> bool {
     ns_app
         .mainMenu()
         .is_some_and(|menu| menu.performKeyEquivalent(event))
+}
+
+impl WindowControl for AppKitWindow {
+    // Drain pending NSEvents unless the host owns event delivery (the preview
+    // tab, where pumping would steal its clicks), then hold the chosen display
+    // mode while fullscreen and restore the desktop mode otherwise.
+    fn window_closed(&mut self) -> bool {
+        if self.pump_events
+            && let Some(mtm) = objc2::MainThreadMarker::new()
+        {
+            self.pump_ns_events(mtm);
+        }
+        self.reconcile_display_mode();
+        self.closed()
+    }
+
+    fn request_cursor_capture(&mut self) {
+        self.capture_cursor();
+    }
+
+    // The general pasteboard, reachable in every window mode: it is the
+    // system's, not the window's.
+    fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        Some(&mut self.clipboard)
+    }
+
+    fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        Some(Box::new(super::clipboard::SystemClipboard))
+    }
+
+    // The overlay coordinate space on macOS: the view's size in points, the same
+    // units `cursor_in_content` reports the cursor in. Both macOS backends read
+    // it from here, so the drawable's backing scale never leaks into UI space
+    // (see `WindowControl::logical_size`).
+    fn logical_size(&self) -> (f32, f32) {
+        let s = self.view.bounds().size;
+        (narrow_f32(s.width), narrow_f32(s.height))
+    }
+
+    // How much of the frame's top edge the window chrome sits over, in the same
+    // points as `logical_size`. A title-bar-less window uses a full-size content
+    // view, so the traffic lights float over the render; `contentLayoutRect` is
+    // the part of that content the chrome leaves clear, and the shortfall is
+    // what UI anchored to the top has to start below. Zero for a window whose
+    // title bar is drawn above its content, for a borderless window whose
+    // buttons are hidden, and in embedded mode, where the host owns the window.
+    fn top_content_inset(&self) -> f32 {
+        let Some(window) = self.window.as_ref() else {
+            return 0.0;
+        };
+        if window_buttons_hidden(window) {
+            return 0.0;
+        }
+        let content_h = window.contentRectForFrameRect(window.frame()).size.height;
+        let laid_out_h = window.contentLayoutRect().size.height;
+        narrow_f32(content_h - laid_out_h).max(0.0)
+    }
+
+    // Whether the window is off screen: minimized to the Dock, or its app
+    // hidden. Occlusion does not count, so a covered window or a sleeping
+    // display keeps running. False in embedded mode, where the host owns the
+    // window.
+    fn window_minimized(&self) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|w| w.isMiniaturized() || !w.isVisible())
+    }
+
+    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
+    // without engaging camera capture. Edge-triggered: NSCursor hide/unhide are
+    // ref-counted, so we only toggle on a state change. No-op for the preview
+    // tab (pump_events=false), which must keep the system cursor usable.
+    fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+        if !self.pump_events || hidden == self.ui_cursor_hidden {
+            return;
+        }
+        self.ui_cursor_hidden = hidden;
+        if hidden {
+            NSCursor::hide();
+        } else {
+            NSCursor::unhide();
+        }
+    }
+
+    // Whether the real cursor has left the window so the renderer should stop
+    // drawing the in-engine UI cursor. Recomputed each frame by
+    // `update_ui_cursor_confinement`.
+    fn cursor_outside_window(&self) -> bool {
+        self.keys.cursor_outside_window
+    }
+
+    // A togglable menu coexists with a captured camera; see
+    // `WindowControl::set_menu_mode`.
+    fn set_menu_mode(&mut self, on: bool) {
+        self.menu_mode = on;
+    }
+
+    // Edge-triggered capture: capture for camera control, release while a menu
+    // is open. GraphicsSystem calls this each frame in menu mode.
+    fn set_camera_capture(&mut self, capture: bool) {
+        if capture == self.cursor_captured {
+            return;
+        }
+        if capture {
+            self.capture_cursor();
+        } else {
+            self.release_cursor();
+        }
+    }
+
+    // Switch the engine-created window between windowed / borderless /
+    // fullscreen. Only `self.window` is touched: in embedded mode (the preview
+    // tab or a host-owned window) this is a no-op so we never restyle a host
+    // window. The change flows through the backend's per-frame resize
+    // detection, so no render targets are rebuilt here.
+    fn set_window_mode(&mut self, mode: WindowMode) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        // Read the fullscreen state from the flag the NSWindowDelegate keeps in
+        // sync (it flips at the start of the animation via
+        // windowWillEnter/ExitFullScreen). This does not lag the way the
+        // style-mask bit does, so stepping the Window Mode row faster than the
+        // ~1s native-fullscreen animation no longer toggles the wrong way.
+        let is_fullscreen = self.is_fullscreen();
+        // Record the intended fullscreen state synchronously so a second step
+        // issued before the delegate callback lands still decides correctly;
+        // the delegate's did-callbacks reconcile this with reality at the end
+        // of the transition (and capture OS-driven toggles like the green
+        // traffic-light button).
+        self.signals
+            .set_fullscreen(matches!(mode, WindowMode::Fullscreen));
+        match mode {
+            WindowMode::Windowed => {
+                if is_fullscreen {
+                    window.toggleFullScreen(None);
+                }
+                window.setStyleMask(windowed_style_mask(self.title_bar));
+                apply_title_bar(window, self.title_bar);
+            }
+            WindowMode::Borderless => {
+                if is_fullscreen {
+                    window.toggleFullScreen(None);
+                }
+                // Keep the window key-window-eligible (a pure Borderless,
+                // non-panel window cannot become key, which kills keyboard
+                // input): a Titled + full-size-content window with a
+                // transparent, hidden title bar and hidden traffic-light
+                // buttons reads as borderless but still receives key events.
+                window.setStyleMask(
+                    NSWindowStyleMask::Titled
+                        | NSWindowStyleMask::Closable
+                        | NSWindowStyleMask::Resizable
+                        | NSWindowStyleMask::FullSizeContentView,
+                );
+                window.setTitlebarAppearsTransparent(true);
+                window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+                set_window_buttons_hidden(window, true);
+                // Borderless covers the window's current display.
+                if let Some(screen) = window.screen() {
+                    window.setFrame_display(screen.frame(), true);
+                }
+            }
+            WindowMode::Fullscreen => {
+                // Native fullscreen animates from a windowed window and keeps
+                // its authored chrome: macOS hides the title bar while
+                // fullscreen regardless, and preserving the style here means an
+                // OS-driven exit (the green button, which set_window_mode never
+                // sees) lands back on the style the world asked for rather than
+                // reinstating a title bar it turned off.
+                window.setStyleMask(windowed_style_mask(self.title_bar));
+                apply_title_bar(window, self.title_bar);
+                if !is_fullscreen {
+                    window.toggleFullScreen(None);
+                }
+            }
+        }
+        // Re-acquire key + front so keyboard input keeps flowing after a restyle.
+        window.makeKeyAndOrderFront(None);
+    }
+
+    // The display modes (pixel resolution + refresh rate) of the display the
+    // engine window sits on. Empty in embedded mode: the host owns the window,
+    // so the engine never switches its display and the Resolution row falls
+    // back to the windowed presets.
+    fn display_modes(&self) -> Vec<DisplayMode> {
+        if self.window.is_none() {
+            return Vec::new();
+        }
+        display_mode::enumerate(self.window.as_deref())
+    }
+
+    // The mode the engine window's display is currently running (what the
+    // Resolution row shows before the user ever picks one). None in embedded
+    // mode, matching display_modes.
+    fn current_display_mode(&self) -> Option<DisplayMode> {
+        let window = self.window.as_deref()?;
+        display_mode::current(Some(window))
+    }
+
+    // How fast the engine window's screen can refresh. None in embedded mode,
+    // matching display_modes.
+    fn display_refresh(&self) -> Option<DisplayRefresh> {
+        display_mode::refresh(self.window.as_deref()?)
+    }
+
+    // Remember the display mode to hold while the window is in native
+    // fullscreen. Applied by the per-frame `reconcile_display_mode` (which also
+    // restores the desktop mode on leaving fullscreen), so a choice made in
+    // any window mode takes effect when fullscreen is (or becomes) active.
+    fn set_display_mode(&mut self, mode: DisplayMode) {
+        self.fullscreen_display.set_desired(mode);
+    }
+
+    // Resize the engine-created window's content area (windowed mode only).
+    // No-op in embedded mode or while in native fullscreen.
+    fn set_window_size(&mut self, width: u32, height: u32) {
+        // Resizing the content area is meaningless while in native fullscreen;
+        // read the delegate-tracked flag (not the lagging style-mask bit).
+        if self.is_fullscreen() {
+            return;
+        }
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        window.setContentSize(NSSize::new(f64::from(width), f64::from(height)));
+    }
+
+    // Snapshot the current input state for this frame.
+    // InputKey booleans reflect what is held right now; mouse deltas are cleared
+    // after being read so they don't accumulate across frames.
+    // The one-frame pulses are true for exactly one frame per press then cleared.
+    fn take_input(&mut self) -> InputSnapshot {
+        let snapshot = InputSnapshot {
+            held: self.keys.held,
+            mouse_dx: self.keys.mouse_dx,
+            mouse_dy: self.keys.mouse_dy,
+            scroll_delta: self.keys.scroll_delta,
+            mouse_x: self.keys.mouse_x,
+            mouse_y: self.keys.mouse_y,
+            left_click: self.keys.left_click_pulse,
+            // Held state: read but not cleared here (cleared on LeftMouseUp).
+            left_button_down: self.keys.left_button_down,
+            right_click: self.keys.right_click_pulse,
+            hud_toggle: self.keys.hud_toggle_pulse,
+            escape: self.keys.escape_pulse,
+            cmd: self.keys.command_down,
+            key_events: std::mem::take(&mut self.keys.events),
+        };
+        self.keys.mouse_dx = 0.0;
+        self.keys.mouse_dy = 0.0;
+        self.keys.scroll_delta = 0.0;
+        self.keys.left_click_pulse = false;
+        self.keys.right_click_pulse = false;
+        self.keys.hud_toggle_pulse = false;
+        self.keys.escape_pulse = false;
+        snapshot
+    }
 }

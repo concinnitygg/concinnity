@@ -210,7 +210,7 @@ fn render_half(
 // the simulation step on it. False once the simulation is gone.
 fn let_step_go(go: &FrameGo, backend: &mut dyn RenderBackend) -> bool {
     backend.pump_events();
-    let input = backend.sample_input();
+    let input = backend.window_mut().sample_input();
     go.send(input, concinnity_host::clock::monotonic_micros())
 }
 

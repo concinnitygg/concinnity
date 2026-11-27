@@ -369,7 +369,7 @@ impl SettingsState {
         let next = registry::cycle(cur, self.display_modes.len(), cmd.op);
         let mode = self.display_modes[next];
         self.resolution = Some(mode);
-        ops.record(move |backend| backend.set_display_mode(mode));
+        ops.record(move |backend| backend.window_mut().set_display_mode(mode));
         cfg.graphics.resolution = Some([mode.width, mode.height, mode.refresh_hz]);
         show(ctx, cmd.setting, &mode.label());
         true
@@ -496,12 +496,12 @@ impl SettingsState {
                 let next = registry::cycle(cur, opts.len(), op);
                 let mode = levels::WINDOW_MODE.at(next);
                 self.window_args.mode = mode;
-                ops.record(move |backend| backend.set_window_mode(mode));
+                ops.record(move |backend| backend.window_mut().set_window_mode(mode));
                 // Borderless and fullscreen leave the window at the display size,
                 // so returning to windowed re-applies the remembered size.
                 if mode == WindowMode::Windowed {
                     let (w, h) = (self.window_args.width, self.window_args.height);
-                    ops.record(move |backend| backend.set_window_size(w, h));
+                    ops.record(move |backend| backend.window_mut().set_window_size(w, h));
                 }
                 // The Resolution row only applies in fullscreen.
                 set_rows_grayed(

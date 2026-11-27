@@ -797,6 +797,14 @@ pub(super) fn upload_static_records<T: Copy>(
 }
 
 impl RenderBackend for VkContext {
+    fn window(&self) -> &dyn WindowControl {
+        self.platform_window().control()
+    }
+
+    fn window_mut(&mut self) -> &mut dyn WindowControl {
+        self.platform_window_mut().control_mut()
+    }
+
     fn wait_idle(&self) {
         // Staged geometry writes count as submitted work, so an idle device has
         // applied them.
@@ -832,11 +840,5 @@ impl RenderBackend for VkContext {
                 .device
                 .wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)
         };
-    }
-
-    // Pump the window's pending events outside the draw. The closed flag is
-    // sticky, so the frame's own poll still reports a close.
-    fn pump_events(&mut self) {
-        self.window_closed();
     }
 }

@@ -540,7 +540,7 @@ impl WorldReload for DxContext {
     // Rebuild the world's content in place for a live reload: hand the hardware
     // and swapchain to a successor built from `init` and replace `self`. COM
     // refcounts keep the shared objects alive. Only called when the swapchain
-    // config is unchanged; on failure `win_state` stays `None` for the caller.
+    // config is unchanged; on failure `window` stays `None` for the caller.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let swapchain = bootstrap::DxgiSwapchain {

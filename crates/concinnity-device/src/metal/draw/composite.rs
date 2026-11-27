@@ -249,7 +249,7 @@ impl MtlContext {
         reactive_valid: bool,
     ) -> concinnity_engine::render::backend::error::RenderResult<u32> {
         let composite_pass_desc = self
-            .window()
+            .window_state()
             .view
             .currentRenderPassDescriptor()
             .ok_or_else(|| RenderError::Other("no current render pass descriptor".to_string()))?;
@@ -273,7 +273,7 @@ impl MtlContext {
         // divide by win_width/height); the scissor is in framebuffer pixels.
         // Recover the drawable's pixel size from the composite color attachment
         // so a per-call clip rect scales from points to pixels.
-        let size = self.window().view.bounds().size;
+        let size = self.window_state().view.bounds().size;
         let logical = (narrow_f32(size.width), narrow_f32(size.height));
         // SAFETY: attachment 0 is the only color attachment this pass declares, and the
         // accessors only read it.

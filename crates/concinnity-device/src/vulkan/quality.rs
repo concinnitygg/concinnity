@@ -26,7 +26,6 @@
 
 use ash::vk;
 use concinnity_engine::gfx::{auto_exposure, render_types};
-use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
@@ -487,7 +486,14 @@ impl SettingsTarget for VkContext {
         self.state.planner.shadow.cadence = cadence;
     }
 
+    // The present mode is fixed per swapchain, so a change recreates it.
     fn push_vsync(&mut self, on: bool) {
-        WindowControl::set_vsync(self, on);
+        if on == self.hw.vsync {
+            return;
+        }
+        self.hw.vsync = on;
+        if let Err(e) = self.rebuild_swapchain() {
+            tracing::warn!("push_vsync: rebuild_swapchain failed: {}", e);
+        }
     }
 }

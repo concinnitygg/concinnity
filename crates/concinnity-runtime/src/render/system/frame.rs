@@ -83,7 +83,7 @@ impl GraphicsSystem {
         // deposit it for the next tick's InputSystem, which runs before
         // anything else reads input.
         if result == StepResult::Continue {
-            deposit_input(ctx, backend.sample_input());
+            deposit_input(ctx, backend.window_mut().sample_input());
         }
 
         result

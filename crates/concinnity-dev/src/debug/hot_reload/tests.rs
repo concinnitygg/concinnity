@@ -732,6 +732,12 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl backend::RenderBackend for RecordingBackend {
+    fn window(&self) -> &dyn backend::WindowControl {
+        self
+    }
+    fn window_mut(&mut self) -> &mut dyn backend::WindowControl {
+        self
+    }
     fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
         self.fog_updates += 1;
     }

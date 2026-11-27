@@ -3,7 +3,7 @@
 //! this module is compiled only off-Windows.)
 //!
 //! Input design mirrors the `AppKit` layer (`appkit/input.rs`): events accumulate
-//! into an `InputSnapshot` between `poll()` calls; `GraphicsSystem` drains the
+//! into an `InputSnapshot` between `window_closed()` calls; `GraphicsSystem` drains the
 //! state each step via `take_input()` and deposits it as a `FrameInput`
 //! component for `Camera3DSystem` to consume.
 //!
@@ -14,7 +14,9 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
 use concinnity_engine::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
 use concinnity_engine::window::display_mode;
 use concinnity_engine::window::display_mode::DisplayMode;
 
@@ -172,6 +174,15 @@ fn key_from_glfw(key: glfw::Key) -> Option<InputKey> {
 }
 
 impl GlfwWindow {
+    // The window as the engine drives it.
+    pub(crate) fn control(&self) -> &dyn WindowControl {
+        self
+    }
+
+    pub(crate) fn control_mut(&mut self) -> &mut dyn WindowControl {
+        self
+    }
+
     // create a new glfw window with no opengl context (vulkan surface mode)
     pub(crate) fn new(
         title: &str,
@@ -248,16 +259,16 @@ impl GlfwWindow {
         window.set_key_polling(true);
         // Char events deliver the layout- / modifier-resolved printable glyph for
         // text-input fields (the editor's name / filter / arg fields). Without
-        // this GLFW never queues Char events, so the `Char` arm in `poll()` never
+        // this GLFW never queues Char events, so the `Char` arm in `window_closed()` never
         // runs and text fields cannot be typed into.
         window.set_char_polling(true);
         window.set_cursor_pos_polling(true);
         // Mouse-button events drive UI clicks (e.g. a MainMenu HitRegion).
         // Without this GLFW never queues Button events, so the `MouseButton`
-        // arm in `poll()` never runs and clicks are silently dropped.
+        // arm in `window_closed()` never runs and clicks are silently dropped.
         window.set_mouse_button_polling(true);
         // Scroll events drive scrollable UI (e.g. the settings panel). Without
-        // this GLFW never queues Scroll events, so the `Scroll` arm in `poll()`
+        // this GLFW never queues Scroll events, so the `Scroll` arm in `window_closed()`
         // never runs and the wheel is silently dropped.
         window.set_scroll_polling(true);
         window.set_framebuffer_size_polling(true);
@@ -289,13 +300,6 @@ impl GlfwWindow {
         ));
     }
 
-    // Hide the cursor and begin delivering relative mouse deltas via CursorPos
-    // events. Should be called once after the window is shown, when a
-    // Camera3D component is present.
-    pub(crate) fn request_cursor_capture(&mut self) {
-        self.capture_cursor();
-    }
-
     fn capture_cursor(&mut self) {
         self.cursor_captured = true;
         self.apply_cursor_mode();
@@ -315,48 +319,6 @@ impl GlfwWindow {
         }
         self.cursor_captured = false;
         self.apply_cursor_mode();
-    }
-
-    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
-    // without engaging camera capture. Edge-triggered: re-applies the combined
-    // cursor mode only on a transition.
-    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        if hidden == self.ui_cursor_hidden {
-            return;
-        }
-        self.ui_cursor_hidden = hidden;
-        self.apply_cursor_mode();
-    }
-
-    // A togglable menu coexists with a captured camera; see
-    // `WindowControl::set_menu_mode`. The poll loop reads this to route Escape
-    // to the ECS instead of releasing the cursor inline.
-    pub(crate) fn set_menu_mode(&mut self, on: bool) {
-        self.menu_mode = on;
-    }
-
-    // Edge-triggered capture: capture for camera control, release while a menu
-    // is open. GraphicsSystem calls this each frame in menu mode.
-    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
-        if capture == self.cursor_captured {
-            return;
-        }
-        if capture {
-            self.capture_cursor();
-        } else {
-            self.release_cursor();
-        }
-    }
-
-    // Whether the real cursor has left the window so the renderer should stop
-    // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
-    // `poll`; false while captured or in fullscreen (which confines instead).
-    pub(crate) fn cursor_outside_window(&self) -> bool {
-        self.cursor_outside_window
-    }
-
-    pub(crate) fn window_minimized(&self) -> bool {
-        self.window.is_iconified()
     }
 
     // Per-poll UI cursor bookkeeping: report whether the cursor left the content
@@ -398,9 +360,105 @@ impl GlfwWindow {
         }
     }
 
+    // The framebuffer size in pixels, the extent the swapchain is sized to.
+    pub(crate) fn framebuffer_size(&self) -> (i32, i32) {
+        self.window.get_framebuffer_size()
+    }
+
+    // Create the presentation surface for this window (GLFW picks the
+    // platform's surface extension). `_entry` keeps the signature shared with
+    // the Win32 window, which loads VK_KHR_win32_surface through it.
+    pub(crate) fn create_surface(
+        &mut self,
+        _entry: &ash::Entry,
+        instance: &ash::Instance,
+    ) -> RenderResult<ash::vk::SurfaceKHR> {
+        use ash::vk::Handle;
+        let mut raw_surface: usize = 0;
+        // SAFETY: `instance.handle()` is the live Vulkan instance and `raw_surface` is a live local
+        // GLFW writes the surface handle into; the allocator argument is null.
+        let result = unsafe {
+            self.window.create_window_surface(
+                usize::saturating_from(instance.handle().as_raw()) as *mut _,
+                std::ptr::null(),
+                (&raw mut raw_surface).cast::<*mut _>(),
+            )
+        };
+        if result != 0 {
+            Err(crate::vulkan::error::map_vk_result(
+                ash::vk::Result::from_raw(result),
+                "glfwCreateWindowSurface",
+            ))
+        } else {
+            Ok(ash::vk::SurfaceKHR::from_raw(raw_surface as u64))
+        }
+    }
+
+    // vulkan instance extensions required for surface creation on this platform
+    pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
+        self.glfw
+            .get_required_instance_extensions()
+            .unwrap_or_default()
+    }
+}
+
+impl WindowControl for GlfwWindow {
+    fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        Some(self)
+    }
+
+    // Hide the cursor and begin delivering relative mouse deltas via CursorPos
+    // events. Should be called once after the window is shown, when a
+    // Camera3D component is present.
+    fn request_cursor_capture(&mut self) {
+        self.capture_cursor();
+    }
+
+    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
+    // without engaging camera capture. Edge-triggered: re-applies the combined
+    // cursor mode only on a transition.
+    fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+        if hidden == self.ui_cursor_hidden {
+            return;
+        }
+        self.ui_cursor_hidden = hidden;
+        self.apply_cursor_mode();
+    }
+
+    // A togglable menu coexists with a captured camera; see
+    // `WindowControl::set_menu_mode`. `window_closed` reads this to route Escape
+    // to the ECS instead of releasing the cursor inline.
+    fn set_menu_mode(&mut self, on: bool) {
+        self.menu_mode = on;
+    }
+
+    // Edge-triggered capture: capture for camera control, release while a menu
+    // is open. GraphicsSystem calls this each frame in menu mode.
+    fn set_camera_capture(&mut self, capture: bool) {
+        if capture == self.cursor_captured {
+            return;
+        }
+        if capture {
+            self.capture_cursor();
+        } else {
+            self.release_cursor();
+        }
+    }
+
+    // Whether the real cursor has left the window so the renderer should stop
+    // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
+    // `window_closed`; false while captured or in fullscreen (which confines instead).
+    fn cursor_outside_window(&self) -> bool {
+        self.cursor_outside_window
+    }
+
+    fn window_minimized(&self) -> bool {
+        self.window.is_iconified()
+    }
+
     // Switch windowed / borderless / fullscreen. The size change makes the next
     // present return OUT_OF_DATE, which rebuilds the swapchain.
-    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
+    fn set_window_mode(&mut self, mode: WindowMode) {
         // Leaving a mode-switched fullscreen: GLFW restores the desktop mode
         // as part of the switch away, so a borderless cover must size to the
         // cached desktop mode, not the (still-switched) current video mode.
@@ -478,26 +536,20 @@ impl GlfwWindow {
 
     // The display modes of the primary monitor (enumerated at creation),
     // feeding the Resolution settings row; the caller dedups + sorts.
-    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
+    fn display_modes(&self) -> Vec<DisplayMode> {
         self.display_modes.clone()
     }
 
     // The desktop mode of the primary monitor (captured at creation, before
     // any fullscreen switch): what the Resolution row shows before the user
     // ever picks a mode.
-    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
+    fn current_display_mode(&self) -> Option<DisplayMode> {
         self.desktop_mode
-    }
-
-    // The desktop mode's rate; GLFW reports no variable-refresh range.
-    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
-        self.desktop_mode
-            .and_then(display_mode::DisplayRefresh::from_mode)
     }
 
     // Remember the fullscreen display mode, snapped to one the monitor has (a stale
     // choice from another display is ignored). Applies now when fullscreen.
-    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
+    fn set_display_mode(&mut self, mode: DisplayMode) {
         let Some(idx) = display_mode::best_native_index(&self.display_modes, mode) else {
             tracing::warn!(
                 "display has no {}x{} mode; keeping the current mode",
@@ -518,7 +570,7 @@ impl GlfwWindow {
 
     // Resize the window (windowed mode only; GraphicsSystem gates this). The
     // framebuffer-size change triggers a swapchain rebuild via OUT_OF_DATE.
-    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
+    fn set_window_size(&mut self, width: u32, height: u32) {
         self.window
             .set_size(i32::saturating_from(width), i32::saturating_from(height));
     }
@@ -526,7 +578,7 @@ impl GlfwWindow {
     // Drain all pending GLFW events, update input state, and return true if
     // the window should close. Key state is tracked as a running bitmask;
     // cursor deltas are accumulated so no delta is lost between poll calls.
-    pub(crate) fn poll(&mut self) -> bool {
+    fn window_closed(&mut self) -> bool {
         self.glfw.poll_events();
         let mut should_close = self.window.should_close();
 
@@ -627,8 +679,8 @@ impl GlfwWindow {
             }
         }
 
-        // After draining this poll's events, refresh the in-engine cursor's
-        // window-exit / fullscreen-confinement state (mirrors the tail of Metal's
+        // After draining this call's events, refresh the in-engine cursor's
+        // window-exit / fullscreen-confinement state (mirrors the AppKit window's
         // `pump_ns_events`). GraphicsSystem reads `cursor_outside_window` later
         // this same frame.
         self.update_ui_cursor_confinement();
@@ -639,7 +691,7 @@ impl GlfwWindow {
     // A snapshot of the current input. Held keys and the cursor position persist,
     // since GLFW sends nothing for a held key; only one-shot inputs and the mouse
     // delta are cleared.
-    pub(crate) fn take_input(&mut self) -> InputSnapshot {
+    fn take_input(&mut self) -> InputSnapshot {
         let snapshot = InputSnapshot {
             key_events: std::mem::take(&mut self.input.key_events),
             ..self.input.clone()
@@ -656,63 +708,12 @@ impl GlfwWindow {
         snapshot
     }
 
-    // The framebuffer size in pixels, the extent the swapchain is sized to.
-    pub(crate) fn framebuffer_size(&self) -> (i32, i32) {
-        self.window.get_framebuffer_size()
-    }
-
     // The overlay coordinate space: GLFW window coordinates, the same units
     // `CursorPos` reports the cursor in. Equal to `framebuffer_size` on an
     // unscaled surface; smaller by the content scale on hi-DPI Wayland.
-    pub(crate) fn logical_size(&self) -> (f32, f32) {
+    fn logical_size(&self) -> (f32, f32) {
         let (w, h) = self.window.get_size();
         (w as f32, h as f32)
-    }
-
-    // GLFW window coordinates start below whatever decoration the desktop
-    // draws, so nothing overlaps the top of the frame.
-    #[expect(
-        clippy::unused_self,
-        reason = "every window backend answers through its window"
-    )]
-    pub(crate) fn top_content_inset(&self) -> f32 {
-        0.0
-    }
-
-    // Create the presentation surface for this window (GLFW picks the
-    // platform's surface extension). `_entry` keeps the signature shared with
-    // the Win32 window, which loads VK_KHR_win32_surface through it.
-    pub(crate) fn create_surface(
-        &mut self,
-        _entry: &ash::Entry,
-        instance: &ash::Instance,
-    ) -> RenderResult<ash::vk::SurfaceKHR> {
-        use ash::vk::Handle;
-        let mut raw_surface: usize = 0;
-        // SAFETY: `instance.handle()` is the live Vulkan instance and `raw_surface` is a live local
-        // GLFW writes the surface handle into; the allocator argument is null.
-        let result = unsafe {
-            self.window.create_window_surface(
-                usize::saturating_from(instance.handle().as_raw()) as *mut _,
-                std::ptr::null(),
-                (&raw mut raw_surface).cast::<*mut _>(),
-            )
-        };
-        if result != 0 {
-            Err(crate::vulkan::error::map_vk_result(
-                ash::vk::Result::from_raw(result),
-                "glfwCreateWindowSurface",
-            ))
-        } else {
-            Ok(ash::vk::SurfaceKHR::from_raw(raw_surface as u64))
-        }
-    }
-
-    // vulkan instance extensions required for surface creation on this platform
-    pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
-        self.glfw
-            .get_required_instance_extensions()
-            .unwrap_or_default()
     }
 }
 

@@ -66,7 +66,6 @@ mod view_samples;
 mod water;
 mod water_sim;
 mod water_wake;
-mod window;
 mod wireframe;
 mod world_shaders;
 

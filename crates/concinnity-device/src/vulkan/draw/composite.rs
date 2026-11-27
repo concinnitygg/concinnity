@@ -15,7 +15,6 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
-use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::fullscreen;
 use concinnity_engine::render::fullscreen::TextBindCache;
@@ -129,7 +128,7 @@ impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
         // is pushed here rather than per label. The push follows the pipeline
         // bind, and the loop only ever binds descriptor sets with this same
         // layout, so nothing below invalidates it.
-        let ui = self.logical_size();
+        let ui = self.platform_window().control().logical_size();
         let text_push = TextUniforms {
             win_width: ui.0,
             win_height: ui.1,
@@ -162,7 +161,7 @@ impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
         // The text vertices are in overlay units (mapped to NDC by the shader's
         // divide by win_width/height); the scissor is in attachment pixels, so a
         // per-call clip rect scales between the two.
-        let ui = self.logical_size();
+        let ui = self.platform_window().control().logical_size();
 
         // Scissor a clipped (scrollable-panel) call to its band, restoring the
         // full-window scissor for an unclipped call so chrome is never cropped.

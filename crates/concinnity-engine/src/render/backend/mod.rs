@@ -220,10 +220,14 @@ pub trait RenderBackend:
     + SdfVolumeShaders
     + SkinnedDraws
     + TextureUploads
-    + WindowControl
     + WorldReload
     + WorldShaders
 {
+    /// The window this backend presents to.
+    fn window(&self) -> &dyn WindowControl;
+    /// The window this backend presents to, for its mutators.
+    fn window_mut(&mut self) -> &mut dyn WindowControl;
+
     /// Block until the GPU has drained every submitted frame.
     fn wait_idle(&self);
 
@@ -234,9 +238,12 @@ pub trait RenderBackend:
     /// of waiting itself; without a call it waits as before.
     fn prepare_frame(&mut self) {}
     /// Pump the window's pending events, so input taken next includes them.
-    /// `draw_frame` pumps on its own; this is for a caller that samples input
-    /// away from the draw.
-    fn pump_events(&mut self) {}
+    /// The frame's own [`WindowControl::window_closed`] pumps too; this is for
+    /// a caller that samples input away from it. The closed flag is sticky, so
+    /// that poll still reports a close.
+    fn pump_events(&mut self) {
+        self.window_mut().window_closed();
+    }
     /// Per-frame drive. See [`FrameParams`] for the inputs.
     ///
     /// # Errors
@@ -605,15 +612,15 @@ mod tests {
         assert_eq!(backend.gpu_profile().vendor, GpuVendor::Other);
         assert_eq!(backend.gpu_profile().memory_budget_bytes, 0);
         // Diagnostics a backend may leave to the default: zeroed here.
-        assert_eq!(backend.logical_size(), (0.0, 0.0));
+        assert_eq!(backend.window().logical_size(), (0.0, 0.0));
         // No chrome over the frame: UI anchored to the top starts at the top.
-        assert_eq!(backend.top_content_inset(), 0.0);
+        assert_eq!(backend.window().top_content_inset(), 0.0);
         assert_eq!(backend.render_stats(), RenderStats::default());
         // No window-bounds tracking: the in-engine cursor always draws.
-        assert!(!backend.cursor_outside_window());
+        assert!(!backend.window().cursor_outside_window());
         // No display enumeration and no hot-reload flag wired.
-        assert!(backend.display_modes().is_empty());
-        assert!(backend.current_display_mode().is_none());
+        assert!(backend.window().display_modes().is_empty());
+        assert!(backend.window().current_display_mode().is_none());
         assert!(backend.shader_reload_flag().is_none());
         // Not hot-swap-capable: a live world reload routes to a full rebuild.
         assert!(backend.hot_swap_config().is_none());
@@ -649,20 +656,24 @@ mod tests {
 
         // Streaming + cursor + capture no-ops.
         assert!(backend.seed_mesh_streaming(0, 0, 0, 0).is_ok());
-        backend.set_ui_cursor_hidden(true);
-        backend.set_menu_mode(true);
-        backend.set_camera_capture(true);
+        backend.window_mut().set_ui_cursor_hidden(true);
+        backend.window_mut().set_menu_mode(true);
+        backend.window_mut().set_camera_capture(true);
         backend.set_reflection_probes(&[], false);
 
         // Presentation + window no-ops.
-        backend.set_vsync(true);
-        backend.set_window_mode(crate::components::WindowMode::Fullscreen);
-        backend.set_window_size(1280, 720);
-        backend.set_display_mode(crate::window::display_mode::DisplayMode {
-            width: 1920,
-            height: 1080,
-            refresh_hz: 60,
-        });
+        backend.push_vsync(true);
+        backend
+            .window_mut()
+            .set_window_mode(crate::components::WindowMode::Fullscreen);
+        backend.window_mut().set_window_size(1280, 720);
+        backend
+            .window_mut()
+            .set_display_mode(crate::window::display_mode::DisplayMode {
+                width: 1920,
+                height: 1080,
+                refresh_hz: 60,
+            });
 
         // Live look + input tunable no-ops.
         backend.update_fog_settings(None);

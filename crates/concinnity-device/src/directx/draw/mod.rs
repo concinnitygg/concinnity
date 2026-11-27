@@ -418,6 +418,14 @@ pub(super) fn upload_static_records<T: Copy>(
 }
 
 impl RenderBackend for DxContext {
+    fn window(&self) -> &dyn WindowControl {
+        self.platform_window()
+    }
+
+    fn window_mut(&mut self) -> &mut dyn WindowControl {
+        self.platform_window_mut()
+    }
+
     fn wait_idle(&self) {
         // Staged geometry writes count as submitted work, so an idle GPU has
         // applied them.
@@ -454,7 +462,7 @@ impl RenderBackend for DxContext {
     // Block on the next frame slot ahead of the draw: DXGI's frame-latency
     // waitable, then the slot's fence. The draw's own wait then returns at once.
     fn prepare_frame(&mut self) {
-        if self.window_minimized() {
+        if self.platform_window().window_minimized() {
             return;
         }
         let mut gpu_wait = GpuWait::none();
@@ -464,11 +472,5 @@ impl RenderBackend for DxContext {
         {
             self.frame_latency_reserved = true;
         }
-    }
-
-    // Pump the window's messages outside the draw. The closed flag is sticky,
-    // so the frame's own poll still reports a close.
-    fn pump_events(&mut self) {
-        self.window_closed();
     }
 }

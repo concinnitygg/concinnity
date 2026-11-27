@@ -94,7 +94,8 @@ impl GraphicsSystem {
     ) {
         // Seed the frame extraction's viewport from the live backend;
         // FrameInput refreshes it once InputSystem starts publishing.
-        let viewport = super::reach(&mut self.backend).map_or((0.0, 0.0), |b| b.logical_size());
+        let viewport =
+            super::reach(&mut self.backend).map_or((0.0, 0.0), |b| b.window().logical_size());
         self.extractor.set_viewport(viewport);
         // OverlaySystem shapes the overlay draw list from these each frame.
         ctx.insert_resource(OverlayAssets {

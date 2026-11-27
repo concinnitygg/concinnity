@@ -80,15 +80,17 @@ pub fn submit(
         };
     }
 
-    backend.set_ui_cursor_hidden(snap.ui.cursor_hidden);
+    backend
+        .window_mut()
+        .set_ui_cursor_hidden(snap.ui.cursor_hidden);
     if let Some(on) = snap.ui.menu_mode {
-        backend.set_menu_mode(on);
+        backend.window_mut().set_menu_mode(on);
     }
     if let Some(capture) = snap.ui.camera_capture {
-        backend.set_camera_capture(capture);
+        backend.window_mut().set_camera_capture(capture);
     }
 
-    if backend.window_closed() {
+    if backend.window_mut().window_closed() {
         tracing::info!("window closed");
         backend.wait_idle();
         return SubmitOutcome::stop(replay);
