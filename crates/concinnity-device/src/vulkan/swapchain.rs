@@ -36,8 +36,9 @@ impl VkContext {
             // references it.
             unsafe { device.destroy_image_view(*iv, None) };
         }
-        // On a `reload_world` the successor inherits this swapchain, so it stays alive.
-        if !self.reused_by_successor {
+        // A `reload_world` successor shares this swapchain, so only the context
+        // holding the window frees it.
+        if self.hw.owns_shared_handles() {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
             // references it.

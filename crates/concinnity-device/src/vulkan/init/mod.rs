@@ -471,9 +471,6 @@ impl VkContext {
             wireframe: Wireframe::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
-            // A freshly built context owns its hardware outright; only
-            // `reload_world` flips this on the outgoing context.
-            reused_by_successor: false,
             world_content_destroyed: false,
             hw,
         };
@@ -784,9 +781,8 @@ impl WorldReload for VkContext {
         let (hw, loan) = self.hw.hand_over()?;
         let reuse = (hw, self.swapchain.share());
         // Free the old world before the successor builds so it reuses the memory. The
-        // flag set first keeps the swapchain for the successor; a failure unsets it
-        // and tears the swapchain down so `Drop` frees the hardware.
-        self.reused_by_successor = true;
+        // open window loan keeps the swapchain for the successor; a failure reclaims
+        // the window and tears the swapchain down so `Drop` frees the hardware.
         self.destroy_world_content();
         self.hw.alloc.reclaim_idle();
         // The old world's pipelines, layouts and render passes queued on the
@@ -802,7 +798,6 @@ impl WorldReload for VkContext {
             }
             Err(e) => {
                 self.hw.window.reclaim(loan);
-                self.reused_by_successor = false;
                 self.destroy_swapchain_resources();
                 Err(e)
             }

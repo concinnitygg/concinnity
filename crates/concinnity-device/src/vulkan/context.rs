@@ -865,8 +865,7 @@ pub(super) struct VkHardware {
 
 impl VkHardware {
     // The hardware handed to a successor on `reload_world`, with the window and
-    // timestamp pool moved out. Vulkan handles are not refcounted, so the outgoing
-    // `Drop` skips the shared surface and swapchain too.
+    // timestamp pool moved out.
     pub(super) fn hand_over(
         &mut self,
     ) -> error::RenderResult<(Self, WindowLoan<super::window::PlatformWindow>)> {
@@ -898,6 +897,14 @@ impl VkHardware {
             entry: self.entry.clone(),
         };
         Ok((hw, loan))
+    }
+
+    // Whether this hardware frees the surface, swapchain and allocator it shares
+    // with a `reload_world` successor or predecessor. Vulkan handles are not
+    // refcounted, so they follow the window: while a loan is open neither side
+    // frees them, and afterwards only the side left holding the window does.
+    pub(super) fn owns_shared_handles(&self) -> bool {
+        self.window.is_owned()
     }
 }
 
@@ -1127,10 +1134,6 @@ pub(crate) struct VkContext {
     // Stall-free texture streaming. See [`StreamState`].
     pub(super) stream: StreamState,
 
-    // Set on the outgoing context of a `reload_world`: the successor shares its
-    // instance, device, surface and swapchain, so `Drop` frees only this world's
-    // content. Vulkan handles are not refcounted, so this cannot be implicit.
-    pub(super) reused_by_successor: bool,
     // Set once `destroy_world_content` has run, so `Drop` never runs the
     // content teardown twice. True early on the outgoing context of a
     // `reload_world`, which frees its world before the successor builds (the
@@ -1448,16 +1451,13 @@ impl Drop for VkContext {
 
         // Device allocator: destroy every handle its dropped leases queued and
         // free the blocks. After the content pass above so all leases have
-        // dropped, before the device teardown below. On a reload the successor
-        // shares this allocator, so only a context that still owns it drains.
-        if !self.reused_by_successor {
+        // dropped, before the device teardown below. A reload's outgoing context
+        // and its successor share this allocator and surface, so only the
+        // context that owns the window frees them.
+        if self.hw.owns_shared_handles() {
             // SAFETY: `wait_idle` above left the GPU idle.
             unsafe { self.frame_capture.close() };
             self.hw.alloc.destroy();
-        }
-
-        // On a `reload_world` the successor inherited the surface, so it is left alone.
-        if !self.reused_by_successor {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
             // references it.

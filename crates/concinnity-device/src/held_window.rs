@@ -32,6 +32,13 @@ impl<W> HeldWindow<W> {
         self.window.as_mut()
     }
 
+    // Whether this holder has the window with no loan open on it: a fresh
+    // holder, a successor whose loan closed, or a lender that reclaimed it.
+    #[cfg(any(backend_vk, test))]
+    pub(crate) fn is_owned(&self) -> bool {
+        self.window.is_some() && self.lender.strong_count() == 0
+    }
+
     // Lend the window to a successor's holder, or `None` when it is already
     // lent.
     pub(crate) fn lend(&mut self) -> Option<(Self, WindowLoan<W>)> {
@@ -63,6 +70,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_fresh_holder_owns_its_window() {
+        assert!(HeldWindow::new(7).is_owned());
+    }
+
+    #[test]
     fn a_lent_window_leaves_its_lender_empty() {
         let mut held = HeldWindow::new(7);
         let (lent, _loan) = held.lend().expect("a held window lends");
@@ -72,12 +84,21 @@ mod tests {
     }
 
     #[test]
+    fn neither_side_owns_the_window_while_the_loan_is_open() {
+        let mut held = HeldWindow::new(7);
+        let (lent, _loan) = held.lend().expect("a held window lends");
+        assert!(!held.is_owned());
+        assert!(!lent.is_owned());
+    }
+
+    #[test]
     fn a_failed_successor_returns_the_window() {
         let mut held = HeldWindow::new(7);
         let (lent, loan) = held.lend().expect("a held window lends");
         drop(lent);
         held.reclaim(loan);
         assert_eq!(held.get(), Some(&7));
+        assert!(held.is_owned());
     }
 
     #[test]
@@ -85,6 +106,8 @@ mod tests {
         let mut held = HeldWindow::new(7);
         let (mut lent, loan) = held.lend().expect("a held window lends");
         drop(loan);
+        assert!(lent.is_owned());
+        assert!(!held.is_owned());
         assert_eq!(lent.get_mut(), Some(&mut 7));
         drop(lent);
         assert_eq!(held.get(), None);
