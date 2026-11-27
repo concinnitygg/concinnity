@@ -22,6 +22,7 @@ pub(in crate::vulkan) mod gbuffer;
 mod gbuffer_scope;
 mod gbuffer_sky;
 pub(in crate::vulkan) mod reflection_composite;
+mod reload;
 pub(in crate::vulkan) mod rt_reflections;
 pub(in crate::vulkan) mod ssao;
 pub(in crate::vulkan) mod ssgi;

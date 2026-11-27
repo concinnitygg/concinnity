@@ -3,274 +3,317 @@
 //! debug command sets the shared flag, and the main thread polls it at the top
 //! of `draw_frame`.
 //!
-//! Entirely a dev-loop concern: the flag exists only when `MtlContext::new` is
-//! called with `hot_reload = true`. Production `cn run` never sets it.
+//! Each feature's pipelines are one set below: how they are built from the
+//! current sources and where they are installed. A reload builds every live
+//! set before installing any, so a compile error leaves the running pipelines
+//! in place.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::metal::cull::ShadowViewIcb;
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::reload::{self, PostPipelines};
+use concinnity_engine::render::shader::pipeline_set::{self, Gated, PipelineSet, Pipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
-use objc2_metal::MTLPixelFormat;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLBuffer, MTLComputePipelineState, MTLPixelFormat, MTLRenderPipelineState};
 
-use super::auto_exposure::build_auto_exposure_pipelines;
+use super::auto_exposure::{AutoExposurePipelines, build_auto_exposure_pipelines};
 use super::context::MtlContext;
-use super::cull::{build_cull_pipeline, build_shadow_cull_pipeline};
+use super::cull::{CullPipeline, ShadowViewIcb, build_cull_pipeline, build_shadow_cull_pipeline};
 use super::decal::build_decal_pipeline;
 use super::fog::build_fog_pipeline;
-use super::hiz::build_hiz_pipelines;
+use super::grass::{GrassPipelines, GrassState};
+use super::hiz::{HiZResources, HizPipelines, build_hiz_pipelines};
 use super::init::pipelines::{
     BucketBuild, BucketPipelines, build_bindless_sampler_args, build_shadow_bindless_pipeline,
     make_vertex_descriptor, replacement,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::RtReflectionPipelines;
-use super::post::post_device::MtlPostDevice;
+use super::post::post_device::PostPipeline;
+use super::shadow_receivers::{ReceiverPipelines, ShadowReceiversGpu};
+use super::view_samples::ViewSamplesGpu;
+
+type RenderState = Retained<ProtocolObject<dyn MTLRenderPipelineState>>;
+type ComputeState = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
+
+// Every feature's pipeline set, in the order a reload builds them.
+const PIPELINE_SETS: &[&dyn PipelineSet<MtlContext>] = &[
+    &COMPOSITE,
+    &TEXT,
+    &ENGINE_POST,
+    &MAIN,
+    &WORLD_BUCKETS,
+    &HIZ,
+    &SHADOW_RECEIVERS,
+    &VIEW_SAMPLES,
+    &AUTO_EXPOSURE,
+    &DECAL,
+    &FOG,
+    &SKY,
+    &GRASS,
+    &RT_REFLECTIONS,
+    &SHADOW_CULL,
+    &SHADOW_BINDLESS,
+    &FAR_SHADOW_BINDLESS,
+];
+
+const COMPOSITE: Pipelines<MtlContext, RenderState> = Pipelines {
+    build: |c, hr| {
+        Some(build_post_pipeline(
+            &c.hw.device,
+            c.hw.swap_pixel_format,
+            hr,
+        ))
+    },
+    install: |c, p| c.composite.pipeline = p,
+};
+
+const TEXT: Pipelines<MtlContext, RenderState> = Pipelines {
+    build: |c, hr| {
+        c.text
+            .pipeline_state
+            .is_some()
+            .then(|| build_text_pipeline(&c.hw.device, c.hw.swap_pixel_format, hr))
+    },
+    install: |c, p| c.text.pipeline_state = Some(p),
+};
+
+// The engine-owned post passes that are live.
+const ENGINE_POST: Pipelines<MtlContext, Vec<PostPipelines<PostPipeline>>> = Pipelines {
+    build: |c, hr| {
+        Some(reload::build_live(&c.post_pipeline_device(hr), |pass| {
+            c.has_post_pass(pass)
+        }))
+    },
+    install: |c, built| {
+        for pipelines in built {
+            c.install_post_pipelines(pipelines);
+        }
+    },
+};
+
+// The bucket builds from the sources `hot_reload` selects.
+fn bucket_build(c: &MtlContext, hot_reload: bool) -> BucketBuild {
+    BucketBuild {
+        hot_reload,
+        ..c.bucket_build()
+    }
+}
+
+// Bucket 0's main pipelines with the GPU cull and argument encoders, which
+// share its sources. A world Shader's pair still wins.
+type MainPipelines = (
+    BucketPipelines,
+    CullPipeline,
+    Retained<ProtocolObject<dyn MTLBuffer>>,
+);
+const MAIN: Pipelines<MtlContext, MainPipelines> = Pipelines {
+    build: |c, hr| {
+        c.cull.main_pipeline.is_some().then(|| {
+            let device = &c.hw.device;
+            let main = replacement(
+                device,
+                0,
+                c.world_shader.as_ref(),
+                SurfaceVariant::Plain,
+                bucket_build(c, hr),
+                c.cull.main_pipeline.as_ref(),
+                None,
+            )?;
+            let cull = build_cull_pipeline(device, hr)?;
+            // The engine sampler block rides the fresh fragment's encoder.
+            let sampler_args = build_bindless_sampler_args(
+                device,
+                hr,
+                &c.scene.sampler,
+                &c.shadow.sampler,
+                &c.scene.cube_sampler,
+            )?;
+            Ok((main, cull, sampler_args))
+        })
+    },
+    install: |c, (main, cull, sampler_args)| {
+        c.cull.main_pipeline = Some(main);
+        c.arg_buffers.bindless_sampler_args = Some(sampler_args);
+        c.cull.pipeline = Some(cull.decide);
+        c.cull.pipeline_late = Some(cull.decide_late);
+        c.cull.scan_pipeline = Some(cull.scan);
+        c.cull.scatter_pipeline = Some(cull.scatter);
+        c.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
+        // Force the ICB rebuilds on the next frame so every argument buffer is
+        // re-encoded with the arg encoder the new scatter produced. The status
+        // buffers and the late ICB are rebuilt by the same `ensure_*_capacity`
+        // passes that rebuild the ICBs.
+        c.cull.icbs = Vec::new();
+        c.cull.icb_arg_buffer = None;
+        c.cull.icb_capacity = 0;
+        c.cull.icbs_late = Vec::new();
+        c.cull.icb_late_arg_buffer = None;
+        c.cull.status_buffer = None;
+        c.cull.shadow_views = ShadowViewIcb::default();
+        c.cull.spot_views = ShadowViewIcb::default();
+        c.cull.far_view = ShadowViewIcb::default();
+    },
+};
+
+// Every resident world Shader bucket's pipelines, main and pre-pass together.
+const WORLD_BUCKETS: Pipelines<MtlContext, Vec<(usize, BucketPipelines)>> = Pipelines {
+    build: |c, hr| Some(c.rebuild_world_buckets(bucket_build(c, hr))),
+    install: |c, buckets| {
+        for (bucket, pipelines) in buckets {
+            if let Some(live) = c.cull.world_pipelines.get_mut(bucket) {
+                *live = pipelines;
+            }
+        }
+    },
+};
+
+// The Hi-Z build kernels; the pyramid and its views are kept.
+const HIZ: Gated<MtlContext, HiZResources, HizPipelines> = Gated {
+    state: |c| c.cull.hiz.as_ref(),
+    state_mut: |c| c.cull.hiz.as_mut(),
+    build: |c, _, hr| build_hiz_pipelines(&c.hw.device, hr, c.targets.hdr.sample_count),
+    install: |hiz, (init, downsample)| hiz.swap_pipelines(init, downsample),
+};
+
+const SHADOW_RECEIVERS: Gated<MtlContext, ShadowReceiversGpu, ReceiverPipelines> = Gated {
+    state: |c| c.shadow_receivers.as_ref(),
+    state_mut: |c| c.shadow_receivers.as_mut(),
+    build: |c, _, hr| ReceiverPipelines::build(&c.hw.device, hr),
+    install: |r, p| r.pipelines = p,
+};
+
+const VIEW_SAMPLES: Gated<MtlContext, ViewSamplesGpu, ComputeState> = Gated {
+    state: |c| c.view_samples.as_ref(),
+    state_mut: |c| c.view_samples.as_mut(),
+    build: |c, _, hr| ViewSamplesGpu::build_pipeline(&c.hw.device, hr),
+    install: |v, p| v.pipeline = p,
+};
+
+const AUTO_EXPOSURE: Pipelines<MtlContext, AutoExposurePipelines> = Pipelines {
+    build: |c, hr| {
+        c.auto_exposure
+            .pipelines
+            .is_some()
+            .then(|| build_auto_exposure_pipelines(&c.hw.device, hr))
+    },
+    install: |c, p| c.auto_exposure.pipelines = Some(p),
+};
+
+const DECAL: Pipelines<MtlContext, RenderState> = Pipelines {
+    build: |c, hr| {
+        c.decal
+            .pipeline
+            .is_some()
+            .then(|| build_decal_pipeline(&c.hw.device, hr))
+    },
+    install: |c, p| c.decal.pipeline = Some(p),
+};
+
+const FOG: Pipelines<MtlContext, RenderState> = Pipelines {
+    build: |c, hr| {
+        c.fog
+            .pipeline
+            .is_some()
+            .then(|| build_fog_pipeline(&c.hw.device, hr))
+    },
+    install: |c, p| c.fog.pipeline = Some(p),
+};
+
+// The background sky and its motion behind the G-buffer pre-pass.
+const SKY: Pipelines<MtlContext, (RenderState, RenderState)> = Pipelines {
+    build: |c, hr| Some(sky_pipelines(c, hr)),
+    install: |c, (sky, velocity)| {
+        c.sky.pipeline = sky;
+        c.sky.velocity_pipeline = velocity;
+    },
+};
+
+fn sky_pipelines(c: &MtlContext, hot_reload: bool) -> RenderResult<(RenderState, RenderState)> {
+    let device = &c.hw.device;
+    let sky = super::sky::build_sky_pipeline(
+        device,
+        &super::builtin_shaders::SKY_FRAG,
+        c.targets.hdr.sample_count,
+        hot_reload,
+    )?;
+    let velocity = super::sky::build_sky_velocity_pipeline(device, hot_reload)?;
+    Ok((sky, velocity))
+}
+
+const GRASS: Gated<MtlContext, GrassState, GrassPipelines> = Gated {
+    state: |c| c.grass.as_ref(),
+    state_mut: |c| c.grass.as_mut(),
+    build: |c, _, hr| GrassPipelines::build(&c.hw.device, c.targets.hdr.sample_count, hr),
+    install: |grass, p| grass.pipelines = p,
+};
+
+const RT_REFLECTIONS: Pipelines<MtlContext, RtReflectionPipelines> = Pipelines {
+    build: |c, hr| {
+        c.rt.pipelines
+            .reflections
+            .is_some()
+            .then(|| RtReflectionPipelines::new(&c.hw.device, hr))
+    },
+    install: |c, p| c.rt.pipelines.reflections = Some(p),
+};
+
+// The GPU-driven shadow path: the frustum-only decision kernel and the
+// depth-only bindless draw, for the cascades and the far map.
+const SHADOW_CULL: Pipelines<MtlContext, ComputeState> = Pipelines {
+    build: |c, hr| {
+        c.cull
+            .shadow_pipeline
+            .is_some()
+            .then(|| build_shadow_cull_pipeline(&c.hw.device, hr))
+    },
+    install: |c, p| c.cull.shadow_pipeline = Some(p),
+};
+
+const SHADOW_BINDLESS: Pipelines<MtlContext, RenderState> = Pipelines {
+    build: |c, hr| {
+        c.cull
+            .shadow_bindless_pipeline
+            .is_some()
+            .then(|| shadow_bindless(c, MTLPixelFormat::Depth32Float, hr))
+    },
+    install: |c, p| c.cull.shadow_bindless_pipeline = Some(p),
+};
+
+const FAR_SHADOW_BINDLESS: Pipelines<MtlContext, RenderState> = Pipelines {
+    build: |c, hr| {
+        c.cull
+            .far_shadow_bindless_pipeline
+            .is_some()
+            .then(|| shadow_bindless(c, MTLPixelFormat::Depth16Unorm, hr))
+    },
+    install: |c, p| c.cull.far_shadow_bindless_pipeline = Some(p),
+};
+
+// The depth-only bindless shadow draw into `depth_format`, over the static
+// vertex layout.
+fn shadow_bindless(
+    c: &MtlContext,
+    depth_format: MTLPixelFormat,
+    hot_reload: bool,
+) -> RenderResult<RenderState> {
+    build_shadow_bindless_pipeline(
+        &c.hw.device,
+        &make_vertex_descriptor(),
+        depth_format,
+        hot_reload,
+    )
+}
 
 impl MtlContext {
-    // Rebuild every built-in pipeline from source into temporaries, swapping
-    // them in only when all succeed; a failure logs and keeps the live
-    // pipelines.
+    // Rebuild every live pipeline set from the current shader sources.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }
         self.hot_reload.generation += 1;
-        let device = &self.hw.device;
-        let hr = true;
-
-        // Build every replacement into a temporary first. A `?` early-return
-        // here means we never overwrite a live pipeline with a failed build:
-        // any compile error leaves the running session rendering with the
-        // previous shader source.
-        let post = build_post_pipeline(device, self.hw.swap_pixel_format, hr)?;
-        let text = rebuild_if_live!(
-            self.text.pipeline_state.is_some(),
-            build_text_pipeline(device, self.hw.swap_pixel_format, hr)
-        );
-        // Pipelines only: nothing here encodes, so the device needs no probe set.
-        let post_device = MtlPostDevice {
-            device,
-            sampler: &self.composite.sampler,
-            cube_sampler: &self.scene.cube_sampler,
-            probes: None,
-            timing: None,
-            hot_reload: hr,
-        };
-        let taa = rebuild_if_live!(
-            self.taa.pass.is_some(),
-            concinnity_engine::render::post::taa::build_pipelines(&post_device)
-        );
-        let bloom = rebuild_if_live!(
-            self.bloom.is_some(),
-            concinnity_engine::render::post::bloom::build_pipelines(&post_device)
-        );
-        // The main pass rebuilds with the GPU cull and argument encoders, which
-        // share its sources. A world Shader's pair still wins, and each bucket's
-        // main and pre-pass rebuild together.
-        let build = BucketBuild {
-            hot_reload: hr,
-            ..self.bucket_build()
-        };
-        let main = rebuild_if_live!(
-            self.cull.main_pipeline.is_some(),
-            replacement(
-                device,
-                0,
-                self.world_shader.as_ref(),
-                SurfaceVariant::Plain,
-                build,
-                self.cull.main_pipeline.as_ref(),
-                None,
-            )
-        );
-        let world_buckets = self.rebuild_world_buckets(build)?;
-        let main_cull = rebuild_if_live!(main.is_some(), build_cull_pipeline(device, hr));
-        // The engine sampler block rides the fresh fragment's encoder.
-        let main_sampler_args = rebuild_if_live!(
-            main.is_some(),
-            build_bindless_sampler_args(
-                device,
-                hr,
-                &self.scene.sampler,
-                &self.shadow.sampler,
-                &self.scene.cube_sampler,
-            )
-        );
-        // Hi-Z build kernels are engine built-ins (independent of the world
-        // shader); rebuild them whenever a Hi-Z resource exists so a saved
-        // edit to `hiz_build.hlsl` is picked up. The texture + mip views are
-        // kept: only the pipelines swap.
-        let hiz_samples = self.targets.hdr.sample_count;
-        let hiz = rebuild_if_live!(
-            self.cull.hiz.is_some(),
-            build_hiz_pipelines(device, hr, hiz_samples)
-        );
-        let receivers = rebuild_if_live!(
-            self.shadow_receivers.is_some(),
-            super::shadow_receivers::ReceiverPipelines::build(device, hr)
-        );
-        let view_samples = rebuild_if_live!(
-            self.view_samples.is_some(),
-            super::view_samples::ViewSamplesGpu::build_pipeline(device, hr)
-        );
-        let auto_ev = rebuild_if_live!(
-            self.auto_exposure.pipelines.is_some(),
-            build_auto_exposure_pipelines(device, hr)
-        );
-        let decal = rebuild_if_live!(
-            self.decal.pipeline.is_some(),
-            build_decal_pipeline(device, hr)
-        );
-        let fog = rebuild_if_live!(self.fog.pipeline.is_some(), build_fog_pipeline(device, hr));
-        let sky = super::sky::build_sky_pipeline(
-            device,
-            &super::builtin_shaders::SKY_FRAG,
-            self.targets.hdr.sample_count,
-            hr,
-        )?;
-        let sky_velocity = super::sky::build_sky_velocity_pipeline(device, hr)?;
-        let grass = rebuild_if_live!(
-            self.grass.is_some(),
-            super::grass::GrassPipelines::build(device, self.targets.hdr.sample_count, hr)
-        );
-
-        // The shadow pipeline needs the static vertex layout.
-        let static_vdesc = make_vertex_descriptor();
-        let ssao = rebuild_if_live!(
-            self.ssao.pass.is_some(),
-            concinnity_engine::render::post::ssao::build_pipelines(&post_device)
-        );
-        let ssr_resolve = rebuild_if_live!(
-            self.ssr.resolve.is_some(),
-            concinnity_engine::render::post::ssr::build_pipeline(&post_device)
-        );
-        let reflection_composite = rebuild_if_live!(
-            self.ssr.composite.is_some(),
-            concinnity_engine::render::post::reflection_composite::build_pipelines(&post_device)
-        );
-        let ssgi = rebuild_if_live!(
-            self.ssgi.pass.is_some(),
-            concinnity_engine::render::post::ssgi::build_pipelines(&post_device)
-        );
-        let disocclusion = rebuild_if_live!(
-            self.disocclusion.is_some(),
-            concinnity_engine::render::post::disocclusion::build_pipelines(&post_device)
-        );
-        let rt_reflections = rebuild_if_live!(
-            self.rt.pipelines.reflections.is_some(),
-            RtReflectionPipelines::new(device, hr)
-        );
-
-        // GPU-driven shadow pipelines: the frustum-only shadow
-        // decision kernel (from cull.hlsl) + the depth-only bindless shadow
-        // render pipeline. Both engine-internal, so they rebuild here. Gated on
-        // the live shadow-bindless path.
-        let shadow_cull = rebuild_if_live!(
-            self.cull.shadow_pipeline.is_some(),
-            build_shadow_cull_pipeline(device, hr)
-        );
-        let shadow_bindless = rebuild_if_live!(
-            self.cull.shadow_bindless_pipeline.is_some(),
-            build_shadow_bindless_pipeline(device, &static_vdesc, MTLPixelFormat::Depth32Float, hr)
-        );
-        let far_shadow_bindless = rebuild_if_live!(
-            self.cull.far_shadow_bindless_pipeline.is_some(),
-            build_shadow_bindless_pipeline(device, &static_vdesc, MTLPixelFormat::Depth16Unorm, hr)
-        );
-
-        // All builds succeeded: swap into the live context. After this
-        // point the next frame's draw calls bind the freshly compiled
-        // pipelines.
-        self.composite.pipeline = post;
-        if let (Some(p), Some(pass)) = (bloom, self.bloom.as_mut()) {
-            pass.swap_pipelines(p);
-        }
-        if let Some(p) = text {
-            self.text.pipeline_state = Some(p);
-        }
-        if let (Some(p), Some(taa)) = (taa, self.taa.pass.as_mut()) {
-            taa.swap_pipelines(p);
-        }
-        if let (Some(p), Some(cull), Some(sampler_args)) = (main, main_cull, main_sampler_args) {
-            self.cull.main_pipeline = Some(p);
-            self.arg_buffers.bindless_sampler_args = Some(sampler_args);
-            self.cull.pipeline = Some(cull.decide);
-            self.cull.pipeline_late = Some(cull.decide_late);
-            self.cull.scan_pipeline = Some(cull.scan);
-            self.cull.scatter_pipeline = Some(cull.scatter);
-            self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
-            // Force the ICB rebuilds on the next frame so every argument buffer
-            // is re-encoded with the arg encoder the new scatter produced.
-            // The status buffers and the late ICB are rebuilt by the same
-            // `ensure_*_capacity` passes that rebuild the ICBs.
-            self.cull.icbs = Vec::new();
-            self.cull.icb_arg_buffer = None;
-            self.cull.icb_capacity = 0;
-            self.cull.icbs_late = Vec::new();
-            self.cull.icb_late_arg_buffer = None;
-            self.cull.status_buffer = None;
-            self.cull.shadow_views = ShadowViewIcb::default();
-            self.cull.spot_views = ShadowViewIcb::default();
-            self.cull.far_view = ShadowViewIcb::default();
-        }
-        if let Some((init_pipeline, downsample_pipeline)) = hiz
-            && let Some(h) = self.cull.hiz.as_mut()
-        {
-            h.swap_pipelines(init_pipeline, downsample_pipeline);
-        }
-        if let Some(p) = auto_ev {
-            self.auto_exposure.pipelines = Some(p);
-        }
-        if let (Some(p), Some(r)) = (receivers, self.shadow_receivers.as_mut()) {
-            r.pipelines = p;
-        }
-        if let (Some(p), Some(v)) = (view_samples, self.view_samples.as_mut()) {
-            v.pipeline = p;
-        }
-        if let Some(p) = decal {
-            self.decal.pipeline = Some(p);
-        }
-        if let Some(p) = fog {
-            self.fog.pipeline = Some(p);
-        }
-        self.sky.pipeline = sky;
-        self.sky.velocity_pipeline = sky_velocity;
-        if let (Some(p), Some(grass)) = (grass, self.grass.as_mut()) {
-            grass.pipelines = p;
-        }
-        if let (Some(p), Some(pass)) = (ssao, self.ssao.pass.as_mut()) {
-            pass.swap_pipelines(p);
-        }
-        if let (Some(p), Some(resolve)) = (ssr_resolve, self.ssr.resolve.as_mut()) {
-            resolve.swap_pipeline(p);
-        }
-        if let (Some(p), Some(pass)) = (reflection_composite, self.ssr.composite.as_mut()) {
-            pass.swap_pipelines(p);
-        }
-        if let (Some(p), Some(pass)) = (ssgi, self.ssgi.pass.as_mut()) {
-            pass.swap_pipelines(p);
-        }
-        if let (Some(p), Some(pass)) = (disocclusion, self.disocclusion.as_mut()) {
-            pass.swap_pipelines(p);
-        }
-        if let Some(p) = rt_reflections {
-            self.rt.pipelines.reflections = Some(p);
-        }
-        if let Some(p) = shadow_cull {
-            self.cull.shadow_pipeline = Some(p);
-        }
-        if let Some(p) = shadow_bindless {
-            self.cull.shadow_bindless_pipeline = Some(p);
-        }
-        if let Some(p) = far_shadow_bindless {
-            self.cull.far_shadow_bindless_pipeline = Some(p);
-        }
-        for (bucket, pipelines) in world_buckets {
-            if let Some(live) = self.cull.world_pipelines.get_mut(bucket) {
-                *live = pipelines;
-            }
-        }
-        Ok(())
+        pipeline_set::rebuild(self, PIPELINE_SETS, true)
     }
 
     // Rebuild bucket 0's main and pre-pass pipelines from the world default

@@ -6,6 +6,7 @@ pub mod compiled;
 #[cfg(test)]
 pub(crate) mod consts;
 pub mod embedded;
+pub mod pipeline_set;
 pub mod programs;
 pub mod reload;
 pub mod source;

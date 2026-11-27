@@ -77,7 +77,7 @@ pub(super) struct HiZResources {
 }
 
 // The init and downsample compute pipelines produced from `hiz_build.hlsl`.
-type HizPipelines = (
+pub(super) type HizPipelines = (
     Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     Retained<ProtocolObject<dyn MTLComputePipelineState>>,
 );

@@ -89,12 +89,13 @@ impl GbufferSky {
         .build(device, "gbuffer sky")
     }
 
-    // A pipeline rebuilt from the current shader sources, for a hot reload.
+    // A pipeline rebuilt from the shader sources `hot_reload` selects.
     pub(in crate::vulkan) fn rebuild_pipeline(
         &self,
         device: &VkDevice,
+        hot_reload: bool,
     ) -> RenderResult<OwnedPipeline> {
-        Self::build_pipeline(device, self.layout.handle(), true)
+        Self::build_pipeline(device, self.layout.handle(), hot_reload)
     }
 
     pub(in crate::vulkan) fn swap_pipeline(&mut self, pipeline: OwnedPipeline) {

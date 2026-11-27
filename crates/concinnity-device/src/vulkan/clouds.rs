@@ -262,6 +262,18 @@ pub(in crate::vulkan) struct CloudInputs<'a> {
     pub(in crate::vulkan) msaa: bool,
 }
 
+// The clouds' kernels and composite, rebuilt together.
+pub(in crate::vulkan) struct CloudPipelines {
+    noise: OwnedPipeline,
+    march: OwnedPipeline,
+    reconstruct: OwnedPipeline,
+    shadow: OwnedPipeline,
+    panorama: OwnedPipeline,
+    weather: OwnedPipeline,
+    reflect: OwnedPipeline,
+    composite: OwnedPipeline,
+}
+
 pub(in crate::vulkan) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Option<CloudParams>,
@@ -588,50 +600,51 @@ impl CloudState {
         Ok(())
     }
 
-    // Rebuild the pipelines from the shader sources (shader hot reload).
-    pub(in crate::vulkan) fn rebuild_pipelines(
-        &mut self,
+    // The clouds' kernels and composite, rebuilt from the sources `hot_reload`
+    // selects over the live layouts.
+    pub(in crate::vulkan) fn build_pipelines(
+        &self,
         device: &VkDevice,
         scene_format: vk::Format,
         msaa: bool,
-    ) -> RenderResult<()> {
-        let noise_kernel = compute_pipeline(
-            device,
-            self.noise_layout.handle(),
-            &CLOUD_NOISE.compile(true)?,
-            CLOUD_NOISE.label,
-        )?;
-        let march_kernel =
-            depth_kernel(device, self.march_layout.handle(), &CLOUD_MARCH, msaa, true)?;
-        let reconstruct_kernel = depth_kernel(
-            device,
-            self.march_layout.handle(),
-            &CLOUD_RECONSTRUCT,
-            msaa,
-            true,
-        )?;
-        let shadow_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_SHADOW, true)?;
-        let panorama_kernel =
-            map_kernel(device, self.march_layout.handle(), &CLOUD_PANORAMA, true)?;
-        let weather_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_WEATHER, true)?;
-        let reflect_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_REFLECT, true)?;
-        let composite_pipeline = build_composite_pipeline(
-            device,
-            self.composite_layout.handle(),
-            scene_format,
-            msaa,
-            true,
-        )?;
-        self.noise_kernel = noise_kernel;
-        self.march_kernel = march_kernel;
-        self.reconstruct_kernel = reconstruct_kernel;
-        self.shadow_kernel = shadow_kernel;
-        self.panorama_kernel = panorama_kernel;
-        self.weather_kernel = weather_kernel;
-        self.reflect_kernel = reflect_kernel;
-        self.composite_pipeline = composite_pipeline;
+        hot_reload: bool,
+    ) -> RenderResult<CloudPipelines> {
+        let march_layout = self.march_layout.handle();
+        Ok(CloudPipelines {
+            noise: compute_pipeline(
+                device,
+                self.noise_layout.handle(),
+                &CLOUD_NOISE.compile(hot_reload)?,
+                CLOUD_NOISE.label,
+            )?,
+            march: depth_kernel(device, march_layout, &CLOUD_MARCH, msaa, hot_reload)?,
+            reconstruct: depth_kernel(device, march_layout, &CLOUD_RECONSTRUCT, msaa, hot_reload)?,
+            shadow: map_kernel(device, march_layout, &CLOUD_SHADOW, hot_reload)?,
+            panorama: map_kernel(device, march_layout, &CLOUD_PANORAMA, hot_reload)?,
+            weather: map_kernel(device, march_layout, &CLOUD_WEATHER, hot_reload)?,
+            reflect: map_kernel(device, march_layout, &CLOUD_REFLECT, hot_reload)?,
+            composite: build_composite_pipeline(
+                device,
+                self.composite_layout.handle(),
+                scene_format,
+                msaa,
+                hot_reload,
+            )?,
+        })
+    }
+
+    // Install rebuilt pipelines; the noise volume is rebuilt with the new
+    // kernel.
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, p: CloudPipelines) {
+        self.noise_kernel = p.noise;
+        self.march_kernel = p.march;
+        self.reconstruct_kernel = p.reconstruct;
+        self.shadow_kernel = p.shadow;
+        self.panorama_kernel = p.panorama;
+        self.weather_kernel = p.weather;
+        self.reflect_kernel = p.reflect;
+        self.composite_pipeline = p.composite;
         self.schedule.rebuild_noise();
-        Ok(())
     }
 
     // Release the pooled resources ahead of the device.

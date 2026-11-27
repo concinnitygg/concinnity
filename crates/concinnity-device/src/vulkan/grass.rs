@@ -665,10 +665,23 @@ impl GrassResources {
         if self.prepass.is_some() && !rebuild {
             return;
         }
-        match build_prepass_pipelines(device, self.layouts.prepass.handle(), hot_reload) {
-            Ok(pipeline) => self.prepass = Some(pipeline),
+        match self.build_prepass(device, hot_reload) {
+            Ok(pipelines) => self.prepass = Some(pipelines),
             Err(e) => tracing::warn!("grass: the G-buffer pre-pass draw failed to build: {e}"),
         }
+    }
+
+    // The G-buffer pre-pass draws, built from the sources `hot_reload` selects.
+    pub(in crate::vulkan) fn build_prepass(
+        &self,
+        device: &VkDevice,
+        hot_reload: bool,
+    ) -> RenderResult<GrassDrawPipelines> {
+        build_prepass_pipelines(device, self.layouts.prepass.handle(), hot_reload)
+    }
+
+    pub(in crate::vulkan) fn swap_prepass(&mut self, pipelines: GrassDrawPipelines) {
+        self.prepass = Some(pipelines);
     }
 }
 

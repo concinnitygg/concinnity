@@ -17,6 +17,7 @@ pub(in crate::directx) mod disocclusion;
 pub(in crate::directx) mod gbuffer;
 mod gbuffer_sky;
 pub(in crate::directx) mod reflection_composite;
+mod reload;
 pub(in crate::directx) mod rt_reflections;
 pub(in crate::directx) mod ssao;
 pub(in crate::directx) mod ssgi;

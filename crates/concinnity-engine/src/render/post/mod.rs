@@ -64,6 +64,9 @@ pub mod ssao;
 /// Screen-space global illumination: the gather and composite, written once.
 pub mod ssgi;
 
+/// The engine-owned post passes' pipelines as a shader rebuild makes them.
+pub mod reload;
+
 pub mod ssr;
 
 pub mod taa;

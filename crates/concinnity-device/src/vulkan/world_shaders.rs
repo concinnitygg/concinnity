@@ -163,9 +163,14 @@ impl VkContext {
     pub(in crate::vulkan) fn rebuild_world_buckets(
         &self,
         engine: &BindlessSpv,
+        hot_reload: bool,
     ) -> RenderResult<Vec<(usize, BucketPipelines)>> {
         let Some(targets) = self.bucket_pipeline_targets() else {
             return Ok(Vec::new());
+        };
+        let targets = BucketPipelineTargets {
+            hot_reload,
+            ..targets
         };
         let mut rebuilt = Vec::new();
         for bucket in self.cull.world_pipelines.resident_buckets() {

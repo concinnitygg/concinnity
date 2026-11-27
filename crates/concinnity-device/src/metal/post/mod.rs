@@ -22,6 +22,7 @@ pub(super) mod fullscreen;
 pub(super) mod gbuffer;
 pub(super) mod post_device;
 pub(super) mod reflection_composite;
+mod reload;
 pub(super) mod rt_reflections;
 pub(super) mod ssao;
 pub(super) mod ssgi;

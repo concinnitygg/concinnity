@@ -76,6 +76,18 @@ pub(in crate::directx) struct CloudSlots {
     pub gpu: [SrvSlot; CLOUD_SLOTS],
 }
 
+// The clouds' kernels and composite, rebuilt together.
+pub(in crate::directx) struct CloudPipelines {
+    noise: ID3D12PipelineState,
+    march: ID3D12PipelineState,
+    reconstruct: ID3D12PipelineState,
+    shadow: ID3D12PipelineState,
+    panorama: ID3D12PipelineState,
+    weather: ID3D12PipelineState,
+    reflect: ID3D12PipelineState,
+    composite: ID3D12PipelineState,
+}
+
 pub(in crate::directx) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Cell<Option<CloudParams>>,
@@ -561,47 +573,44 @@ impl CloudState {
         Ok(())
     }
 
-    // Rebuild every pipeline from the shader sources (shader hot reload).
-    pub(in crate::directx) fn rebuild_pipelines(
-        &mut self,
+    // The clouds' kernels and composite, rebuilt from the current sources over
+    // the live root signatures.
+    pub(in crate::directx) fn build_pipelines(
+        &self,
         device: &ID3D12Device,
         msaa_samples: u32,
-    ) -> RenderResult<()> {
-        let noise_pso = compute_pso(
-            device,
-            &self.noise_root_sig,
-            &CLOUD_NOISE.compile(true)?,
-            CLOUD_NOISE.label,
-        )?;
-        let march_pso = depth_pso(
-            device,
-            &self.march_root_sig,
-            &CLOUD_MARCH,
-            msaa_samples,
-            true,
-        )?;
-        let reconstruct_pso = depth_pso(
-            device,
-            &self.march_root_sig,
-            &CLOUD_RECONSTRUCT,
-            msaa_samples,
-            true,
-        )?;
-        let shadow_pso = map_pso(device, &self.march_root_sig, &CLOUD_SHADOW, true)?;
-        let panorama_pso = map_pso(device, &self.march_root_sig, &CLOUD_PANORAMA, true)?;
-        let weather_pso = map_pso(device, &self.march_root_sig, &CLOUD_WEATHER, true)?;
-        let reflect_pso = map_pso(device, &self.march_root_sig, &CLOUD_REFLECT, true)?;
-        let composite_pso = composite_pso(device, &self.composite_root_sig, msaa_samples, true)?;
-        self.noise_pso = noise_pso;
-        self.march_pso = march_pso;
-        self.reconstruct_pso = reconstruct_pso;
-        self.shadow_pso = shadow_pso;
-        self.panorama_pso = panorama_pso;
-        self.weather_pso = weather_pso;
-        self.reflect_pso = reflect_pso;
-        self.composite_pso = composite_pso;
+        hot_reload: bool,
+    ) -> RenderResult<CloudPipelines> {
+        let march = &self.march_root_sig;
+        Ok(CloudPipelines {
+            noise: compute_pso(
+                device,
+                &self.noise_root_sig,
+                &CLOUD_NOISE.compile(hot_reload)?,
+                CLOUD_NOISE.label,
+            )?,
+            march: depth_pso(device, march, &CLOUD_MARCH, msaa_samples, hot_reload)?,
+            reconstruct: depth_pso(device, march, &CLOUD_RECONSTRUCT, msaa_samples, hot_reload)?,
+            shadow: map_pso(device, march, &CLOUD_SHADOW, hot_reload)?,
+            panorama: map_pso(device, march, &CLOUD_PANORAMA, hot_reload)?,
+            weather: map_pso(device, march, &CLOUD_WEATHER, hot_reload)?,
+            reflect: map_pso(device, march, &CLOUD_REFLECT, hot_reload)?,
+            composite: composite_pso(device, &self.composite_root_sig, msaa_samples, hot_reload)?,
+        })
+    }
+
+    // Install rebuilt pipelines; the noise volume is rebuilt with the new
+    // kernel.
+    pub(in crate::directx) fn swap_pipelines(&mut self, p: CloudPipelines) {
+        self.noise_pso = p.noise;
+        self.march_pso = p.march;
+        self.reconstruct_pso = p.reconstruct;
+        self.shadow_pso = p.shadow;
+        self.panorama_pso = p.panorama;
+        self.weather_pso = p.weather;
+        self.reflect_pso = p.reflect;
+        self.composite_pso = p.composite;
         self.schedule.rebuild_noise();
-        Ok(())
     }
 
     // This frame's constants for `settings` and `frame` seen from `view`,

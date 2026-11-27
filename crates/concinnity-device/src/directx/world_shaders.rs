@@ -128,6 +128,7 @@ impl DxContext {
     pub(in crate::directx) fn rebuild_world_buckets(
         &self,
         engine: &BindlessMainShaders,
+        hot_reload: bool,
     ) -> RenderResult<Vec<(usize, BucketPsos)>> {
         let Some(targets) = self.world_pso_targets() else {
             return Ok(Vec::new());
@@ -144,7 +145,7 @@ impl DxContext {
                     root_sigs: &targets.root_sigs,
                     msaa_samples: targets.msaa_samples,
                     engine_default: engine,
-                    hot_reload: targets.hot_reload,
+                    hot_reload,
                 },
                 bucket,
                 &BucketSource {

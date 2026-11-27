@@ -19,7 +19,7 @@ use super::super::context::VkContext;
 use crate::vulkan::graph_exec::GraphFrameParams;
 use crate::vulkan::main_pass::{self, MainClose, MainOpen, SceneResumers};
 use crate::vulkan::record::Recorder;
-use crate::vulkan::rendering::ImageUse;
+use crate::vulkan::rendering::{ImageUse, Transition};
 
 impl VkContext {
     // Encode the main HDR scene pass for frame slot `frame_idx`, resolving into
@@ -37,14 +37,11 @@ impl VkContext {
         // resolve of an undrawn frame would be the paused frame's main GPU cost. A
         // lone barrier leaves hdr_resolve ready to sample. The single-sample path has
         // no resolve, so it keeps its clear-only pass.
-        if world_hidden && self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1 {
-            super::super::texture::transition_image_layout(
-                rec,
-                self.targets.hdr_resolve_images[frame_idx].image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::ImageAspectFlags::COLOR,
-            );
+        if world_hidden && self.main_msaa() {
+            let scene = self.targets.hdr_resolve_images[frame_idx].image;
+            rec.transition(&[
+                Transition::color(scene, ImageUse::Sampled, ImageUse::Sampled).discarding(),
+            ]);
             return;
         }
 

@@ -60,13 +60,14 @@ impl GbufferSky {
         )
     }
 
-    // A pipeline state rebuilt from the current shader sources, for a hot reload.
+    // A pipeline state rebuilt from the shader sources `hot_reload` selects.
     pub(in crate::directx) fn rebuild_pso(
         &self,
         device: &ID3D12Device,
         info_queue: Option<&ID3D12InfoQueue>,
+        hot_reload: bool,
     ) -> RenderResult<ID3D12PipelineState> {
-        Self::build_pso(device, &self.root_sig, info_queue, true)
+        Self::build_pso(device, &self.root_sig, info_queue, hot_reload)
     }
 
     pub(in crate::directx) fn swap_pso(&mut self, pso: ID3D12PipelineState) {

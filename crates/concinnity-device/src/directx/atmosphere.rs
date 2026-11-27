@@ -81,6 +81,15 @@ pub(in crate::directx) struct AtmosphereSlots {
     pub depth_srv_gpu: SrvSlot,
 }
 
+// The air's pipelines, rebuilt together.
+pub(in crate::directx) struct AtmospherePipelines {
+    kernels: [ID3D12PipelineState; 5],
+    sky_cube: Option<ID3D12PipelineState>,
+    sky: ID3D12PipelineState,
+    aerial: ID3D12PipelineState,
+    clouds: Option<super::clouds::CloudPipelines>,
+}
+
 pub(in crate::directx) struct AtmosphereState {
     settings: AtmosphereSettings,
     // This frame's inputs; `None` leaves the passes out of the graph.
@@ -594,33 +603,58 @@ impl AtmosphereState {
         }
     }
 
-    // Rebuild every pipeline from the shader sources (shader hot reload).
-    pub(in crate::directx) fn rebuild_pipelines(
-        &mut self,
+    // The air's kernels, sky and aerial pipelines and the clouds', rebuilt from
+    // the current sources over the live root signatures.
+    pub(in crate::directx) fn build_pipelines(
+        &self,
         device: &ID3D12Device,
         msaa_samples: u32,
-    ) -> RenderResult<()> {
-        let kernels = kernels(device, &self.kernel_root_sig, true)?;
-        if let Some(c) = self.sky_cube.as_mut() {
-            c.kernel = kernel(device, &self.kernel_root_sig, &ATMOSPHERE_SKY_CUBE, true)?;
-            c.schedule.get_mut().reset();
+        hot_reload: bool,
+    ) -> RenderResult<AtmospherePipelines> {
+        Ok(AtmospherePipelines {
+            kernels: kernels(device, &self.kernel_root_sig, hot_reload)?,
+            sky_cube: self
+                .sky_cube
+                .as_ref()
+                .map(|_| {
+                    kernel(
+                        device,
+                        &self.kernel_root_sig,
+                        &ATMOSPHERE_SKY_CUBE,
+                        hot_reload,
+                    )
+                })
+                .transpose()?,
+            sky: super::sky::build_sky_pso(
+                device,
+                &SKY_ATMOSPHERE_FRAG,
+                &self.sky_root_sig,
+                msaa_samples,
+                hot_reload,
+            )?,
+            aerial: aerial_pso(device, &self.aerial_root_sig, msaa_samples, hot_reload)?,
+            clouds: self
+                .clouds
+                .as_ref()
+                .map(|c| c.build_pipelines(device, msaa_samples, hot_reload))
+                .transpose()?,
+        })
+    }
+
+    // Install rebuilt pipelines; the tables and the sky cube are rebuilt with
+    // the new kernels.
+    pub(in crate::directx) fn swap_pipelines(&mut self, p: AtmospherePipelines) {
+        self.kernels = p.kernels;
+        if let (Some(cube), Some(kernel)) = (self.sky_cube.as_mut(), p.sky_cube) {
+            cube.kernel = kernel;
+            cube.schedule.get_mut().reset();
         }
-        let sky_pso = super::sky::build_sky_pso(
-            device,
-            &SKY_ATMOSPHERE_FRAG,
-            &self.sky_root_sig,
-            msaa_samples,
-            true,
-        )?;
-        let aerial_pso = aerial_pso(device, &self.aerial_root_sig, msaa_samples, true)?;
-        if let Some(clouds) = self.clouds.as_mut() {
-            clouds.rebuild_pipelines(device, msaa_samples)?;
+        self.sky_pso = p.sky;
+        self.aerial_pso = p.aerial;
+        if let (Some(clouds), Some(pipelines)) = (self.clouds.as_mut(), p.clouds) {
+            clouds.swap_pipelines(pipelines);
         }
-        self.kernels = kernels;
-        self.sky_pso = sky_pso;
-        self.aerial_pso = aerial_pso;
         self.air_tables.invalidate();
-        Ok(())
     }
 
     fn params_gva(&self, frame_idx: usize) -> Option<u64> {

@@ -3,419 +3,388 @@
 //! command sets the shared flag, and the main thread polls it at the top of
 //! `draw_frame`.
 //!
-//! Entirely a dev-loop concern: the flag exists only when `DxContext::new` is
-//! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
-//! `src/metal/hot_reload.rs`.
+//! Each feature's PSOs are one set below: how they are built from the current
+//! sources and where they are installed. A reload builds every live set before
+//! installing any, so a compile error leaves the running PSOs in place.
 
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::reload::{self, PostPipelines};
+use concinnity_engine::render::shader::pipeline_set::{self, Gated, PipelineSet, Pipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
+use windows::Win32::Graphics::Direct3D12::{ID3D12PipelineState, ID3D12RootSignature};
 
-use concinnity_engine::render::post;
-use concinnity_engine::render::post::disocclusion::DisocclusionPipelines;
-use concinnity_engine::render::post::reflection_composite::ReflectionCompositePipelines;
-use concinnity_engine::render::post::ssao::SsaoPipelines;
-use concinnity_engine::render::post::ssgi::SsgiPipelines;
-use concinnity_engine::render::post::taa::TaaPipelines;
-
-use super::context::DxContext;
-use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
-use super::post::post_device::PostPipeline;
+use super::atmosphere::{AtmospherePipelines, AtmosphereState};
+use super::auto_exposure::AutoExposureResources;
+use super::context::{DxContext, dump_on_err};
+use super::cull::CullKernels;
+use super::decal::DecalResources;
+use super::fog::FogResources;
+use super::grass::GrassPipelines;
+use super::hiz::HiZResources;
+use super::init::pipelines::{
+    BindlessMainShaders, BucketPipelineTargets, BucketPsos, build_bucket_pipeline,
+};
+use super::line::LineResources;
+use super::post::gbuffer::GbufferResources;
+use super::post::post_device::{DxPostDevice, PostPipeline};
+use super::post::rt_reflections::{
+    RebuiltRtPipelines, RtReflectionsResources, rebuild_rt_reflections_pipelines,
+    swap_rt_reflections_pipelines,
+};
+use super::pso::compute_pso;
+use super::shadow_receivers::ShadowReceiversGpu;
+use super::transparent::TransparentResources;
+use super::view_samples::ViewSamplesGpu;
 use crate::directx::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
-// The passes drawn through the shared post-pass seam, each rebuilt only when
-// live.
-struct SharedPostPipelines {
-    ssao: Option<SsaoPipelines<PostPipeline>>,
-    ssr: Option<PostPipeline>,
-    ssgi: Option<SsgiPipelines<PostPipeline>>,
-    disocclusion: Option<DisocclusionPipelines<PostPipeline>>,
-    taa: Option<TaaPipelines<PostPipeline>>,
-    reflection_composite: Option<ReflectionCompositePipelines<PostPipeline>>,
+type Pso = ID3D12PipelineState;
+
+// Every feature's PSO set, in the order a reload builds them.
+const PIPELINE_SETS: &[&dyn PipelineSet<DxContext>] = &[
+    &COMPOSITE,
+    &TEXT,
+    &ENGINE_POST,
+    &MAIN,
+    &CULL,
+    &HIZ,
+    &AUTO_EXPOSURE,
+    &SHADOW_RECEIVERS,
+    &VIEW_SAMPLES,
+    &SKY,
+    &ATMOSPHERE,
+    &GBUFFER_SKY,
+    &GRASS,
+    &DECAL,
+    &LINES,
+    &TRANSPARENT,
+    &FOG,
+    &RT_REFLECTIONS,
+];
+
+const COMPOSITE: Pipelines<DxContext, Pso> = Pipelines {
+    build: |c, hr| {
+        Some(
+            super::pipeline::compile_composite_shaders(hr).and_then(|(vs, ps)| {
+                dump_on_err(
+                    c.hw.info_queue.as_ref(),
+                    super::pipeline::create_composite_pso(
+                        &c.hw.device,
+                        &c.composite.root_sig,
+                        &vs,
+                        &ps,
+                        c.swapchain.format,
+                    ),
+                )
+            }),
+        )
+    },
+    install: |c, p| c.composite.pso = p,
+};
+
+const TEXT: Pipelines<DxContext, Pso> = Pipelines {
+    build: |c, hr| {
+        c.text.pso.is_some().then(|| {
+            let (vs, ps) = super::pipeline::compile_text_shaders(hr)?;
+            dump_on_err(
+                c.hw.info_queue.as_ref(),
+                super::pipeline::create_text_pso(
+                    &c.hw.device,
+                    &c.text.root_sig,
+                    &vs,
+                    &ps,
+                    c.swapchain.format,
+                    1,
+                ),
+            )
+        })
+    },
+    install: |c, p| c.text.pso = Some(p),
+};
+
+// The engine-owned post passes that are live.
+const ENGINE_POST: Pipelines<DxContext, Vec<PostPipelines<PostPipeline>>> = Pipelines {
+    build: |c, hr| {
+        let device = DxPostDevice {
+            hot_reload: hr,
+            ..c.post_device(0)
+        };
+        Some(reload::build_live(&device, |pass| c.has_post_pass(pass)))
+    },
+    install: |c, built| {
+        for pipelines in built {
+            c.install_post_pipelines(pipelines);
+        }
+    },
+};
+
+// Every shader bucket's main and pre-pass PSOs, rebuilt as pairs so they never
+// compile from different templates.
+type MainPsos = (BucketPsos, Vec<(usize, BucketPsos)>, BindlessMainShaders);
+const MAIN: Pipelines<DxContext, MainPsos> = Pipelines {
+    build: |c, hr| {
+        (c.cull.main_bindless_root_sig.is_some() && c.cull.main_bindless_pso.is_some()).then(|| {
+            let engine = super::init::pipelines::compile_main_bindless_shaders(hr)?;
+            let main = c.build_world_main_pso(c.world_shader.as_ref(), &engine, hr)?;
+            let world_buckets = c.rebuild_world_buckets(&engine, hr)?;
+            Ok((main, world_buckets, engine))
+        })
+    },
+    install: |c, (main, world_buckets, engine)| {
+        c.cull.main_bindless_pso = Some(main.main);
+        c.cull.main_prepass_pso = main.prepass;
+        c.swap_world_buckets(world_buckets);
+        c.cull.bindless_main_shaders = engine;
+        // The wireframe twins were built from the old sources; the next
+        // wireframe frame rebuilds them.
+        c.invalidate_wireframe_pipelines();
+    },
+};
+
+// A compute PSO from `cs` against `root_sig`, its failures dumped from the
+// info queue.
+fn compute(
+    c: &DxContext,
+    root_sig: &ID3D12RootSignature,
+    cs: &[u8],
+    label: &str,
+) -> RenderResult<Pso> {
+    dump_on_err(
+        c.hw.info_queue.as_ref(),
+        compute_pso(&c.hw.device, root_sig, cs, label),
+    )
 }
 
+// The cull PSO, and its late twin (two-pass occlusion) when built, both
+// against the shared root signature.
+const CULL: Gated<DxContext, CullKernels, (Pso, Option<Pso>)> = Gated {
+    state: |c| c.cull.cull_kernels.as_ref(),
+    state_mut: |c| c.cull.cull_kernels.as_mut(),
+    build: |c, kernels, hr| {
+        let create = |cs: &[u8]| {
+            dump_on_err(
+                c.hw.info_queue.as_ref(),
+                super::cull::create_cull_pso(&c.hw.device, &kernels.root_sig, cs),
+            )
+        };
+        let pso = create(&CULL_EARLY.compile(hr)?)?;
+        let late = kernels
+            .pso_late
+            .as_ref()
+            .map(|_| create(&CULL_LATE.compile(hr)?))
+            .transpose()?;
+        Ok((pso, late))
+    },
+    install: |kernels, (pso, late)| {
+        kernels.pso = pso;
+        kernels.pso_late = late;
+    },
+};
+
+// The three SPD kernels, against the existing root signatures so the live
+// cull root binding stays valid. The tail takes the signature without the
+// depth SRV table.
+const HIZ: Gated<DxContext, HiZResources, (Pso, Pso, Pso)> = Gated {
+    state: |c| c.cull.hiz.as_ref(),
+    state_mut: |c| c.cull.hiz.as_mut(),
+    build: |c, hiz, hr| {
+        let (single, msaa, tail) = super::hiz::compile_hiz_shaders(hr)?;
+        Ok((
+            compute(c, &hiz.root_sig, &single, "hiz spd_single")?,
+            compute(c, &hiz.root_sig, &msaa, "hiz spd_msaa")?,
+            compute(c, &hiz.tail_root_sig, &tail, "hiz spd_tail")?,
+        ))
+    },
+    install: |hiz, (single, msaa, tail)| hiz.swap_pipelines(single, msaa, tail),
+};
+
+const AUTO_EXPOSURE: Gated<DxContext, AutoExposureResources, (Pso, Pso)> = Gated {
+    state: |c| c.auto_exposure.resources.as_ref(),
+    state_mut: |c| c.auto_exposure.resources.as_mut(),
+    build: |c, ae, hr| {
+        let (build, average) = super::auto_exposure::compile_auto_exposure_shaders(hr)?;
+        Ok((
+            compute(c, ae.build_root_sig(), &build, "auto-exposure build")?,
+            compute(c, ae.average_root_sig(), &average, "auto-exposure average")?,
+        ))
+    },
+    install: |ae, (build, average)| ae.swap_pipelines(build, average),
+};
+
+const SHADOW_RECEIVERS: Gated<DxContext, ShadowReceiversGpu, (Pso, Pso)> = Gated {
+    state: |c| c.shadow_receivers.as_ref(),
+    state_mut: |c| c.shadow_receivers.as_mut(),
+    build: |c, r, hr| {
+        dump_on_err(
+            c.hw.info_queue.as_ref(),
+            r.rebuild_pipelines(&c.hw.device, hr),
+        )
+    },
+    install: |r, p| r.swap_pipelines(p),
+};
+
+const VIEW_SAMPLES: Gated<DxContext, ViewSamplesGpu, Pso> = Gated {
+    state: |c| c.view_samples.as_ref(),
+    state_mut: |c| c.view_samples.as_mut(),
+    build: |c, v, hr| {
+        dump_on_err(
+            c.hw.info_queue.as_ref(),
+            v.rebuild_pipeline(&c.hw.device, hr),
+        )
+    },
+    install: |v, p| v.swap_pipeline(p),
+};
+
+const SKY: Pipelines<DxContext, Pso> = Pipelines {
+    build: |c, hr| {
+        Some(dump_on_err(
+            c.hw.info_queue.as_ref(),
+            super::sky::build_sky_pso(
+                &c.hw.device,
+                &super::builtin_shaders::SKY_FRAG,
+                c.sky.root_sig(),
+                c.targets.hdr.msaa_samples,
+                hr,
+            ),
+        ))
+    },
+    install: |c, p| c.sky.swap_pso(p),
+};
+
+const ATMOSPHERE: Gated<DxContext, AtmosphereState, AtmospherePipelines> = Gated {
+    state: |c| c.atmosphere.as_ref(),
+    state_mut: |c| c.atmosphere.as_mut(),
+    build: |c, a, hr| a.build_pipelines(&c.hw.device, c.targets.hdr.msaa_samples, hr),
+    install: AtmosphereState::swap_pipelines,
+};
+
+// The sky's motion behind the G-buffer pre-pass.
+const GBUFFER_SKY: Gated<DxContext, GbufferResources, Pso> = Gated {
+    state: |c| c.gbuffer.as_ref(),
+    state_mut: |c| c.gbuffer.as_mut(),
+    build: |c, gb, hr| {
+        gb.sky
+            .rebuild_pso(&c.hw.device, c.hw.info_queue.as_ref(), hr)
+    },
+    install: |gb, p| gb.sky.swap_pso(p),
+};
+
+const GRASS: Pipelines<DxContext, GrassPipelines> = Pipelines {
+    build: |c, hr| match (
+        c.grass.as_ref(),
+        c.cull.main_bindless_root_sig.as_ref(),
+        c.cull.prepass_root_sig.as_ref(),
+    ) {
+        (Some(_), Some(main), Some(prepass)) => Some(dump_on_err(
+            c.hw.info_queue.as_ref(),
+            GrassPipelines::build(
+                &c.hw.device,
+                super::grass::GrassRootSigs { main, prepass },
+                c.targets.hdr.msaa_samples,
+                hr,
+            ),
+        )),
+        _ => None,
+    },
+    install: |c, p| {
+        if let Some(grass) = c.grass.as_mut() {
+            grass.pipelines = p;
+        }
+    },
+};
+
+const DECAL: Gated<DxContext, DecalResources, Pso> = Gated {
+    state: |c| c.decal.state.as_ref(),
+    state_mut: |c| c.decal.state.as_mut(),
+    build: |c, decals, hr| {
+        super::decal::rebuild_decal_pso(
+            &c.hw.device,
+            &decals.root_sig,
+            c.targets.hdr.msaa_samples,
+            hr,
+            c.hw.info_queue.as_ref(),
+        )
+    },
+    install: |decals, p| decals.pso = p,
+};
+
+// Built once a frame published lines.
+const LINES: Gated<DxContext, LineResources, Pso> = Gated {
+    state: |c| c.lines.resources.as_ref(),
+    state_mut: |c| c.lines.resources.as_mut(),
+    build: |c, lines, hr| {
+        super::line::rebuild_line_pso(
+            &c.hw.device,
+            lines,
+            c.targets.hdr.msaa_samples,
+            hr,
+            c.hw.info_queue.as_ref(),
+        )
+    },
+    install: |lines, p| lines.pso = p,
+};
+
+// The transparent pass's two producers, each only when the world declared its
+// asset, against the pass's shared root signature.
+const TRANSPARENT: Gated<DxContext, TransparentResources, (Option<Pso>, Option<Pso>)> = Gated {
+    state: |c| c.transparent.as_ref(),
+    state_mut: |c| c.transparent.as_mut(),
+    build: |c, t, hr| {
+        let device = &c.hw.device;
+        let (samples, info_queue) = (c.targets.hdr.msaa_samples, c.hw.info_queue.as_ref());
+        let glass = t
+            .has_glass()
+            .then(|| super::glass::rebuild_glass_pso(device, t.root_sig(), samples, hr, info_queue))
+            .transpose()?;
+        let water = t
+            .has_water()
+            .then(|| super::water::rebuild_water_pso(device, t.root_sig(), samples, hr, info_queue))
+            .transpose()?;
+        Ok((glass, water))
+    },
+    install: |t, (glass, water)| t.swap_pipelines(glass, water),
+};
+
+// The fullscreen fog draw and the froxel-volume kernel.
+const FOG: Gated<DxContext, FogResources, (Pso, Pso)> = Gated {
+    state: |c| c.fog.resources.as_ref(),
+    state_mut: |c| c.fog.resources.as_mut(),
+    build: |c, fog, hr| {
+        let (device, info_queue) = (&c.hw.device, c.hw.info_queue.as_ref());
+        let samples = c.targets.hdr.msaa_samples;
+        let render = super::fog::rebuild_fog_pso(device, &fog.root_sig, samples, hr, info_queue)?;
+        let froxel =
+            super::fog::rebuild_fog_froxel_pso(device, &fog.froxel_root_sig, hr, info_queue)?;
+        Ok((render, froxel))
+    },
+    install: |fog, (render, froxel)| {
+        fog.pso = render;
+        fog.froxel_pso = froxel;
+    },
+};
+
+// Live only when DXR, the DXC compile and the acceleration build all
+// succeeded at init.
+const RT_REFLECTIONS: Gated<DxContext, RtReflectionsResources, RebuiltRtPipelines> = Gated {
+    state: |c| c.rt_reflections.as_ref(),
+    state_mut: |c| c.rt_reflections.as_mut(),
+    build: |c, rt, hr| {
+        rebuild_rt_reflections_pipelines(&c.hw.device, rt, hr, c.hw.info_queue.as_ref())
+    },
+    install: |rt, p| swap_rt_reflections_pipelines(rt, p),
+};
+
 impl DxContext {
-    // Rebuild every built-in PSO from source into temporaries, swapping them in
-    // only when all succeed; a failure logs and keeps the live pipelines. The
-    // shadow PSO is out of scope.
+    // Rebuild every live PSO set from the current shader sources.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }
         self.hot_reload.generation += 1;
-        let device = &self.hw.device;
-        let info_queue = self.hw.info_queue.as_ref();
-        let hr = true;
-
-        // Build every replacement into a temporary first. A `?` early-return
-        // here means we never overwrite a live pipeline with a failed build:
-        // any compile error leaves the running session rendering with the
-        // previous shader source.
-
-        // Composite (always live).
-        let (composite_vs, composite_ps) = super::pipeline::compile_composite_shaders(hr)?;
-        let composite_pso = super::context::dump_on_err(
-            info_queue,
-            super::pipeline::create_composite_pso(
-                device,
-                &self.composite.root_sig,
-                &composite_vs,
-                &composite_ps,
-                self.swapchain.format,
-            ),
-        )?;
-
-        // Text (only when the world declared text atlases).
-        let text_pso = rebuild_if_live!(self.text.pso.is_some(), {
-            let (text_vs, text_ps) = super::pipeline::compile_text_shaders(hr)?;
-            super::context::dump_on_err(
-                info_queue,
-                super::pipeline::create_text_pso(
-                    device,
-                    &self.text.root_sig,
-                    &text_vs,
-                    &text_ps,
-                    self.swapchain.format,
-                    1,
-                ),
-            )
-        });
-
-        // Bloom (live outside a resize).
-        let bloom_rebuilt = rebuild_if_live!(
-            self.bloom.is_some(),
-            post::bloom::build_pipelines(&self.post_device(0))
-        );
-
-        // Every shader bucket's main and pre-pass PSOs, rebuilt as pairs so they never
-        // compile from different templates.
-        let bindless_main_pso = rebuild_if_live!(
-            self.cull.main_bindless_root_sig.is_some() && self.cull.main_bindless_pso.is_some(),
-            {
-                let engine = super::init::pipelines::compile_main_bindless_shaders(hr)?;
-                let psos = self.build_world_main_pso(self.world_shader.as_ref(), &engine)?;
-                let world_buckets = self.rebuild_world_buckets(&engine)?;
-                Ok::<_, RenderError>((psos, world_buckets, engine))
-            }
-        );
-        // The cull PSO, and its late twin (two-pass occlusion) when built,
-        // both against the shared root signature.
-        let cull_psos = self
-            .cull
-            .cull_kernels
-            .as_ref()
-            .map(|kernels| {
-                let create = |cs: &[u8]| {
-                    super::context::dump_on_err(
-                        info_queue,
-                        super::cull::create_cull_pso(device, &kernels.root_sig, cs),
-                    )
-                };
-                let pso = create(&CULL_EARLY.compile(hr)?)?;
-                let late = kernels
-                    .pso_late
-                    .as_ref()
-                    .map(|_| create(&CULL_LATE.compile(hr)?))
-                    .transpose()?;
-                Ok::<_, RenderError>((pso, late))
-            })
-            .transpose()?;
-
-        // Hi-Z (only when cull pipeline is live; same gating condition).
-        // Rebuilds all three SPD kernels against the existing root signatures
-        // so the live cull root binding stays valid. The tail takes the
-        // signature without the depth SRV table.
-        let hiz_rebuilt = if let Some(hiz) = self.cull.hiz.as_ref() {
-            let (spd_single_cs, spd_msaa_cs, spd_tail_cs) = super::hiz::compile_hiz_shaders(hr)?;
-            let spd_single_pso = super::context::dump_on_err(
-                info_queue,
-                super::pso::compute_pso(device, &hiz.root_sig, &spd_single_cs, "hiz spd_single"),
-            )?;
-            let spd_msaa_pso = super::context::dump_on_err(
-                info_queue,
-                super::pso::compute_pso(device, &hiz.root_sig, &spd_msaa_cs, "hiz spd_msaa"),
-            )?;
-            let spd_tail_pso = super::context::dump_on_err(
-                info_queue,
-                super::pso::compute_pso(device, &hiz.tail_root_sig, &spd_tail_cs, "hiz spd_tail"),
-            )?;
-            Some((spd_single_pso, spd_msaa_pso, spd_tail_pso))
-        } else {
-            None
-        };
-
-        // Auto-exposure (gated on the post-process config).
-        let (auto_exp_build, auto_exp_average) = if let Some(ae) =
-            self.auto_exposure.resources.as_ref()
-        {
-            let (build_cs, average_cs) = super::auto_exposure::compile_auto_exposure_shaders(hr)?;
-            let build_pso = super::context::dump_on_err(
-                info_queue,
-                super::pso::compute_pso(
-                    device,
-                    ae.build_root_sig(),
-                    &build_cs,
-                    "auto-exposure build",
-                ),
-            )?;
-            let average_pso = super::context::dump_on_err(
-                info_queue,
-                super::pso::compute_pso(
-                    device,
-                    ae.average_root_sig(),
-                    &average_cs,
-                    "auto-exposure average",
-                ),
-            )?;
-            (Some(build_pso), Some(average_pso))
-        } else {
-            (None, None)
-        };
-
-        let receiver_psos = self
-            .shadow_receivers
-            .as_ref()
-            .map(|r| super::context::dump_on_err(info_queue, r.rebuild_pipelines(device, hr)))
-            .transpose()?;
-        let view_samples_pso = self
-            .view_samples
-            .as_ref()
-            .map(|v| super::context::dump_on_err(info_queue, v.rebuild_pipeline(device, hr)))
-            .transpose()?;
-
-        // Decal (always built when DecalResources exists, which is unconditional).
-        let msaa_samples = self.targets.hdr.msaa_samples;
-        let sky_pso = super::context::dump_on_err(
-            info_queue,
-            super::sky::build_sky_pso(
-                device,
-                &super::builtin_shaders::SKY_FRAG,
-                self.sky.root_sig(),
-                msaa_samples,
-                hr,
-            ),
-        )?;
-        if let Some(atmosphere) = self.atmosphere.as_mut() {
-            atmosphere.rebuild_pipelines(device, msaa_samples)?;
-        }
-        // The sky's motion behind the G-buffer pre-pass; the pre-pass's own
-        // PSOs rebuild with the main pass's above.
-        let gbuffer_sky_pso = self
-            .gbuffer
-            .as_ref()
-            .map(|gb| gb.sky.rebuild_pso(device, info_queue))
-            .transpose()?;
-        let grass = match (
-            self.grass.as_ref(),
-            self.cull.main_bindless_root_sig.as_ref(),
-            self.cull.prepass_root_sig.as_ref(),
-        ) {
-            (Some(_), Some(main), Some(prepass)) => Some(super::context::dump_on_err(
-                info_queue,
-                super::grass::GrassPipelines::build(
-                    device,
-                    super::grass::GrassRootSigs { main, prepass },
-                    msaa_samples,
-                    hr,
-                ),
-            )?),
-            _ => None,
-        };
-        let decal_pso = self
-            .decal
-            .state
-            .as_ref()
-            .map(|decals| {
-                super::decal::rebuild_decal_pso(
-                    device,
-                    &decals.root_sig,
-                    msaa_samples,
-                    hr,
-                    info_queue,
-                )
-            })
-            .transpose()?;
-
-        // Lines (only once a frame published some and the lazy build ran).
-        let line_pso = self
-            .lines
-            .resources
-            .as_ref()
-            .map(|lines| super::line::rebuild_line_pso(device, lines, msaa_samples, hr, info_queue))
-            .transpose()?;
-
-        // The transparent pass's two producers (each only when the world declared
-        // its asset). Both rebuild against the pass's shared root signature.
-        let glass_pso = self
-            .transparent
-            .as_ref()
-            .filter(|t| t.has_glass())
-            .map(|t| {
-                super::glass::rebuild_glass_pso(device, t.root_sig(), msaa_samples, hr, info_queue)
-            })
-            .transpose()?;
-        let water_pso = self
-            .transparent
-            .as_ref()
-            .filter(|t| t.has_water())
-            .map(|t| {
-                super::water::rebuild_water_pso(device, t.root_sig(), msaa_samples, hr, info_queue)
-            })
-            .transpose()?;
-
-        // Fog (only when the world declared a VolumetricFog). Both the
-        // render PSO (fragment volume sampler) and the compute PSO
-        // (froxel-volume kernel) rebuild from the same `fog.metal`-style
-        // source pair.
-        let fog_psos = self
-            .fog
-            .resources
-            .as_ref()
-            .map(|fog| {
-                let render = super::fog::rebuild_fog_pso(
-                    device,
-                    &fog.root_sig,
-                    msaa_samples,
-                    hr,
-                    info_queue,
-                )?;
-                super::fog::rebuild_fog_froxel_pso(device, &fog.froxel_root_sig, hr, info_queue)
-                    .map(|froxel| (render, froxel))
-            })
-            .transpose()?;
-
-        let shared_post = self.build_shared_post_pipelines()?;
-
-        // RT reflections (only when DXR + DXC compile + accel build all succeeded
-        // at init). The shader compiles through DXC (SM 6.5).
-        let rt_rebuilt = self
-            .rt_reflections
-            .as_ref()
-            .map(|rt| {
-                super::post::rt_reflections::rebuild_rt_reflections_pipelines(
-                    device, rt, hr, info_queue,
-                )
-            })
-            .transpose()?;
-
-        // All builds succeeded; swap into the live context. After this
-        // point the next frame's draw calls bind the freshly compiled
-        // pipelines.
-        self.composite.pso = composite_pso;
-        if let Some(p) = text_pso {
-            self.text.pso = Some(p);
-        }
-        if let (Some(rebuilt), Some(bloom)) = (bloom_rebuilt, self.bloom.as_mut()) {
-            bloom.swap_pipelines(rebuilt);
-        }
-        if let Some((psos, world_buckets, engine)) = bindless_main_pso {
-            self.cull.main_bindless_pso = Some(psos.main);
-            self.cull.main_prepass_pso = psos.prepass;
-            self.swap_world_buckets(world_buckets);
-            self.cull.bindless_main_shaders = engine;
-        }
-        self.sky.swap_pso(sky_pso);
-        if let (Some(sky), Some(gb)) = (gbuffer_sky_pso, self.gbuffer.as_mut()) {
-            gb.sky.swap_pso(sky);
-        }
-        if let (Some(p), Some(grass)) = (grass, self.grass.as_mut()) {
-            grass.pipelines = p;
-        }
-        // The wireframe twins were built from the pre-reload shaders; drop them
-        // so the next wireframe frame rebuilds against these.
-        self.invalidate_wireframe_pipelines();
-        if let (Some((pso, late)), Some(kernels)) = (cull_psos, self.cull.cull_kernels.as_mut()) {
-            kernels.pso = pso;
-            kernels.pso_late = late;
-        }
-        if let (Some((single, msaa, tail)), Some(hiz)) = (hiz_rebuilt, self.cull.hiz.as_mut()) {
-            hiz.swap_pipelines(single, msaa, tail);
-        }
-        if let (Some(build), Some(average), Some(ae)) = (
-            auto_exp_build,
-            auto_exp_average,
-            self.auto_exposure.resources.as_mut(),
-        ) {
-            ae.swap_pipelines(build, average);
-        }
-        if let (Some(p), Some(r)) = (receiver_psos, self.shadow_receivers.as_mut()) {
-            r.swap_pipelines(p);
-        }
-        if let (Some(p), Some(v)) = (view_samples_pso, self.view_samples.as_mut()) {
-            v.swap_pipeline(p);
-        }
-        if let (Some(pso), Some(decals)) = (decal_pso, self.decal.state.as_mut()) {
-            decals.pso = pso;
-        }
-        if let (Some(pso), Some(lines)) = (line_pso, self.lines.resources.as_mut()) {
-            lines.pso = pso;
-        }
-        if let Some(transparent) = self.transparent.as_mut() {
-            transparent.swap_pipelines(glass_pso, water_pso);
-        }
-        if let (Some((render, froxel)), Some(fog)) = (fog_psos, self.fog.resources.as_mut()) {
-            fog.pso = render;
-            fog.froxel_pso = froxel;
-        }
-        self.swap_shared_post_pipelines(shared_post);
-        if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
-            super::post::rt_reflections::swap_rt_reflections_pipelines(rt, rebuilt);
-        }
-        Ok(())
-    }
-
-    // Rebuild every live pass drawn through the shared post-pass seam.
-    fn build_shared_post_pipelines(&self) -> RenderResult<SharedPostPipelines> {
-        let device = self.post_device(0);
-        Ok(SharedPostPipelines {
-            ssao: rebuild_if_live!(
-                self.ssao.resources.is_some(),
-                post::ssao::build_pipelines(&device)
-            ),
-            // Only when the resolve itself is authored.
-            ssr: rebuild_if_live!(
-                self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
-                post::ssr::build_pipeline(&device)
-            ),
-            ssgi: rebuild_if_live!(self.ssgi.is_some(), post::ssgi::build_pipelines(&device)),
-            disocclusion: rebuild_if_live!(
-                self.disocclusion.is_some(),
-                post::disocclusion::build_pipelines(&device)
-            ),
-            taa: rebuild_if_live!(self.taa.is_some(), post::taa::build_pipelines(&device)),
-            reflection_composite: rebuild_if_live!(
-                self.reflection_composite.is_some(),
-                post::reflection_composite::build_pipelines(&device)
-            ),
-        })
-    }
-
-    // Swap the rebuilt shared post passes into the live context.
-    fn swap_shared_post_pipelines(&mut self, rebuilt: SharedPostPipelines) {
-        if let (Some(p), Some(ssao)) = (rebuilt.ssao, self.ssao.resources.as_mut()) {
-            ssao.swap_pipelines(p);
-        }
-        if let (Some(p), Some(ssr)) = (rebuilt.ssr, self.ssr.as_mut()) {
-            ssr.swap_pipeline(p);
-        }
-        if let (Some(p), Some(ssgi)) = (rebuilt.ssgi, self.ssgi.as_mut()) {
-            ssgi.swap_pipelines(p);
-        }
-        if let (Some(p), Some(pass)) = (rebuilt.disocclusion, self.disocclusion.as_mut()) {
-            pass.swap_pipelines(p);
-        }
-        if let (Some(p), Some(rc)) = (
-            rebuilt.reflection_composite,
-            self.reflection_composite.as_mut(),
-        ) {
-            rc.swap_pipelines(p);
-        }
-        if let (Some(p), Some(taa)) = (rebuilt.taa, self.taa.as_mut()) {
-            taa.pass.swap_pipelines(p);
-        }
+        pipeline_set::rebuild(self, PIPELINE_SETS, true)
     }
 }
 
@@ -437,7 +406,10 @@ impl DxContext {
             self.cull.main_prepass_pso.is_some(),
             prepared,
             |p: &BucketPsos| p.prepass.is_some(),
-            || self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders),
+            || {
+                let engine = &self.cull.bindless_main_shaders;
+                self.build_world_main_pso(Some(programs), engine, self.hot_reload.enabled)
+            },
         )?;
         // Drain the GPU before the swap releases the displaced PSOs: a command
         // list does not keep one alive, and the debug reload drive does not
@@ -450,13 +422,14 @@ impl DxContext {
         Ok(())
     }
 
-    // Bucket 0's PSOs: the world default Shader's programs, else `engine_default`.
-    // Errors when the GPU-driven pass is not live, or the rebuild would drop the
-    // live pre-pass.
+    // Bucket 0's PSOs: the world default Shader's programs, else
+    // `engine_default`, from the sources `hot_reload` selects. Errors when the
+    // GPU-driven pass is not live, or the rebuild would drop the live pre-pass.
     pub(super) fn build_world_main_pso(
         &self,
         world: Option<&concinnity_engine::components::ShaderPrograms>,
-        engine_default: &super::init::pipelines::BindlessMainShaders,
+        engine_default: &BindlessMainShaders,
+        hot_reload: bool,
     ) -> RenderResult<BucketPsos> {
         let targets = self
             .world_pso_targets()
@@ -468,7 +441,7 @@ impl DxContext {
                 root_sigs: &targets.root_sigs,
                 msaa_samples: self.targets.hdr.msaa_samples,
                 engine_default,
-                hot_reload: self.hot_reload.enabled,
+                hot_reload,
             },
             0,
             &BucketSource {

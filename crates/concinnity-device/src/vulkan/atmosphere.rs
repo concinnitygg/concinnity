@@ -99,6 +99,14 @@ pub(in crate::vulkan) struct AtmosphereSky {
     pub(in crate::vulkan) samples: vk::SampleCountFlags,
 }
 
+// The air's pipelines, rebuilt together.
+pub(in crate::vulkan) struct AtmospherePipelines {
+    kernels: [OwnedPipeline; KERNELS],
+    sky: OwnedPipeline,
+    aerial: OwnedPipeline,
+    clouds: Option<super::clouds::CloudPipelines>,
+}
+
 pub(in crate::vulkan) struct AtmosphereState {
     settings: AtmosphereSettings,
     // This frame's inputs; `None` leaves the passes out of the graph.
@@ -724,45 +732,58 @@ impl AtmosphereState {
         }
     }
 
-    // Rebuild every pipeline from the shader sources (shader hot reload).
-    pub(in crate::vulkan) fn rebuild_pipelines(
-        &mut self,
+    // The air's kernels, sky and aerial pipelines and the clouds', rebuilt from
+    // the sources `hot_reload` selects over the live layouts.
+    pub(in crate::vulkan) fn build_pipelines(
+        &self,
         device: &VkDevice,
         sky: AtmosphereSky,
         msaa: bool,
-    ) -> RenderResult<()> {
+        hot_reload: bool,
+    ) -> RenderResult<AtmospherePipelines> {
         let layout = self.kernel_layout.handle();
-        let kernels = [
-            compile_kernel(device, layout, &ATMOSPHERE_TRANSMITTANCE, true)?,
-            compile_kernel(device, layout, &ATMOSPHERE_MULTISCATTER, true)?,
-            compile_kernel(device, layout, &ATMOSPHERE_SKY_VIEW, true)?,
-            compile_kernel(device, layout, &ATMOSPHERE_AERIAL, true)?,
-            compile_kernel(device, layout, &ATMOSPHERE_IRRADIANCE, true)?,
-            compile_kernel(device, layout, &ATMOSPHERE_SKY_CUBE, true)?,
-        ];
-        let sky_pipeline = super::sky::build_sky_pipeline(
-            device,
-            &SKY_ATMOSPHERE_FRAG,
-            self.sky_layout.handle(),
-            sky.samples,
-            true,
-        )?;
-        let aerial_pipeline = build_aerial_pipeline(
-            device,
-            self.aerial_layout.handle(),
-            super::context::HDR_FORMAT,
-            msaa,
-            true,
-        )?;
-        if let Some(clouds) = self.clouds.as_mut() {
-            clouds.rebuild_pipelines(device, super::context::HDR_FORMAT, msaa)?;
+        Ok(AtmospherePipelines {
+            kernels: [
+                compile_kernel(device, layout, &ATMOSPHERE_TRANSMITTANCE, hot_reload)?,
+                compile_kernel(device, layout, &ATMOSPHERE_MULTISCATTER, hot_reload)?,
+                compile_kernel(device, layout, &ATMOSPHERE_SKY_VIEW, hot_reload)?,
+                compile_kernel(device, layout, &ATMOSPHERE_AERIAL, hot_reload)?,
+                compile_kernel(device, layout, &ATMOSPHERE_IRRADIANCE, hot_reload)?,
+                compile_kernel(device, layout, &ATMOSPHERE_SKY_CUBE, hot_reload)?,
+            ],
+            sky: super::sky::build_sky_pipeline(
+                device,
+                &SKY_ATMOSPHERE_FRAG,
+                self.sky_layout.handle(),
+                sky.samples,
+                hot_reload,
+            )?,
+            aerial: build_aerial_pipeline(
+                device,
+                self.aerial_layout.handle(),
+                super::context::HDR_FORMAT,
+                msaa,
+                hot_reload,
+            )?,
+            clouds: self
+                .clouds
+                .as_ref()
+                .map(|c| c.build_pipelines(device, super::context::HDR_FORMAT, msaa, hot_reload))
+                .transpose()?,
+        })
+    }
+
+    // Install rebuilt pipelines; the tables and the sky cube are rebuilt with
+    // the new kernels.
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, p: AtmospherePipelines) {
+        self.kernels = p.kernels;
+        self.sky_pipeline = p.sky;
+        self.aerial_pipeline = p.aerial;
+        if let (Some(clouds), Some(pipelines)) = (self.clouds.as_mut(), p.clouds) {
+            clouds.swap_pipelines(pipelines);
         }
-        self.kernels = kernels;
-        self.sky_pipeline = sky_pipeline;
-        self.aerial_pipeline = aerial_pipeline;
         self.air_tables.invalidate();
         self.sky_cube.schedule.reset();
-        Ok(())
     }
 }
 

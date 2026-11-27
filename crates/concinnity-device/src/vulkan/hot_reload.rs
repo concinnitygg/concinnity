@@ -3,348 +3,310 @@
 //! debug command sets the shared flag, and the main thread polls it at the top
 //! of `draw_frame`.
 //!
-//! Entirely a dev-loop concern: the flag exists only when `VkContext::new` is
-//! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
-//! `directx/hot_reload.rs` and `metal/hot_reload.rs`.
+//! Each feature's pipelines are one set below: how they are built from the
+//! current sources and where they are installed. A reload builds every live
+//! set before installing any, so a compile error leaves the running pipelines
+//! in place.
 
-use ash::vk;
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::reload::{self, PostPipelines};
+use concinnity_engine::render::shader::pipeline_set::{self, Gated, PipelineSet, Pipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
 
-use super::context::VkContext;
+use super::atmosphere::{AtmospherePipelines, AtmosphereSky, AtmosphereState};
+use super::auto_exposure::AutoExposureResources;
+use super::context::{CullKernels, VkContext};
+use super::decal::DecalResources;
+use super::fog::FogResources;
+use super::grass::{GrassDrawPipelines, GrassPipelines, GrassResources};
+use super::hiz::HiZResources;
+use super::line::LineResources;
+use super::owned::OwnedPipeline;
+use super::particle::{ParticlePipelines, ParticleResources};
 use super::pipeline::{
-    BindlessSpv, BucketPipelines, build_bucket_pipeline, compile_bindless_shaders,
-    compile_composite_shaders, compile_text_shaders, create_composite_pipeline,
-    create_text_pipeline,
+    BindlessSpv, BucketPipelineTargets, BucketPipelines, build_bucket_pipeline,
+    compile_bindless_shaders, compile_composite_shaders, compile_text_shaders,
+    create_composite_pipeline, create_text_pipeline,
 };
 use super::pipeline_desc::compute_pipeline;
+use super::post::GbufferResources;
+use super::post::RtReflectionsResources;
+use super::post::post_device::{PostPipeline, VkPostDevice};
+use super::post::rt_reflections::{RebuiltRtPipelines, rebuild_rt_pipelines};
+use super::shadow_receivers::ShadowReceiversGpu;
+use super::view_samples::ViewSamplesGpu;
 use crate::vulkan::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
+// Every feature's pipeline set, in the order a reload builds them.
+const PIPELINE_SETS: &[&dyn PipelineSet<VkContext>] = &[
+    &COMPOSITE,
+    &TEXT,
+    &ENGINE_POST,
+    &MAIN,
+    &SKY,
+    &GBUFFER_SKY,
+    &CULL,
+    &HIZ,
+    &AUTO_EXPOSURE,
+    &SHADOW_RECEIVERS,
+    &VIEW_SAMPLES,
+    &DECAL,
+    &LINES,
+    &FOG,
+    &ATMOSPHERE,
+    &RT_REFLECTIONS,
+    &PARTICLES,
+    &GRASS,
+];
+
+const COMPOSITE: Pipelines<VkContext, OwnedPipeline> = Pipelines {
+    build: |c, hr| {
+        Some(compile_composite_shaders(hr).and_then(|(vs, ps)| {
+            create_composite_pipeline(
+                &c.hw.device,
+                c.composite.formats,
+                c.composite.pipeline_layout.handle(),
+                &vs,
+                &ps,
+            )
+        }))
+    },
+    install: |c, p| c.composite.pipeline = p,
+};
+
+const TEXT: Pipelines<VkContext, OwnedPipeline> = Pipelines {
+    build: |c, hr| {
+        c.text.pipeline.is_some().then(|| {
+            let (vs, fs) = compile_text_shaders(hr)?;
+            create_text_pipeline(
+                &c.hw.device,
+                c.composite.formats,
+                c.text.pipeline_layout.handle(),
+                &vs,
+                &fs,
+                ash::vk::SampleCountFlags::TYPE_1,
+            )
+        })
+    },
+    install: |c, p| c.text.pipeline = Some(p),
+};
+
+// The engine-owned post passes that are live.
+const ENGINE_POST: Pipelines<VkContext, Vec<PostPipelines<PostPipeline>>> = Pipelines {
+    build: |c, hr| {
+        let device = VkPostDevice {
+            hot_reload: hr,
+            ..c.post_device(0)
+        };
+        Some(reload::build_live(&device, |pass| c.has_post_pass(pass)))
+    },
+    install: |c, built| {
+        for pipelines in built {
+            c.install_post_pipelines(pipelines);
+        }
+    },
+};
+
+// Every shader bucket's main and pre-pass pipelines, rebuilt as pairs so they
+// never compile from different templates.
+type MainPipelines = (BucketPipelines, Vec<(usize, BucketPipelines)>, BindlessSpv);
+const MAIN: Pipelines<VkContext, MainPipelines> = Pipelines {
+    build: |c, hr| {
+        (c.cull.bindless_pipeline_layout.is_some() && c.cull.bindless_pipeline.is_some()).then(
+            || {
+                let engine = compile_bindless_shaders(hr)?;
+                let main = c.build_world_main_pipeline(c.world_shader.as_ref(), &engine, hr)?;
+                let world_buckets = c.rebuild_world_buckets(&engine, hr)?;
+                Ok((main, world_buckets, engine))
+            },
+        )
+    },
+    install: |c, (main, world_buckets, engine)| {
+        c.cull.bindless_pipeline = Some(main.main);
+        c.cull.prepass_pipeline = main.prepass;
+        for (bucket, fresh) in world_buckets {
+            if let Some(live) = c.cull.world_pipelines.get_mut(bucket) {
+                *live = fresh;
+            }
+        }
+        c.cull.bindless_main_spv = engine;
+        // The wireframe twins were built from the old sources; the next
+        // wireframe frame rebuilds them.
+        c.invalidate_wireframe_pipelines();
+    },
+};
+
+const SKY: Pipelines<VkContext, OwnedPipeline> = Pipelines {
+    build: |c, hr| {
+        Some(super::sky::build_sky_pipeline(
+            &c.hw.device,
+            &super::builtin_shaders::SKY_FRAG,
+            c.sky.layout(),
+            c.targets.msaa_samples,
+            hr,
+        ))
+    },
+    install: |c, p| c.sky.swap_pipeline(p),
+};
+
+// The sky's motion behind the G-buffer pre-pass.
+const GBUFFER_SKY: Gated<VkContext, GbufferResources, OwnedPipeline> = Gated {
+    state: |c| c.gbuffer.as_ref(),
+    state_mut: |c| c.gbuffer.as_mut(),
+    build: |c, gb, hr| gb.sky.rebuild_pipeline(&c.hw.device, hr),
+    install: |gb, p| gb.sky.swap_pipeline(p),
+};
+
+// The cull kernel, and its late twin (two-pass occlusion) when built: the
+// same source with the `CULL_LATE` define, over the shared layout.
+const CULL: Gated<VkContext, CullKernels, (OwnedPipeline, Option<OwnedPipeline>)> = Gated {
+    state: |c| c.cull.cull_kernels.as_ref(),
+    state_mut: |c| c.cull.cull_kernels.as_mut(),
+    build: |c, kernels, hr| {
+        let (device, layout) = (&c.hw.device, kernels.pipeline_layout.handle());
+        let pipeline = compute_pipeline(device, layout, &CULL_EARLY.compile(hr)?, "cull")?;
+        let late = kernels
+            .pipeline_late
+            .as_ref()
+            .map(|_| compute_pipeline(device, layout, &CULL_LATE.compile(hr)?, "cull"))
+            .transpose()?;
+        Ok((pipeline, late))
+    },
+    install: |kernels, (pipeline, late)| {
+        kernels.pipeline = pipeline;
+        kernels.pipeline_late = late;
+    },
+};
+
+const HIZ: Gated<VkContext, HiZResources, (OwnedPipeline, OwnedPipeline)> = Gated {
+    state: |c| c.cull.hiz.as_ref(),
+    state_mut: |c| c.cull.hiz.as_mut(),
+    build: |c, hiz, hr| hiz.recompile_pipelines(&c.hw.device, hr),
+    install: |hiz, (spd, tail)| hiz.swap_pipelines(spd, tail),
+};
+
+const AUTO_EXPOSURE: Gated<VkContext, AutoExposureResources, (OwnedPipeline, OwnedPipeline)> =
+    Gated {
+        state: |c| c.auto_exposure.resources.as_ref(),
+        state_mut: |c| c.auto_exposure.resources.as_mut(),
+        build: |c, ae, hr| ae.rebuild_pipelines(&c.hw.device, hr),
+        install: |ae, (build, average)| ae.swap_pipelines(build, average),
+    };
+
+const SHADOW_RECEIVERS: Gated<VkContext, ShadowReceiversGpu, (OwnedPipeline, OwnedPipeline)> =
+    Gated {
+        state: |c| c.shadow_receivers.as_ref(),
+        state_mut: |c| c.shadow_receivers.as_mut(),
+        build: |c, r, hr| r.rebuild_pipelines(&c.hw.device, hr),
+        install: |r, p| r.swap_pipelines(p),
+    };
+
+const VIEW_SAMPLES: Gated<VkContext, ViewSamplesGpu, OwnedPipeline> = Gated {
+    state: |c| c.view_samples.as_ref(),
+    state_mut: |c| c.view_samples.as_mut(),
+    build: |c, v, hr| v.rebuild_pipeline(&c.hw.device, hr),
+    install: |v, p| v.swap_pipeline(p),
+};
+
+const DECAL: Gated<VkContext, DecalResources, OwnedPipeline> = Gated {
+    state: |c| c.decal.resources.as_ref(),
+    state_mut: |c| c.decal.resources.as_mut(),
+    build: |c, decals, hr| {
+        super::decal::rebuild_decal_pipeline(&c.hw.device, decals, c.main_msaa(), hr)
+    },
+    install: |decals, p| decals.pipeline = p,
+};
+
+// Built once a frame published lines.
+const LINES: Gated<VkContext, LineResources, OwnedPipeline> = Gated {
+    state: |c| c.lines.resources.as_ref(),
+    state_mut: |c| c.lines.resources.as_mut(),
+    build: |c, lines, hr| {
+        super::line::rebuild_line_pipeline(&c.hw.device, lines, c.main_msaa(), hr)
+    },
+    install: |lines, p| lines.pipeline = p,
+};
+
+// The fullscreen fog draw and the froxel-volume kernel.
+const FOG: Gated<VkContext, FogResources, (OwnedPipeline, OwnedPipeline)> = Gated {
+    state: |c| c.fog.resources.as_ref(),
+    state_mut: |c| c.fog.resources.as_mut(),
+    build: |c, fog, hr| {
+        let device = &c.hw.device;
+        let render = super::fog::rebuild_fog_pipeline(device, fog, c.main_msaa(), hr)?;
+        let froxel = super::fog::rebuild_fog_froxel_pipeline(device, fog, hr)?;
+        Ok((render, froxel))
+    },
+    install: |fog, (render, froxel)| {
+        fog.pipeline = render;
+        fog.froxel_pipeline = froxel;
+    },
+};
+
+const ATMOSPHERE: Gated<VkContext, AtmosphereState, AtmospherePipelines> = Gated {
+    state: |c| c.atmosphere.as_ref(),
+    state_mut: |c| c.atmosphere.as_mut(),
+    build: |c, atmosphere, hr| {
+        let sky = AtmosphereSky {
+            global_set_layout: c.descriptors.global_set_layout.handle(),
+            samples: c.targets.msaa_samples,
+        };
+        atmosphere.build_pipelines(&c.hw.device, sky, c.main_msaa(), hr)
+    },
+    install: AtmosphereState::swap_pipelines,
+};
+
+const RT_REFLECTIONS: Gated<VkContext, RtReflectionsResources, RebuiltRtPipelines> = Gated {
+    state: |c| c.rt_reflections.as_ref(),
+    state_mut: |c| c.rt_reflections.as_mut(),
+    build: |c, rt, hr| rebuild_rt_pipelines(&c.hw.device, rt, hr),
+    install: RtReflectionsResources::swap_pipelines,
+};
+
+const PARTICLES: Gated<VkContext, ParticleResources, ParticlePipelines> = Gated {
+    state: |c| c.particle.resources.as_ref(),
+    state_mut: |c| c.particle.resources.as_mut(),
+    build: |c, particles, hr| particles.rebuild_pipelines(&c.hw.device, hr),
+    install: ParticleResources::swap_pipelines,
+};
+
+// The blade kernels and draws, and the G-buffer pre-pass draws when the world
+// has a G-buffer.
+type GrassBuild = (GrassPipelines, Option<GrassDrawPipelines>);
+const GRASS: Gated<VkContext, GrassResources, GrassBuild> = Gated {
+    state: |c| c.grass.as_ref(),
+    state_mut: |c| c.grass.as_mut(),
+    build: |c, grass, hr| {
+        let device = &c.hw.device;
+        let pipelines = grass.rebuild_pipelines(device, c.grass_targets(), hr)?;
+        let prepass = c
+            .gbuffer
+            .is_some()
+            .then(|| grass.build_prepass(device, hr))
+            .transpose()?;
+        Ok((pipelines, prepass))
+    },
+    install: |grass, (pipelines, prepass)| {
+        grass.swap_pipelines(pipelines);
+        if let Some(prepass) = prepass {
+            grass.swap_prepass(prepass);
+        }
+    },
+};
+
 impl VkContext {
-    // Rebuild every built-in pipeline from source into temporaries, swapping them
-    // in only when all succeed; a failure logs and keeps the live pipelines. The
-    // shadow, instanced and skinned pipelines are out of scope. The device is
-    // already idle.
+    // Rebuild every live pipeline set from the current shader sources. The
+    // device is already idle.
     pub(in crate::vulkan) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }
         self.hot_reload.generation += 1;
-        let device = self.hw.device.clone();
-        let device = &device;
-        let hr = true;
-
-        // Build every replacement into a temporary first. A `?` early-return
-        // here means we never overwrite a live pipeline with a failed build:
-        // any compile error leaves the running session rendering with the
-        // previous shader source.
-
-        // Composite (always live).
-        let (composite_vs, composite_ps) = compile_composite_shaders(hr)?;
-        let composite_pipeline = create_composite_pipeline(
-            device,
-            self.composite.formats,
-            self.composite.pipeline_layout.handle(),
-            &composite_vs,
-            &composite_ps,
-        )?;
-
-        // Text (only when the world declared text atlases).
-        let text_pipeline = rebuild_if_live!(self.text.pipeline.is_some(), {
-            let (tv, tf) = compile_text_shaders(hr)?;
-            create_text_pipeline(
-                device,
-                self.composite.formats,
-                self.text.pipeline_layout.handle(),
-                &tv,
-                &tf,
-                vk::SampleCountFlags::TYPE_1,
-            )
-        });
-
-        // Bloom (live from init to teardown, 3 pipelines).
-        let bloom_rebuilt = rebuild_if_live!(
-            self.bloom.is_some(),
-            concinnity_engine::render::post::bloom::build_pipelines(&self.post_device(0))
-        );
-
-        // Every shader bucket's main and pre-pass pipelines, rebuilt as pairs so they
-        // never compile from different templates.
-        let bindless_main_pipeline = rebuild_if_live!(
-            self.cull.bindless_pipeline_layout.is_some() && self.cull.bindless_pipeline.is_some(),
-            {
-                let engine = compile_bindless_shaders(hr)?;
-                let pipelines =
-                    self.build_world_main_pipeline(self.world_shader.as_ref(), &engine)?;
-                let world_buckets = self.rebuild_world_buckets(&engine)?;
-                Ok::<_, RenderError>((pipelines, world_buckets, engine))
-            }
-        );
-        let sky_pipeline = crate::vulkan::sky::build_sky_pipeline(
-            &self.hw.device,
-            &super::builtin_shaders::SKY_FRAG,
-            self.sky.layout(),
-            self.targets.msaa_samples,
-            hr,
-        )?;
-        // The sky's motion behind the G-buffer pre-pass; the pre-pass's own
-        // pipelines rebuild with the main pass's above.
-        let gbuffer_sky_pipeline = self
-            .gbuffer
-            .as_ref()
-            .map(|gb| gb.sky.rebuild_pipeline(device))
-            .transpose()?;
-        // The cull kernel, and its late twin (two-pass occlusion) when built:
-        // the same source with the `CULL_LATE` define, over the shared layout.
-        let cull_pipelines = self
-            .cull
-            .cull_kernels
-            .as_ref()
-            .map(|kernels| {
-                let layout = kernels.pipeline_layout.handle();
-                let pipeline = compute_pipeline(device, layout, &CULL_EARLY.compile(hr)?, "cull")?;
-                let late = kernels
-                    .pipeline_late
-                    .as_ref()
-                    .map(|_| compute_pipeline(device, layout, &CULL_LATE.compile(hr)?, "cull"))
-                    .transpose()?;
-                Ok::<_, RenderError>((pipeline, late))
-            })
-            .transpose()?;
-        // Hi-Z build kernels (live alongside the cull pipeline).
-        let hiz_pipelines = self
-            .cull
-            .hiz
-            .as_ref()
-            .map(|hiz| hiz.recompile_pipelines(device, hr))
-            .transpose()?;
-
-        // Auto-exposure (gated on the post-process config): the histogram build
-        // + average compute pipelines.
-        let auto_exposure_pipelines = self
-            .auto_exposure
-            .resources
-            .as_ref()
-            .map(|ae| ae.rebuild_pipelines(device, hr))
-            .transpose()?;
-
-        let receiver_pipelines = self
-            .shadow_receivers
-            .as_ref()
-            .map(|r| r.rebuild_pipelines(device, hr))
-            .transpose()?;
-        let view_samples_pipeline = self
-            .view_samples
-            .as_ref()
-            .map(|v| v.rebuild_pipeline(device, hr))
-            .transpose()?;
-
-        // Decal (always built when DecalResources exists, which is
-        // unconditional in `VkContext::new`).
-        let msaa = self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
-        let decal_pipeline = self
-            .decal
-            .resources
-            .as_ref()
-            .map(|decals| super::decal::rebuild_decal_pipeline(device, decals, msaa, hr))
-            .transpose()?;
-
-        // Lines (only once a frame published some and the lazy build ran).
-        let line_pipeline = self
-            .lines
-            .resources
-            .as_ref()
-            .map(|lines| super::line::rebuild_line_pipeline(device, lines, msaa, hr))
-            .transpose()?;
-
-        // Fog (only when the world declared a VolumetricFog). Rebuilds both the
-        // fullscreen render pipeline and the froxel-volume compute kernel; the
-        // trailing `.map` tuples them into one Result.
-        let fog_pipelines = self
-            .fog
-            .resources
-            .as_ref()
-            .map(|fog| {
-                let render = super::fog::rebuild_fog_pipeline(device, fog, msaa, hr)?;
-                super::fog::rebuild_fog_froxel_pipeline(device, fog, hr)
-                    .map(|froxel| (render, froxel))
-            })
-            .transpose()?;
-
-        // SSAO (only when the world opted in). Rebuilds the depth
-        // copy, kernel + blur.
-        let ssao_rebuilt = rebuild_if_live!(
-            self.ssao.is_some(),
-            concinnity_engine::render::post::ssao::build_pipelines(&self.post_device(0))
-        );
-
-        // SSR (only when the world opted in). Rebuilds the resolve.
-        let ssr_rebuilt = rebuild_if_live!(
-            self.ssr.is_some(),
-            concinnity_engine::render::post::ssr::build_pipeline(&self.post_device(0))
-        );
-
-        // SSGI (only when indirect_lighting: ssgi). Rebuilds its four pipelines.
-        let ssgi_rebuilt = rebuild_if_live!(
-            self.ssgi.is_some(),
-            concinnity_engine::render::post::ssgi::build_pipelines(&self.post_device(0))
-        );
-        let disocclusion_rebuilt = rebuild_if_live!(
-            self.disocclusion.is_some(),
-            concinnity_engine::render::post::disocclusion::build_pipelines(&self.post_device(0))
-        );
-
-        // RT reflections (only when the world opted in + the GPU supports it).
-        // Rebuilds the flat + textured ray-query pipelines.
-        let rt_rebuilt = self
-            .rt_reflections
-            .as_ref()
-            .map(|rt| crate::vulkan::post::rt_reflections::rebuild_rt_pipelines(device, rt, hr))
-            .transpose()?;
-
-        // Reflection composite (only when a reflection path owns the scene image).
-        // Rebuilds the roughness blur + composite pipelines.
-        let reflection_composite_rebuilt = rebuild_if_live!(
-            self.reflection_composite.is_some(),
-            concinnity_engine::render::post::reflection_composite::build_pipelines(
-                &self.post_device(0)
-            )
-        );
-
-        // TAA (only when the world opted in). Rebuilds the resolve
-        // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
-        let taa_rebuilt = rebuild_if_live!(
-            self.taa.is_some(),
-            concinnity_engine::render::post::taa::build_pipelines(&self.post_device(0))
-        );
-
-        // Particles (only when ≥1 emitter is live or has ever been
-        // added at runtime). Rebuilds the compute + render pipelines in
-        // one shot.
-        let particle_rebuilt = self
-            .particle
-            .resources
-            .as_ref()
-            .map(|particles| particles.rebuild_pipelines(device, hr))
-            .transpose()?;
-        let grass_targets = self.grass_targets();
-        let grass_rebuilt = self
-            .grass
-            .as_ref()
-            .map(|grass| grass.rebuild_pipelines(device, grass_targets, hr))
-            .transpose()?;
-
-        // All builds succeeded: swap the freshly compiled pipelines in. Each
-        // assignment drops the pipeline it displaces, which retires it through
-        // the device's queue rather than destroying it under a submission that
-        // may still name it.
-        self.composite.pipeline = composite_pipeline;
-
-        if let Some(new_pipeline) = text_pipeline {
-            self.text.pipeline = Some(new_pipeline);
-        }
-
-        if let (Some(rebuilt), Some(bloom)) = (bloom_rebuilt, self.bloom.as_mut()) {
-            bloom.swap_pipelines(rebuilt);
-        }
-
-        if let Some((pipelines, world_buckets, engine)) = bindless_main_pipeline {
-            self.cull.bindless_pipeline = Some(pipelines.main);
-            self.cull.prepass_pipeline = pipelines.prepass;
-            for (bucket, fresh) in world_buckets {
-                if let Some(live) = self.cull.world_pipelines.get_mut(bucket) {
-                    *live = fresh;
-                }
-            }
-            self.cull.bindless_main_spv = engine;
-        }
-        self.sky.swap_pipeline(sky_pipeline);
-        if let (Some(sky), Some(gb)) = (gbuffer_sky_pipeline, self.gbuffer.as_mut()) {
-            gb.sky.swap_pipeline(sky);
-        }
-        // The wireframe twins were built from the pre-reload shaders; drop them
-        // so the next wireframe frame rebuilds against these.
-        self.invalidate_wireframe_pipelines();
-        if let (Some((pipeline, late)), Some(kernels)) =
-            (cull_pipelines, self.cull.cull_kernels.as_mut())
-        {
-            kernels.pipeline = pipeline;
-            kernels.pipeline_late = late;
-        }
-        if let (Some((init, downsample)), Some(hiz)) = (hiz_pipelines, self.cull.hiz.as_mut()) {
-            hiz.swap_pipelines(init, downsample);
-        }
-
-        if let (Some((build, average)), Some(ae)) = (
-            auto_exposure_pipelines,
-            self.auto_exposure.resources.as_mut(),
-        ) {
-            ae.swap_pipelines(build, average);
-        }
-        if let (Some(p), Some(r)) = (receiver_pipelines, self.shadow_receivers.as_mut()) {
-            r.swap_pipelines(p);
-        }
-        if let (Some(p), Some(v)) = (view_samples_pipeline, self.view_samples.as_mut()) {
-            v.swap_pipeline(p);
-        }
-
-        if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decal.resources.as_mut())
-        {
-            decals.pipeline = new_pipeline;
-        }
-        if let (Some(new_pipeline), Some(lines)) = (line_pipeline, self.lines.resources.as_mut()) {
-            lines.pipeline = new_pipeline;
-        }
-        if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog.resources.as_mut()) {
-            fog.pipeline = render;
-            fog.froxel_pipeline = froxel;
-        }
-        if let Some(atmosphere) = self.atmosphere.as_mut() {
-            atmosphere.rebuild_pipelines(
-                &self.hw.device,
-                crate::vulkan::atmosphere::AtmosphereSky {
-                    global_set_layout: self.descriptors.global_set_layout.handle(),
-                    samples: self.targets.msaa_samples,
-                },
-                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
-            )?;
-        }
-        if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.as_mut()) {
-            ssao.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
-            ssr.swap_pipeline(rebuilt);
-        }
-        if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
-            ssgi.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(pass)) = (disocclusion_rebuilt, self.disocclusion.as_mut()) {
-            pass.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
-            rt.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(rc)) = (
-            reflection_composite_rebuilt,
-            self.reflection_composite.as_mut(),
-        ) {
-            rc.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
-            taa.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
-            p.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(grass)) = (grass_rebuilt, self.grass.as_mut()) {
-            grass.swap_pipelines(rebuilt);
-        }
-        self.sync_grass_prepass(true);
-        Ok(())
+        pipeline_set::rebuild(self, PIPELINE_SETS, true)
     }
 
     // Rebuild bucket 0's main and pre-pass pipelines from the world default
@@ -359,7 +321,10 @@ impl VkContext {
             self.cull.prepass_pipeline.is_some(),
             prepared,
             |p: &BucketPipelines| p.prepass.is_some(),
-            || self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv),
+            || {
+                let engine = &self.cull.bindless_main_spv;
+                self.build_world_main_pipeline(Some(programs), engine, self.hot_reload.enabled)
+            },
         )?;
         // Drain the GPU before destroying the displaced pipeline so no in-flight
         // command buffer still references it: the debug hot-reload drive does
@@ -373,17 +338,22 @@ impl VkContext {
         Ok(())
     }
 
-    // Bucket 0's pipelines: the world default Shader's programs, else `engine`.
-    // Errors when the GPU-driven pass is not live, or the rebuild would drop the
-    // live pre-pass.
+    // Bucket 0's pipelines: the world default Shader's programs, else `engine`,
+    // from the sources `hot_reload` selects. Errors when the GPU-driven pass is
+    // not live, or the rebuild would drop the live pre-pass.
     fn build_world_main_pipeline(
         &self,
         world: Option<&concinnity_engine::components::ShaderPrograms>,
         engine: &BindlessSpv,
+        hot_reload: bool,
     ) -> RenderResult<BucketPipelines> {
         let targets = self.bucket_pipeline_targets().ok_or_else(|| {
             RenderError::Other("the GPU-driven main pass is not live".to_string())
         })?;
+        let targets = BucketPipelineTargets {
+            hot_reload,
+            ..targets
+        };
         let pipelines = build_bucket_pipeline(
             &self.hw.device,
             targets,

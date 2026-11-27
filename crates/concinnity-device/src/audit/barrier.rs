@@ -116,6 +116,9 @@ const AUDITS: &[BackendAudit] = &[
             // post seam's, the reactive writers', and the recorder's own
             // draw-over-the-scene scope.
             ("main_pass.rs", ".transition(&", 3, Reason::ScopeLayout),
+            // The hidden-world MSAA frame, which skips the main scope and
+            // leaves its resolve sampled with one move.
+            ("draw/main.rs", ".transition(&", 1, Reason::ScopeLayout),
             (
                 "post/gbuffer_scope.rs",
                 ".transition(&",
