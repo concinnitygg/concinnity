@@ -249,8 +249,9 @@ pub(super) fn serialize() {
     });
 }
 
-// Serialize, then release the library. Called from the final context's Drop
-// (never the outgoing context of a `reload_world`, which keeps the device).
+// Serialize, then release the library. Called from the Drop of a context that
+// still holds its window, never the outgoing context of a successful
+// `reload_world`, whose successor keeps the device.
 pub(super) fn shutdown() {
     serialize();
     STATE.with(|state| {

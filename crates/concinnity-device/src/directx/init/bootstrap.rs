@@ -3,6 +3,7 @@
 //! allocator, and swapchain creation. Returns the context's `DxHardware` group
 //! and the swapchain it presents through.
 
+use crate::held_window::HeldWindow;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::SwapchainConfig;
@@ -323,7 +324,7 @@ pub(super) fn setup(
         info_queue,
         hdr_mode,
         swapchain_config,
-        window: Some(window),
+        window: HeldWindow::new(window),
     };
     let swapchain = DxgiSwapchain {
         handle: swapchain,

@@ -27,6 +27,9 @@ pub(crate) mod frame_capture;
 // `RenderStats::gpu_wait_us` means the same thing on each.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod gpu_wait;
+// The window a context lends its successor across a live world reload.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod held_window;
 #[cfg(backend_metal)]
 pub mod metal;
 #[cfg(any(backend_metal, backend_dx, backend_vk))]

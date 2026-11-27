@@ -467,8 +467,17 @@ impl WorldReload for MtlContext {
     // drops this backend.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
-        let reuse = self.hw.hand_over()?;
-        *self = Self::build(init, Some(reuse))?;
-        Ok(())
+        let (reuse, loan) = self.hw.hand_over()?;
+        match Self::build(init, Some(reuse)) {
+            Ok(rebuilt) => {
+                drop(loan);
+                *self = rebuilt;
+                Ok(())
+            }
+            Err(e) => {
+                self.hw.window.reclaim(loan);
+                Err(e)
+            }
+        }
     }
 }

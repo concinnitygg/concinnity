@@ -5,6 +5,7 @@
 //! exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::held_window::HeldWindow;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::{EmbeddedSurface, SwapchainConfig};
@@ -91,7 +92,7 @@ pub(super) fn setup(
     let (hw, initial_w, initial_h) = if let Some(mut hw) = reuse {
         let view = &hw
             .window
-            .as_ref()
+            .get()
             .ok_or_else(|| {
                 RenderError::Other("reload_world: handed-over hardware has no window".into())
             })?
@@ -151,11 +152,11 @@ pub(super) fn setup(
             swap_pixel_format: swap_pixel_format(hdr_mode),
             hdr_mode,
             swapchain_config,
-            window: Some(window),
+            window: HeldWindow::new(window),
         };
         (hw, initial_w, initial_h)
     };
-    if let Some(w) = &hw.window {
+    if let Some(w) = hw.window.get() {
         // Honor the requested vsync on the backing CAMetalLayer (default
         // CAMetalLayer presentation is display-synced).
         set_display_sync(&w.view, vsync);

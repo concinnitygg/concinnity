@@ -3,6 +3,7 @@
 // drive all three backends identically.
 
 use crate::gpu_wait::GpuWait;
+use crate::held_window::{HeldWindow, WindowLoan};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
     InstancedCluster, PostProcessParams, ReceiverBounds, ShadowUniforms,
@@ -528,9 +529,9 @@ pub(super) struct DxHardware {
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches.
     pub swapchain_config: init::SwapchainConfig,
-    // The window, moved into the successor context on `reload_world`; `None`
-    // only on the outgoing context.
-    pub window: Option<Win32Window>,
+    // The window, lent to the successor context on `reload_world` and returned
+    // if that build fails.
+    pub window: HeldWindow<Win32Window>,
 }
 
 impl DxHardware {
@@ -538,13 +539,13 @@ impl DxHardware {
     // `reload_world`: COM clones of the device, queue, adapter and info queue,
     // with the window and fullscreen restore state moved out. The successor
     // places into a fresh allocator; the outgoing world releases into its own.
-    pub(super) fn hand_over(&mut self) -> RenderResult<Self> {
-        Ok(Self {
-            window: Some(
-                self.window.take().ok_or_else(|| {
-                    RenderError::Other("reload_world: window already taken".into())
-                })?,
-            ),
+    pub(super) fn hand_over(&mut self) -> RenderResult<(Self, WindowLoan<Win32Window>)> {
+        let (window, loan) = self
+            .window
+            .lend()
+            .ok_or_else(|| RenderError::Other("reload_world: window already taken".into()))?;
+        let hw = Self {
+            window,
             alloc: DeviceAllocator::new(
                 &self.device,
                 &self.command_queue,
@@ -558,7 +559,8 @@ impl DxHardware {
             rt_capable: self.rt_capable,
             hdr_mode: self.hdr_mode,
             swapchain_config: self.swapchain_config,
-        })
+        };
+        Ok((hw, loan))
     }
 
     // Frames in flight: the depth of every per-frame ring, fixed for this
@@ -929,7 +931,7 @@ impl DxContext {
     pub(super) fn platform_window(&self) -> &Win32Window {
         self.hw
             .window
-            .as_ref()
+            .get()
             .expect("DxContext window taken by reload_world")
     }
 
@@ -937,7 +939,7 @@ impl DxContext {
     pub(super) fn platform_window_mut(&mut self) -> &mut Win32Window {
         self.hw
             .window
-            .as_mut()
+            .get_mut()
             .expect("DxContext window taken by reload_world")
     }
 
@@ -1217,9 +1219,9 @@ impl Drop for DxContext {
         // session the hardware holds.
         self.upscale.backend = None;
         // Persist and release the pipeline library. `window` is `None` only
-        // on the outgoing context of a `reload_world`, whose successor keeps
-        // the device and the installed library.
-        if self.hw.window.is_some() {
+        // on the outgoing context of a successful `reload_world`, whose
+        // successor keeps the device and the installed library.
+        if self.hw.window.get().is_some() {
             super::pso_library::shutdown();
             // Also writes whatever shader artifacts were compiled lazily since
             // init's own checkpoint.

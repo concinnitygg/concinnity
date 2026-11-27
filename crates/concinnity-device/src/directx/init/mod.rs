@@ -540,7 +540,8 @@ impl WorldReload for DxContext {
     // Rebuild the world's content in place for a live reload: hand the hardware
     // and swapchain to a successor built from `init` and replace `self`. COM
     // refcounts keep the shared objects alive. Only called when the swapchain
-    // config is unchanged; on failure `window` stays `None` for the caller.
+    // config is unchanged; on failure the window returns to `self`, which the
+    // caller then drops.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let swapchain = bootstrap::DxgiSwapchain {
@@ -548,8 +549,17 @@ impl WorldReload for DxContext {
             format: self.swapchain.format,
             allow_tearing: self.swapchain.allow_tearing,
         };
-        let reuse = (self.hw.hand_over()?, swapchain);
-        *self = Self::build(init, Some(reuse))?;
-        Ok(())
+        let (hw, loan) = self.hw.hand_over()?;
+        match Self::build(init, Some((hw, swapchain))) {
+            Ok(rebuilt) => {
+                drop(loan);
+                *self = rebuilt;
+                Ok(())
+            }
+            Err(e) => {
+                self.hw.window.reclaim(loan);
+                Err(e)
+            }
+        }
     }
 }

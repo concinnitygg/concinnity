@@ -781,7 +781,8 @@ impl WorldReload for VkContext {
     // hardware for a normal `Drop`.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
-        let reuse = (self.hw.hand_over()?, self.swapchain.share());
+        let (hw, loan) = self.hw.hand_over()?;
+        let reuse = (hw, self.swapchain.share());
         // Free the old world before the successor builds so it reuses the memory. The
         // flag set first keeps the swapchain for the successor; a failure unsets it
         // and tears the swapchain down so `Drop` frees the hardware.
@@ -795,10 +796,12 @@ impl WorldReload for VkContext {
         tracing::debug!("reload: old world freed: {}", self.hw.alloc.stats());
         match Self::build(init, Some(reuse)) {
             Ok(rebuilt) => {
+                drop(loan);
                 *self = rebuilt;
                 Ok(())
             }
             Err(e) => {
+                self.hw.window.reclaim(loan);
                 self.reused_by_successor = false;
                 self.destroy_swapchain_resources();
                 Err(e)

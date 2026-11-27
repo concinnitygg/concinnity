@@ -2,6 +2,7 @@
 //! debug messenger, surface, device, swapchain and allocator a fresh launch
 //! acquires, or adopts from the outgoing context on a live world reload.
 
+use crate::held_window::HeldWindow;
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components;
@@ -387,7 +388,7 @@ pub(super) fn acquire_hardware(
             hdr_mode,
             vsync,
             swapchain_config: req.swapchain_config(),
-            window: Some(window),
+            window: HeldWindow::new(window),
             entry,
         },
         SwapchainState {

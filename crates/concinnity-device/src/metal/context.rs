@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::held_window::{HeldWindow, WindowLoan};
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
@@ -378,10 +379,9 @@ pub(super) struct MtlHardware {
     // reuses the hardware only when it still matches. The request, not the
     // negotiated mode, so a display without EDR does not rebuild every save.
     pub swapchain_config: init::SwapchainConfig,
-    // `Option` so a live `cn edit` world reload can MOVE the window (and its
-    // live cursor / keymap / fullscreen state) into the rebuilt context; a
-    // normal context always holds `Some`. Access via `window`/`window_mut`.
-    pub window: Option<WindowState>,
+    // The window, lent to the rebuilt context on a live world reload and
+    // returned if that build fails. Access via `window_state`.
+    pub window: HeldWindow<WindowState>,
 }
 
 impl MtlHardware {
@@ -389,11 +389,12 @@ impl MtlHardware {
     // `reload_world`: clones of the device and command queue, with the window
     // and the graph queues moved out. The successor places into a fresh
     // allocator; the outgoing world releases into its own.
-    pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
-        Ok(Self {
-            window: Some(self.window.take().ok_or_else(|| {
-                error::RenderError::Other("reload_world: window already taken".to_string())
-            })?),
+    pub(super) fn hand_over(&mut self) -> error::RenderResult<(Self, WindowLoan<WindowState>)> {
+        let (window, loan) = self.window.lend().ok_or_else(|| {
+            error::RenderError::Other("reload_world: window already taken".to_string())
+        })?;
+        let hw = Self {
+            window,
             graph_queues: self.graph_queues.take(),
             allocator: DeviceAllocator::new(&self.device, self.swapchain_config.frames_in_flight),
             device: self.device.clone(),
@@ -401,7 +402,8 @@ impl MtlHardware {
             swap_pixel_format: self.swap_pixel_format,
             hdr_mode: self.hdr_mode,
             swapchain_config: self.swapchain_config,
-        })
+        };
+        Ok((hw, loan))
     }
 
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
@@ -747,7 +749,7 @@ impl MtlContext {
     pub(super) fn window_state(&self) -> &WindowState {
         self.hw
             .window
-            .as_ref()
+            .get()
             .expect("MtlContext window taken by reload_world")
     }
 
@@ -755,7 +757,7 @@ impl MtlContext {
     pub(super) fn window_state_mut(&mut self) -> &mut WindowState {
         self.hw
             .window
-            .as_mut()
+            .get_mut()
             .expect("MtlContext window taken by reload_world")
     }
 

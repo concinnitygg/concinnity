@@ -2,6 +2,7 @@
 // Mirrors the public API of metal::MtlContext so GraphicsSystem can drive both
 // backends identically.
 
+use crate::held_window::{HeldWindow, WindowLoan};
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
@@ -855,9 +856,9 @@ pub(super) struct VkHardware {
     // The swapchain config this context was built with; a live reload reuses the
     // backend only when the new world's config matches.
     pub(super) swapchain_config: init::SwapchainConfig,
-    // The window, moved into the successor context on `reload_world`; `None` only
-    // transiently on the outgoing context.
-    pub(super) window: Option<super::window::PlatformWindow>,
+    // The window, lent to the successor context on `reload_world` and returned
+    // if that build fails.
+    pub(super) window: HeldWindow<super::window::PlatformWindow>,
     // Keep Entry alive for the lifetime of the instance
     pub(super) entry: ash::Entry,
 }
@@ -866,11 +867,14 @@ impl VkHardware {
     // The hardware handed to a successor on `reload_world`, with the window and
     // timestamp pool moved out. Vulkan handles are not refcounted, so the outgoing
     // `Drop` skips the shared surface and swapchain too.
-    pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
-        Ok(Self {
-            window: Some(self.window.take().ok_or_else(|| {
-                error::RenderError::Other("reload_world: window already taken".into())
-            })?),
+    pub(super) fn hand_over(
+        &mut self,
+    ) -> error::RenderResult<(Self, WindowLoan<super::window::PlatformWindow>)> {
+        let (window, loan) = self.window.lend().ok_or_else(|| {
+            error::RenderError::Other("reload_world: window already taken".into())
+        })?;
+        let hw = Self {
+            window,
             instance: self.instance.clone(),
             device: self.device.clone(),
             physical_device: self.physical_device,
@@ -892,7 +896,8 @@ impl VkHardware {
             vsync: self.vsync,
             swapchain_config: self.swapchain_config,
             entry: self.entry.clone(),
-        })
+        };
+        Ok((hw, loan))
     }
 }
 
@@ -1145,7 +1150,7 @@ impl VkContext {
     pub(super) fn platform_window(&self) -> &super::window::PlatformWindow {
         self.hw
             .window
-            .as_ref()
+            .get()
             .expect("VkContext window taken by reload_world")
     }
 
@@ -1153,7 +1158,7 @@ impl VkContext {
     pub(super) fn platform_window_mut(&mut self) -> &mut super::window::PlatformWindow {
         self.hw
             .window
-            .as_mut()
+            .get_mut()
             .expect("VkContext window taken by reload_world")
     }
 
