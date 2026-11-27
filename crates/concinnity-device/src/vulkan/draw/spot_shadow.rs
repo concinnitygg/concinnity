@@ -1,7 +1,7 @@
 //! Spot shadow pass: one depth-only render per shadow-casting spot light into
 //! its layer of the spot shadow array. Structurally the cascade pass with a
 //! different projection source -- each slice is a `ShadowView` drawn by the
-//! same depth-only render pass and GPU-driven pipeline, with a per-slice
+//! same depth-only scope and GPU-driven pipeline, with a per-slice
 //! descriptor set whose `ShadowUniforms` holds that spot's light-space matrix in
 //! slot 0 rather than the CSM cascade set.
 //!
@@ -36,15 +36,13 @@ pub(in crate::vulkan) struct SpotShadowBuild<'a> {
     // The depth array, already created with one layer per shadowed spot (or the
     // 1x1 fallback when there are none).
     pub map: GpuImage,
-    // The cascade pass's depth-only render pass, reused verbatim.
-    pub render_pass: vk::RenderPass,
     // The one-UBO layout the shadow vertex shader binds at set 0.
     pub set_layout: vk::DescriptorSetLayout,
     pub slice_size: u32,
     pub spot_shadows: &'a [SpotShadowData],
 }
 
-// Build the spot shadow resources: per-slice framebuffers, the `SpotShadowData`
+// Build the spot shadow resources: per-slice views, the `SpotShadowData`
 // storage buffer the forward pass indexes, and one `ShadowUniforms` slot per
 // slice with a descriptor set pointing at it. All static for the world's
 // lifetime; only the depth contents change per frame.
@@ -57,16 +55,15 @@ pub(in crate::vulkan) fn build_spot_shadow(
         device,
         physical_device,
         map,
-        render_pass,
         set_layout,
         slice_size,
         spot_shadows,
     } = b;
 
-    let framebuffers = if spot_shadows.is_empty() {
+    let slices = if spot_shadows.is_empty() {
         Vec::new()
     } else {
-        crate::vulkan::swapchain::create_shadow_framebuffers(device, render_pass, &map, slice_size)?
+        map.aux_views.clone()
     };
 
     // The per-slice projections the forward pass reads. A world with no shadowed
@@ -93,7 +90,7 @@ pub(in crate::vulkan) fn build_spot_shadow(
         .min_uniform_buffer_offset_alignment
         .max(1);
     let stride = (size_of::<ShadowUniforms>() as u64).div_ceil(align) * align;
-    let slots = framebuffers.len().max(1) as u64;
+    let slots = slices.len().max(1) as u64;
     let ubo = alloc.create_buffer(
         stride * slots,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -106,7 +103,7 @@ pub(in crate::vulkan) fn build_spot_shadow(
     // The pass's own descriptor pool: one single-UBO set per slice. Kept
     // separate from the shared pool so the slice count does not have to be
     // threaded into the main pool sizing.
-    let set_count = u32::saturating_from(framebuffers.len().max(1));
+    let set_count = u32::saturating_from(slices.len().max(1));
     let pool_sizes = PoolSizes::default()
         .sets(&shadow_global_set(), set_count)
         .build();
@@ -134,7 +131,7 @@ pub(in crate::vulkan) fn build_spot_shadow(
 
     Ok(SpotShadowState {
         map,
-        framebuffers,
+        slices,
         slice_size,
         data_buffer,
         ubo,
@@ -198,7 +195,7 @@ impl VkContext {
         let views = self.cull.spot_views.get(frame_idx);
         let gpu_driven = self.shadow_views_drawable() && views.is_some();
 
-        // Cull every refreshed slice before opening any render pass (Vulkan
+        // Cull every refreshed slice before opening any scope (Vulkan
         // disallows compute inside one).
         if gpu_driven {
             self.encode_spot_culls(rec, frame_idx);
@@ -206,8 +203,7 @@ impl VkContext {
 
         let sz = self.spot_shadow.slice_size;
         for slice in self.spot_shadow.refreshed_slices() {
-            let framebuffer = &self.spot_shadow.framebuffers[slice as usize];
-            Self::begin_shadow_slice(rec, &self.shadow.render_pass, framebuffer, sz);
+            Self::begin_shadow_slice(rec, self.spot_shadow.slices[slice as usize], sz);
             if gpu_driven && let Some(view) = views.and_then(|v| v.get(slice as usize)) {
                 self.draw_shadow_view(
                     rec,
@@ -221,7 +217,7 @@ impl VkContext {
                     },
                 );
             }
-            rec.end_render_pass();
+            rec.end_rendering();
         }
     }
 }

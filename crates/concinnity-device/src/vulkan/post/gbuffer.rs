@@ -16,7 +16,7 @@
 //! mirrors src/directx/post/gbuffer.rs.
 //!
 //! Unlike DirectX's single-resource G-buffer, the Vulkan unified buffer holds a
-//! per-frame `Vec<GpuImage>` for every MRT target (and per-frame framebuffers),
+//! per-frame `Vec<GpuImage>` for every MRT target,
 //! because the temporal resolve reads `velocity_images[frame_idx]` and the engine
 //! pipelines frames-in-flight deep.
 
@@ -37,13 +37,12 @@ use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layou
 use super::super::set_writes::SetWrites;
 use super::super::spirv_inputs::input_locations;
 use super::super::texture::{GpuImage, GpuUploadContext, create_depth_image};
+use super::gbuffer_scope::GbufferOpen;
 use super::gbuffer_sky::GbufferSky;
 use crate::vulkan::builtin_shaders::CompileProgram;
-use crate::vulkan::depth;
-use crate::vulkan::owned::{
-    OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
-};
+use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
 use crate::vulkan::record::Recorder;
+use crate::vulkan::rendering::PassFormats;
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches
@@ -67,119 +66,19 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
 // `GBufferView` (the std140 `GbView` UBO) is a GPU-free layout struct that
 // lives in `core::render` (imported above).
 
-// Pre-pass render pass: RGBA16F normal+depth, R8 roughness and RG16F velocity,
-// plus a private depth. The colors clear and end shader-readable; the depth is
-// stored because the temporal upscaler reads it with the motion vectors.
-pub(in crate::vulkan) fn create_prepass_render_pass(
-    device: &VkDevice,
-) -> RenderResult<OwnedRenderPass> {
-    prepass_render_pass(device, false)
-}
-
-// The late G-buffer pass's render pass: the pre-pass's attachments in the
-// layouts it left them, loaded rather than cleared, so the late lists draw over
-// what it drew. Render-pass-compatible with the pre-pass, so its framebuffers
-// and pipelines serve both.
-fn create_prepass_late_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
-    prepass_render_pass(device, true)
-}
-
-// The G-buffer render pass, cleared or loaded (`load`).
-fn prepass_render_pass(device: &VkDevice, load: bool) -> RenderResult<OwnedRenderPass> {
-    let load_op = if load {
-        vk::AttachmentLoadOp::LOAD
-    } else {
-        vk::AttachmentLoadOp::CLEAR
-    };
-    let initial = |rest| {
-        if load {
-            rest
-        } else {
-            vk::ImageLayout::UNDEFINED
-        }
-    };
-    let attachment = |format, rest| {
-        vk::AttachmentDescription::default()
-            .format(format)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(load_op)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(initial(rest))
-            .final_layout(rest)
-    };
-    let color_rest = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-    let attachments = [
-        attachment(GBUFFER_NORMAL_DEPTH_FORMAT, color_rest),
-        attachment(GBUFFER_ROUGHNESS_FORMAT, color_rest),
-        attachment(GBUFFER_VELOCITY_FORMAT, color_rest),
-        attachment(
-            vk::Format::D32_SFLOAT,
-            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        ),
-    ];
-    let color_refs = [0, 1, 2].map(|attachment| {
-        vk::AttachmentReference::default()
-            .attachment(attachment)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-    });
-    let depth_ref = vk::AttachmentReference::default()
-        .attachment(3)
-        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(&color_refs)
-        .depth_stencil_attachment(&depth_ref);
-    let dependencies = prepass_dependencies();
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(&attachments)
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&dependencies);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer prepass render pass"))
-}
-
-// The G-buffer render passes' dependencies, the same for the cleared and the
-// loaded pass, since render pass compatibility requires identical ones. In:
-// the last readers of the attachments done, and a loaded pass's earlier writes
-// landed, before the pass writes them. Out: its writes visible to the readers
-// after it, which sample in fragment and compute shaders.
-fn prepass_dependencies() -> [vk::SubpassDependency; 2] {
-    let writes =
-        vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE;
-    let stages = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
-    [
-        vk::SubpassDependency::default()
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .dst_subpass(0)
-            .src_stage_mask(stages | vk::PipelineStageFlags::FRAGMENT_SHADER)
-            .src_access_mask(vk::AccessFlags::SHADER_READ | writes)
-            .dst_stage_mask(stages)
-            .dst_access_mask(
-                writes
-                    | vk::AccessFlags::COLOR_ATTACHMENT_READ
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ,
-            ),
-        vk::SubpassDependency::default()
-            .src_subpass(0)
-            .dst_subpass(vk::SUBPASS_EXTERNAL)
-            .src_stage_mask(stages)
-            .src_access_mask(writes)
-            .dst_stage_mask(
-                vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
-            )
-            .dst_access_mask(vk::AccessFlags::SHADER_READ),
-    ]
-}
-
 // The pre-pass's three MRT targets: normal+depth, roughness, velocity. All three
 // must be byte-identical without `independentBlend` enabled at device creation;
 // the R8 roughness target stores only R under the uniform RGBA write mask.
 pub(in crate::vulkan) const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
+
+/// What the G-buffer pre-pass renders to: its three channels over a private
+/// depth.
+pub(in crate::vulkan) const PREPASS_FORMATS: PassFormats = PassFormats::colors([
+    GBUFFER_NORMAL_DEPTH_FORMAT,
+    GBUFFER_ROUGHNESS_FORMAT,
+    GBUFFER_VELOCITY_FORMAT,
+])
+.with_depth(vk::Format::D32_SFLOAT);
 
 // The main pass's attributes on binding 0 plus the previous-frame position
 // (location 5) on binding 1. Static geometry binds the same buffer to both;
@@ -256,7 +155,7 @@ pub(in crate::vulkan) fn create_prepass_pipeline(
             targets.vert_spv,
             targets.frag_spv,
             targets.layout,
-            targets.render_pass,
+            targets.formats,
             &PREPASS_TARGETS,
         )
     }
@@ -525,23 +424,17 @@ pub(in crate::vulkan) struct GbufferFrame {
 // `destroy`, except the pooled color channels. Per frame in flight, since the
 // temporal resolve reads velocity per frame.
 pub(in crate::vulkan) struct GbufferResources {
-    // Render pass.
-    pub(in crate::vulkan) prepass_render_pass: OwnedRenderPass,
-    // The late G-buffer pass's, which loads what the pre-pass left.
-    late_render_pass: OwnedRenderPass,
-
     // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat),
     // host-mapped. The pre-pass pipeline's set 0 and the sky's per-frame sets
     // point at it.
     pub(in crate::vulkan) view_ubo_buffers: Vec<PooledBuffer>,
 
-    // Per-frame MRT targets, private depth and framebuffers, rebuilt on resize. The
+    // Per-frame MRT targets and private depth, rebuilt on resize. The
     // color channels are pooled; the depth is feature-owned.
     pub(in crate::vulkan) normal_depth_images: Vec<PooledTarget>,
     pub(in crate::vulkan) roughness_images: Vec<PooledTarget>,
     pub(in crate::vulkan) velocity_images: Vec<PooledTarget>,
     pub(in crate::vulkan) depth_images: Vec<GpuImage>,
-    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // The sky's motion behind the geometry.
     pub(in crate::vulkan) sky: GbufferSky,
@@ -579,8 +472,6 @@ impl GbufferResources {
         // sized targets are built by `build_targets`, which takes the full
         // `extent` below and reads width/height itself.
         let GbufferExtent { frames, .. } = extent;
-        let prepass_render_pass = create_prepass_render_pass(device)?;
-        let late_render_pass = create_prepass_late_render_pass(device)?;
 
         // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat).
         let mut view_ubo_buffers = Vec::with_capacity(frames);
@@ -592,29 +483,21 @@ impl GbufferResources {
             )?;
             view_ubo_buffers.push(buf);
         }
-        let sky = GbufferSky::build(
-            device,
-            prepass_render_pass.handle(),
-            &view_ubo_buffers,
-            hot_reload,
-        )?;
+        let sky = GbufferSky::build(device, &view_ubo_buffers, hot_reload)?;
 
         let mut me = Self {
-            prepass_render_pass,
-            late_render_pass,
             view_ubo_buffers,
             normal_depth_images: Vec::new(),
             roughness_images: Vec::new(),
             velocity_images: Vec::new(),
             depth_images: Vec::new(),
-            framebuffers: Vec::new(),
             sky,
         };
         me.build_targets(ctx, queue, extent, pooled)?;
         Ok(me)
     }
 
-    // Allocate the per-frame MRT targets + private depth + framebuffers at the
+    // Allocate the per-frame MRT targets and private depth at the
     // given extent. One slot per frame in flight.
     fn build_targets(
         &mut self,
@@ -658,21 +541,10 @@ impl GbufferResources {
                 h,
                 vk::SampleCountFlags::TYPE_1,
             )?;
-            let attachments = [normal_depth.view, roughness.view, velocity.view, depth.view];
-            let framebuffer = device.framebuffer(
-                self.prepass_render_pass.handle(),
-                &attachments,
-                vk::Extent2D {
-                    width: w,
-                    height: h,
-                },
-                "gbuffer prepass framebuffer",
-            )?;
             self.normal_depth_images.push(normal_depth);
             self.roughness_images.push(roughness);
             self.velocity_images.push(velocity);
             self.depth_images.push(depth);
-            self.framebuffers.push(framebuffer);
         }
         // The sampled channels already rest in `SHADER_READ_ONLY_OPTIMAL`, as the pool
         // allocates them, so a consumer sampling them before the pre-pass ever ran
@@ -693,7 +565,7 @@ impl GbufferResources {
     // Whether the per-frame targets exist. A rebuild that fails leaves none,
     // never a partial set.
     pub(in crate::vulkan) fn has_targets(&self) -> bool {
-        !self.framebuffers.is_empty()
+        !self.depth_images.is_empty()
     }
 
     // Per-frame normal+depth views, one per frame in flight. The readers that
@@ -712,7 +584,6 @@ impl GbufferResources {
     }
 
     fn destroy_targets(&mut self, _device: &VkDevice) {
-        self.framebuffers.clear();
         // The three color channels are pool-owned: dropping these records frees
         // nothing, which is the point. The private depth images retire through
         // the allocator as they drop.
@@ -723,7 +594,7 @@ impl GbufferResources {
     }
 
     // Rebuild the per-frame targets after the transient pool was rebuilt, since
-    // the framebuffers reference the pooled images. On failure the targets stay
+    // they name the pooled images. On failure the targets stay
     // empty and readers skip.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
@@ -833,64 +704,39 @@ impl VkContext {
         block: &GBufferView,
         grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
-        let Some(framebuffer) = gb.framebuffers.get(frame_idx) else {
+        if gb.frame(frame_idx).is_none() {
             return;
-        };
+        }
         let extent = self.targets.render_extent;
         let velocity_active = block.motion != 0;
         let view_uni = *block;
         gb.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
-        // Clears: alpha-0 normal+depth = "no geometry"; roughness 1.0 = no SSR;
-        // velocity 0 = no motion.
-        let clears = [
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 0.0],
-                },
-            },
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [1.0, 0.0, 0.0, 0.0],
-                },
-            },
-            vk::ClearValue {
-                color: vk::ClearColorValue { float32: [0.0; 4] },
-            },
-            depth::CLEAR_VALUE,
-        ];
-        rec.begin_render_pass(
-            &gb.prepass_render_pass,
-            framebuffer,
-            vk::Rect2D::default().extent(extent),
-            &clears,
-        );
+        gb.render(rec, frame_idx, extent, GbufferOpen::Clear, |rec| {
+            rec.set_viewport(&prepass_viewport(extent));
+            rec.set_scissor(&vk::Rect2D::default().extent(extent));
 
-        rec.set_viewport(&prepass_viewport(extent));
-        rec.set_scissor(&vk::Rect2D::default().extent(extent));
-
-        // Reuses the main pass's indirect buffer with two draws (static + instance,
-        // then the skinned tail). With nothing to draw the pass is just the clears.
-        if let Some(indirect) = self.cull.indirect_buffers.get(frame_idx) {
-            self.encode_gbuffer_prepass_gpu_driven(
-                rec,
-                frame_idx,
-                indirect.buffer(),
-                velocity_active,
-            );
-        }
-        if let Some(grass) = grass {
-            self.encode_grass_prepass(rec, frame_idx, grass);
-        }
-        self.encode_raymarch_prepass(rec, frame_idx, &view, &view_uni);
-        // The sky keeps the "no geometry" depth and roughness and adds the
-        // camera's motion where nothing was drawn.
-        if self.draws_sky(self.state.view.mode) {
-            gb.sky.encode(rec, frame_idx);
-            self.inc_draw_calls(1);
-        }
-
-        rec.end_render_pass();
+            // Reuses the main pass's indirect buffer with two draws (static + instance,
+            // then the skinned tail). With nothing to draw the pass is just the clears.
+            if let Some(indirect) = self.cull.indirect_buffers.get(frame_idx) {
+                self.encode_gbuffer_prepass_gpu_driven(
+                    rec,
+                    frame_idx,
+                    indirect.buffer(),
+                    velocity_active,
+                );
+            }
+            if let Some(grass) = grass {
+                self.encode_grass_prepass(rec, frame_idx, grass);
+            }
+            self.encode_raymarch_prepass(rec, frame_idx, &view, &view_uni);
+            // The sky keeps the "no geometry" depth and roughness and adds the
+            // camera's motion where nothing was drawn.
+            if self.draws_sky(self.state.view.mode) {
+                gb.sky.encode(rec, frame_idx);
+                self.inc_draw_calls(1);
+            }
+        });
     }
 
     // Copy each record's model into this frame's history slot. That slot was read
@@ -999,10 +845,7 @@ impl VkContext {
         frame_idx: usize,
         block: &GBufferView,
     ) {
-        let (Some(framebuffer), Some(indirect)) = (
-            gb.framebuffers.get(frame_idx),
-            self.cull.indirect_buffers_late.get(frame_idx),
-        ) else {
+        let Some(indirect) = self.cull.indirect_buffers_late.get(frame_idx) else {
             return;
         };
         if self.state.draw.n_objects == 0 {
@@ -1010,26 +853,21 @@ impl VkContext {
         }
         let extent = self.targets.render_extent;
         // The pre-pass wrote this frame slot's view block; the late pass draws
-        // through the same one. A loaded render pass takes no clear values.
-        rec.begin_render_pass(
-            &gb.late_render_pass,
-            framebuffer,
-            vk::Rect2D::default().extent(extent),
-            &[],
-        );
-        rec.set_viewport(&prepass_viewport(extent));
-        rec.set_scissor(&vk::Rect2D::default().extent(extent));
-        self.encode_gbuffer_prepass_gpu_driven(
-            rec,
-            frame_idx,
-            indirect.buffer(),
-            block.motion != 0,
-        );
-        rec.end_render_pass();
+        // through the same one.
+        gb.render(rec, frame_idx, extent, GbufferOpen::Resume, |rec| {
+            rec.set_viewport(&prepass_viewport(extent));
+            rec.set_scissor(&vk::Rect2D::default().extent(extent));
+            self.encode_gbuffer_prepass_gpu_driven(
+                rec,
+                frame_idx,
+                indirect.buffer(),
+                block.motion != 0,
+            );
+        });
     }
 
     // The GPU-driven pre-pass raster of `indirect`'s lists inside the caller's
-    // render pass: the static + instance prefix once per shader bucket over the
+    // scope: the static + instance prefix once per shader bucket over the
     // static VB bound to both bindings, then the skinned tail over the current
     // and previous deformed VBs.
     fn encode_gbuffer_prepass_gpu_driven(

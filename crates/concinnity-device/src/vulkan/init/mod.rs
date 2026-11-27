@@ -5,7 +5,7 @@
 //!   bootstrap.rs     window, instance, debug messenger, surface, device, swapchain.
 //!   commands.rs      command pools and buffers, timestamp reset, sync objects.
 //!   `scene_assets.rs`  textures, scene and cube samplers, IBL cubes, color LUT.
-//!   targets.rs       main render pass, HDR attachments, transient image pool.
+//!   targets.rs       HDR attachments, transient image pool.
 //!   `scene_data.rs`    area lights, geometry, uniform rings, clustered lights.
 //!   shadow.rs        cascade and spot shadow states.
 //!   descriptors.rs   global set layout, the shared pool, global and shadow sets.
@@ -52,8 +52,8 @@ use std::sync::atomic::AtomicBool;
 
 use super::context::{
     CompositeState, CullState, Descriptors, Geometry, HDR_FORMAT, InstancedState, ProbeState,
-    SceneAssets, ShadowState, SkinnedState, StreamState, SwapchainState, Targets, TextState,
-    VkContext, VkHardware,
+    SceneAssets, SkinnedState, StreamState, SwapchainState, Targets, TextState, VkContext,
+    VkHardware,
 };
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
@@ -361,7 +361,6 @@ impl VkContext {
                 descriptors: &descriptors,
                 cull: &cull,
                 targets: &targets,
-                shadow: &shadow,
             },
         )?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
@@ -588,7 +587,6 @@ fn build_sky(
     let sky = crate::vulkan::sky::SkyState::build(
         &gpu.hw.device,
         descriptors.global_set_layout.handle(),
-        targets.main_render_pass.handle(),
         targets.msaa_samples,
         env_map_background,
         gpu.hot_reload,
@@ -596,11 +594,6 @@ fn build_sky(
     let Some((settings, cube)) = atmosphere else {
         return Ok((sky, None));
     };
-    let hdr_resolve_views: Vec<vk::ImageView> = targets
-        .hdr_resolve_images
-        .iter()
-        .map(|img| img.view)
-        .collect();
     let depth_views: Vec<vk::ImageView> = targets.depth_images.iter().map(|img| img.view).collect();
     let atmosphere = AtmosphereState::new(
         &gpu.upload(),
@@ -608,7 +601,6 @@ fn build_sky(
         cube,
         gpu.frames,
         crate::vulkan::atmosphere::AtmosphereTargets {
-            hdr_resolve_views: &hdr_resolve_views,
             depth_views: &depth_views,
             extent: render_extent,
             msaa: targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
@@ -616,7 +608,6 @@ fn build_sky(
         },
         crate::vulkan::atmosphere::AtmosphereSky {
             global_set_layout: descriptors.global_set_layout.handle(),
-            main_render_pass: targets.main_render_pass.handle(),
             samples: targets.msaa_samples,
         },
         gpu.hot_reload,
@@ -709,7 +700,6 @@ struct GrassInit<'a> {
     descriptors: &'a Descriptors,
     cull: &'a CullState,
     targets: &'a Targets,
-    shadow: &'a ShadowState,
 }
 
 fn build_grass(
@@ -722,7 +712,6 @@ fn build_grass(
         descriptors,
         cull,
         targets,
-        shadow,
     } = passes;
     let (Some(field), Some(bindless), Some(prepass), Some(hiz)) = (
         field,
@@ -743,9 +732,7 @@ fn build_grass(
             hiz_read: hiz.read_set_layout.handle(),
         },
         super::grass::GrassTargets {
-            main_render_pass: targets.main_render_pass.handle(),
             msaa_samples: targets.msaa_samples,
-            shadow_render_pass: shadow.render_pass.handle(),
             shadow_bias_clamp: gpu
                 .hw
                 .device
@@ -785,7 +772,7 @@ impl WorldReload for VkContext {
         // the window and tears the swapchain down so `Drop` frees the hardware.
         self.destroy_world_content();
         self.hw.alloc.reclaim_idle();
-        // The old world's pipelines, layouts and render passes queued on the
+        // The old world's pipelines and layouts queued on the
         // device's retire list as their owners dropped; the `wait_idle` above
         // means they can go now rather than after the successor's first frames.
         self.hw.device.reclaim_idle();

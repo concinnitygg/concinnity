@@ -1,5 +1,5 @@
 //! `GlassPanel`: one producer of the engine's transparent pass on the Vulkan
-//! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
+//! backend (`transparent.rs` owns the pass itself, the scene snapshot, the
 //! shared descriptor / pipeline layouts and the combined back-to-front draw
 //! order; `water.rs` is the other producer). Each panel is a flat world-space
 //! quad, built once at init; the fragment shader refracts the pass's scene
@@ -137,7 +137,6 @@ pub(in crate::vulkan) fn build_glass_producer(
     let (vert_spv, frag_spv) = compile_glass_shaders(ctx.hot_reload, ctx.msaa)?;
     let pipeline = create_transparent_pipeline(
         ctx.device,
-        ctx.render_pass,
         ctx.layout,
         &vert_spv,
         &frag_spv,
@@ -207,24 +206,10 @@ fn build_traced_pipelines(
     vertex_input: TransparentVertexInput,
 ) -> RenderResult<TracedGlassPipelines> {
     let shade = |layout, fs: &[u8]| {
-        create_transparent_pipeline(
-            ctx.device,
-            ctx.render_pass,
-            layout,
-            &shaders.vs,
-            fs,
-            vertex_input,
-        )
+        create_transparent_pipeline(ctx.device, layout, &shaders.vs, fs, vertex_input)
     };
     let reflection = |layout, fs: &[u8]| {
-        create_glass_reflection_pipeline(
-            ctx.device,
-            ctx.reflection_render_pass,
-            layout,
-            &shaders.vs,
-            fs,
-            vertex_input,
-        )
+        create_glass_reflection_pipeline(ctx.device, layout, &shaders.vs, fs, vertex_input)
     };
     let (shade_textured, reflection_textured) = match (
         ctx.rt_layout_textured,

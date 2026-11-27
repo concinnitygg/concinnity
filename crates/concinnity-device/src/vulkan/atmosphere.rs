@@ -39,8 +39,7 @@ use super::clouds::{CloudInputs, CloudState};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
 use super::probe_prefilter::{
@@ -48,6 +47,7 @@ use super::probe_prefilter::{
 };
 use super::probe_set::{self, CubeImage};
 use super::record::Recorder;
+use super::rendering::PassFormats;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
@@ -85,7 +85,6 @@ struct Table {
 // frame slot.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct AtmosphereTargets<'a> {
-    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
     pub(in crate::vulkan) extent: vk::Extent2D,
     pub(in crate::vulkan) msaa: bool,
@@ -97,7 +96,6 @@ pub(in crate::vulkan) struct AtmosphereTargets<'a> {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct AtmosphereSky {
     pub(in crate::vulkan) global_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) main_render_pass: vk::RenderPass,
     pub(in crate::vulkan) samples: vk::SampleCountFlags,
 }
 
@@ -124,10 +122,8 @@ pub(in crate::vulkan) struct AtmosphereState {
     sky_sets: Vec<vk::DescriptorSet>,
     _aerial_set_layout: OwnedSetLayout,
     aerial_layout: OwnedPipelineLayout,
-    aerial_pass: OwnedRenderPass,
     aerial_pipeline: OwnedPipeline,
     aerial_sets: Vec<vk::DescriptorSet>,
-    framebuffers: Vec<OwnedFramebuffer>,
     // The clouds, when the air has cloud layers.
     pub(in crate::vulkan) clouds: Option<CloudState>,
     // The ground the tables that depend on the air alone were built over.
@@ -372,53 +368,6 @@ fn pipeline_layout(
         .map_err(|e| super::error::map_vk_result(e, label))
 }
 
-// The haze pass's render pass: the resolved scene, loaded and stored, resting
-// sampled on either side the way the fog pass leaves it.
-fn create_aerial_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::LOAD)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let dep_in = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
-        );
-    let dep_out = vk::SubpassDependency::default()
-        .src_subpass(0)
-        .dst_subpass(vk::SUBPASS_EXTERNAL)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    let deps = [dep_in, dep_out];
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| super::error::map_vk_result(e, "aerial perspective render pass"))
-}
-
 fn compile_kernel(
     device: &VkDevice,
     layout: vk::PipelineLayout,
@@ -636,7 +585,6 @@ impl AtmosphereState {
             device,
             &SKY_ATMOSPHERE_FRAG,
             sky_layout.handle(),
-            sky.main_render_pass,
             sky.samples,
             hot_reload,
         )?;
@@ -655,11 +603,10 @@ impl AtmosphereState {
             &[aerial_set_layout.handle()],
             "aerial perspective layout",
         )?;
-        let aerial_pass = create_aerial_pass(device, targets.hdr_format)?;
         let aerial_pipeline = build_aerial_pipeline(
             device,
             aerial_layout.handle(),
-            aerial_pass.handle(),
+            targets.hdr_format,
             targets.msaa,
             hot_reload,
         )?;
@@ -676,12 +623,6 @@ impl AtmosphereState {
                 .sampled_image_in(5, tables[MULTISCATTER].view, vk::ImageLayout::GENERAL)
                 .apply(device);
         }
-        let framebuffers = device.single_view_framebuffers(
-            aerial_pass.handle(),
-            targets.hdr_resolve_views.iter().copied().take(frames),
-            targets.extent,
-            "aerial perspective framebuffer",
-        )?;
         let clouds = build_clouds(
             gpu,
             settings,
@@ -692,7 +633,7 @@ impl AtmosphereState {
                 multiscatter: tables[MULTISCATTER].view,
                 sky_view: tables[SKY_VIEW].view,
                 table_sampler: sampler.handle(),
-                composite_pass: aerial_pass.handle(),
+                scene_format: targets.hdr_format,
                 depth_views: targets.depth_views,
                 extent: targets.extent,
                 msaa: targets.msaa,
@@ -728,10 +669,8 @@ impl AtmosphereState {
             sky_sets,
             _aerial_set_layout: aerial_set_layout,
             aerial_layout,
-            aerial_pass,
             aerial_pipeline,
             aerial_sets,
-            framebuffers,
             clouds,
             air_tables: AirTables::default(),
             readiness: TableReadiness::default(),
@@ -743,21 +682,11 @@ impl AtmosphereState {
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         gpu: &GpuUploadContext<'_>,
-        hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
         msaa: bool,
     ) -> RenderResult<()> {
         let device = gpu.device;
-        self.framebuffers = device.single_view_framebuffers(
-            self.aerial_pass.handle(),
-            hdr_resolve_views
-                .iter()
-                .copied()
-                .take(self.params_ubos.len()),
-            extent,
-            "aerial perspective framebuffer",
-        )?;
         let last_depth = depth_views.len().saturating_sub(1);
         for (i, &set) in self.aerial_sets.iter().enumerate() {
             SetWrites::new(set)
@@ -774,7 +703,7 @@ impl AtmosphereState {
                     multiscatter: self.tables[MULTISCATTER].view,
                     sky_view: self.tables[SKY_VIEW].view,
                     table_sampler: self.sampler.handle(),
-                    composite_pass: self.aerial_pass.handle(),
+                    scene_format: super::context::HDR_FORMAT,
                     depth_views,
                     extent,
                     msaa,
@@ -784,9 +713,8 @@ impl AtmosphereState {
         Ok(())
     }
 
-    // Release the framebuffers and the pooled resources ahead of the device.
+    // Release the pooled resources ahead of the device.
     pub(in crate::vulkan) fn destroy(&mut self) {
-        self.framebuffers.clear();
         if let Some(clouds) = self.clouds.as_mut() {
             clouds.destroy();
         }
@@ -816,19 +744,18 @@ impl AtmosphereState {
             device,
             &SKY_ATMOSPHERE_FRAG,
             self.sky_layout.handle(),
-            sky.main_render_pass,
             sky.samples,
             true,
         )?;
         let aerial_pipeline = build_aerial_pipeline(
             device,
             self.aerial_layout.handle(),
-            self.aerial_pass.handle(),
+            super::context::HDR_FORMAT,
             msaa,
             true,
         )?;
         if let Some(clouds) = self.clouds.as_mut() {
-            clouds.rebuild_pipelines(device, self.aerial_pass.handle(), msaa)?;
+            clouds.rebuild_pipelines(device, super::context::HDR_FORMAT, msaa)?;
         }
         self.kernels = kernels;
         self.sky_pipeline = sky_pipeline;
@@ -868,7 +795,7 @@ fn build_clouds(
 fn build_aerial_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
+    hdr_format: vk::Format,
     msaa: bool,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
@@ -878,7 +805,7 @@ fn build_aerial_pipeline(
         &vert,
         &frag,
         layout,
-        render_pass,
+        PassFormats::color(hdr_format),
         &[Blend::PremultipliedOver],
     )
     .build(device, "aerial perspective")
@@ -1133,38 +1060,30 @@ impl VkContext {
         let Some(atmo) = self.atmosphere.as_ref() else {
             return;
         };
-        let (Some(framebuffer), Some(set)) = (
-            atmo.framebuffers.get(frame_idx),
-            atmo.aerial_sets.get(frame_idx),
-        ) else {
+        let Some(set) = atmo.aerial_sets.get(frame_idx) else {
             return;
         };
         let extent = self.targets.render_extent;
-        rec.begin_render_pass(
-            &atmo.aerial_pass,
-            framebuffer,
-            vk::Rect2D::default().extent(extent),
-            &[],
-        );
-        rec.set_viewport(&vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
+        rec.render_over_sampled(&self.targets.hdr_resolve_images[frame_idx], extent, |rec| {
+            rec.set_viewport(&vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            });
+            rec.set_scissor(&vk::Rect2D::default().extent(extent));
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &atmo.aerial_pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &atmo.aerial_layout,
+                0,
+                std::slice::from_ref(set),
+                &[],
+            );
+            rec.draw(3, 1, 0, 0);
         });
-        rec.set_scissor(&vk::Rect2D::default().extent(extent));
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &atmo.aerial_pipeline);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &atmo.aerial_layout,
-            0,
-            std::slice::from_ref(set),
-            &[],
-        );
-        rec.draw(3, 1, 0, 0);
-        rec.end_render_pass();
     }
 
     // March the clouds into their target.
@@ -1174,13 +1093,15 @@ impl VkContext {
         }
     }
 
-    // Blend the clouds over the pre-TAA scene, through the haze pass's render
-    // pass.
+    // Blend the clouds over the pre-TAA scene.
     pub(in crate::vulkan) fn encode_cloud_composite(&self, rec: &Recorder<'_>, frame_idx: usize) {
-        if let Some(atmo) = self.atmosphere.as_ref()
-            && let Some(clouds) = atmo.clouds.as_ref()
-        {
-            clouds.encode_composite(rec, frame_idx, &atmo.aerial_pass);
+        if let Some(clouds) = self.atmosphere.as_ref().and_then(|a| a.clouds.as_ref()) {
+            clouds.encode_composite(
+                rec,
+                frame_idx,
+                self.post_scene_image(frame_idx),
+                self.targets.render_extent,
+            );
         }
     }
 

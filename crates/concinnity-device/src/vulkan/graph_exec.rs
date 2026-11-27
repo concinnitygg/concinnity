@@ -13,7 +13,7 @@
 //! read run whose readers span the schedule's two queues transitions on the
 //! producing side), and `emit_graph_restores` returns any that the frame left off
 //! their resting layout at the end of the outer "end" buffer. A resource
-//! with no registry entry keeps whatever transitions its encoder or render pass
+//! with no registry entry keeps whatever transitions its encoder
 //! owns; `audit/barrier.rs` classifies every one of those remaining sites.
 //!
 //! The registry decides two things per resource: which GPU object backs it, and
@@ -158,7 +158,7 @@ impl PassRecorder for VkPassRecorder<'_, '_> {
 }
 
 // Emit the layout transitions for the graph-driven resources in one barrier
-// list. Unregistered resources keep their render-pass transitions, and
+// list. Unregistered resources keep their encoders' transitions, and
 // transitions that do not change the layout are skipped.
 fn emit_graph_barriers(rec: &Recorder<'_>, registry: &BarrierRegistry, ops: &[BarrierOp]) {
     for op in ops {
@@ -386,6 +386,8 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // covers; computed once from the camera so the mirror pass and the
     // transparent pass that samples it agree.
     pub planar: PlanarFramePlan,
+    // The scopes after the main pass that resume its scene.
+    pub scene: super::main_pass::SceneResumers,
 }
 
 impl VkContext {
@@ -655,19 +657,19 @@ impl VkContext {
             // The cascade array; one layer per cascade. Rests sampled: under the
             // hybrid schedule a skipped slice keeps the depth it was last rendered
             // with, so the producer must not discard.
-            "shadow_map" if !self.shadow.framebuffers.is_empty() => Some(image(
+            "shadow_map" if !self.shadow.slices.is_empty() => Some(image(
                 self.shadow.map.image,
                 1,
-                u32::saturating_from(self.shadow.framebuffers.len()),
+                u32::saturating_from(self.shadow.slices.len()),
                 VkResting::Sampled,
             )),
             // The spot array; one layer per shadowed spot. Only imported when the
-            // world has shadowed spots, so the framebuffer guard matches the gate.
+            // world has shadowed spots, so the slice guard matches the gate.
             // Rests sampled for the same staggered-slice reason.
-            "spot_shadow_map" if !self.spot_shadow.framebuffers.is_empty() => Some(image(
+            "spot_shadow_map" if !self.spot_shadow.slices.is_empty() => Some(image(
                 self.spot_shadow.map.image,
                 1,
-                u32::saturating_from(self.spot_shadow.framebuffers.len()),
+                u32::saturating_from(self.spot_shadow.slices.len()),
                 VkResting::Sampled,
             )),
             // The far shadow's one-layer map. Rests sampled: a frame its
@@ -685,8 +687,7 @@ impl VkContext {
                 .as_ref()
                 .map(|f| image(f.volume.image(), 1, 1, VkResting::Sampled)),
             // Main depth, one image per frame in flight. Rests discarded: the main
-            // pass clears it and its render pass declares an UNDEFINED initial
-            // layout, so nothing survives the frame boundary.
+            // pass clears it, so nothing survives the frame boundary.
             "hdr_depth" => self
                 .targets
                 .depth_images
@@ -700,9 +701,9 @@ impl VkContext {
                 .as_ref()
                 .map(|h| image(h.pyramid.image(), h.mip_count, 1, VkResting::Sampled)),
             // The scene spine (`hdr_color`, `hdr_resolve`, `scene_pre_taa`, `scene_color`,
-            // `bloom_top`, the `gbuffer_*` channels) stays with its render passes, whose
-            // attachment layouts and subpass dependencies the driver can fold. Driving one
-            // here means removing those from its render pass in the same change.
+            // `bloom_top`, the `gbuffer_*` channels) stays with the passes that move
+            // it around their draws. Driving one here means removing those moves in
+            // the same change.
             _ => None,
         }
     }
@@ -813,12 +814,7 @@ impl VkContext {
                 self.encode_far_shadow_pass(rec, params.frame_idx);
             }
             PassId::Main => {
-                self.encode_main_pass(
-                    rec,
-                    params.frame_idx,
-                    params.frame.world_hidden,
-                    grass_frame,
-                );
+                self.encode_main_pass(rec, params, grass_frame);
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
@@ -847,7 +843,7 @@ impl VkContext {
             }
             PassId::FogFroxel => {
                 // Populate the screen-aligned 3D scatter/transmittance volume
-                // the `Fog` render pass samples. The shared graph seeds this
+                // the `Fog` pass samples. The shared graph seeds this
                 // before `Fog` (RAW edge on the froxel volume handle).
                 let blocks = params.plan.fog.as_ref().ok_or_else(|| {
                     RenderError::Other(
@@ -971,7 +967,7 @@ impl VkContext {
                 );
             }
             PassId::MainLate => {
-                self.encode_main_pass_late(rec, params.frame_idx);
+                self.encode_main_pass_late(rec, params.frame_idx, params.scene);
             }
             PassId::GBufferPrepass | PassId::GBufferLate => {
                 let gb = self.gbuffer.as_ref().ok_or_else(|| {

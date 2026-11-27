@@ -24,10 +24,10 @@ use super::post::{
     GbufferResources, PostSupport, RtReflectionsResources, SsaoResources, SsgiResources,
     SsrResources, TaaResources, UpscaleBackend, VkBloomPass, VkReflectionCompositePass, gbuffer,
 };
+use super::rendering::PassFormats;
 use super::texture::{EnvironmentMapTextures, GpuImage, StreamedUploadRetire};
 use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
 
 // Off-screen HDR render-target format. The main pass renders linear-light
@@ -36,16 +36,20 @@ use crate::vulkan::owned::{
 // attachment + sampled image on desktop GPUs.
 pub(super) const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
+// What the cascade and spot shadow casters render to.
+pub(super) const SHADOW_FORMATS: PassFormats = PassFormats::depth_only(vk::Format::D32_SFLOAT);
+// What the far shadow casters render to.
+pub(super) const FAR_SHADOW_FORMATS: PassFormats = PassFormats::depth_only(vk::Format::D16_UNORM);
+
 // Cascaded-shadow-map resources, grouped off the flat `VkContext` field soup
 // (mirrors the DirectX backend's `self.shadow`). The barrier executor resolves
 // `shadow_map` through `build_barrier_registry`, so moving these fields behind
 // one field left the parallel emit path untouched.
 pub(super) struct ShadowState {
-    pub(super) render_pass: OwnedRenderPass,
     pub(super) map: GpuImage,
     pub(super) map_size: u32,
-    // One framebuffer per cascade slice. Empty when the shadow pass is disabled.
-    pub(super) framebuffers: Vec<OwnedFramebuffer>,
+    // One depth view per cascade slice. Empty when the shadow pass is disabled.
+    pub(super) slices: Vec<vk::ImageView>,
     pub(super) global_set_layout: OwnedSetLayout,
     pub(super) sampler: OwnedSampler,
     // Per-frame-in-flight `ShadowUniforms` ring, persistently mapped. One slot
@@ -63,14 +67,12 @@ pub(super) struct ShadowState {
     pub(super) far_fallback: GpuImage,
 }
 
-// The far shadow's single D16_UNORM map with its own depth-only render pass and
-// framebuffer, and the per-frame-in-flight one-matrix `ShadowUniforms` its view
-// renders through, each behind a set of the shadow pass's one-UBO layout.
+// The far shadow's single D16_UNORM map, and the per-frame-in-flight one-matrix
+// `ShadowUniforms` its view renders through, each behind a set of the shadow
+// pass's one-UBO layout.
 pub(super) struct FarShadowState {
     pub(super) map: GpuImage,
     pub(super) size: u32,
-    pub(super) render_pass: OwnedRenderPass,
-    pub(super) framebuffer: OwnedFramebuffer,
     pub(super) ubos: Vec<PooledBuffer>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) _descriptor_pool: OwnedDescriptorPool,
@@ -95,7 +97,7 @@ impl ShadowState {
 
     // Whether the world renders cascades at all (`shadow_map_size > 0`).
     pub(super) fn enabled(&self) -> bool {
-        !self.framebuffers.is_empty()
+        !self.slices.is_empty()
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -114,8 +116,8 @@ impl ShadowState {
 // still gets a 1x1 fallback so the main pass's descriptors stay valid.
 pub(super) struct SpotShadowState {
     pub(super) map: GpuImage,
-    // One framebuffer per shadowed spot; empty when the world has none.
-    pub(super) framebuffers: Vec<OwnedFramebuffer>,
+    // One depth view per shadowed spot; empty when the world has none.
+    pub(super) slices: Vec<vk::ImageView>,
     pub(super) slice_size: u32,
     // `SpotShadowData` per slice, uploaded once at init.
     pub(super) data_buffer: PooledBuffer,
@@ -136,10 +138,10 @@ pub(super) struct SpotShadowState {
 }
 
 impl SpotShadowState {
-    // Slices actually handed out; the array layers, the framebuffers, and the
+    // Slices actually handed out; the array layers, the slice views, and the
     // data buffer all carry exactly this many entries.
     pub(super) fn count(&self) -> u32 {
-        u32::saturating_from(self.framebuffers.len())
+        u32::saturating_from(self.slices.len())
     }
 
     // Slices that re-render this frame.
@@ -401,10 +403,6 @@ pub(super) struct CullState {
     // Per-frame second indirect draw-command buffers `CullLate` writes and `MainLate`
     // consumes. Device-local.
     pub(super) indirect_buffers_late: Vec<PooledBuffer>,
-    // Early / late main render passes (render-pass-compatible with the
-    // main-pass `framebuffers`).
-    pub(super) main_render_pass_early: Option<OwnedRenderPass>,
-    pub(super) main_render_pass_late: Option<OwnedRenderPass>,
     // Hi-Z occlusion: the depth pyramid built from this frame's depth, its build
     // pipelines, and the cull's set 1. `Some` exactly when the GPU cull is active.
     pub(super) hiz: Option<crate::vulkan::hiz::HiZResources>,
@@ -422,7 +420,7 @@ pub(super) struct CullState {
     // same shadow kernel. Their own, so the spot pass shares no state with the
     // cascade pass. Empty when the world has no shadowed spot.
     pub(super) spot_views: Vec<Vec<super::cull::ShadowCullView>>,
-    // The far view's pipeline, built against the far map's D16 render pass,
+    // The far view's pipeline, built for the far map's D16 format,
     // and its views, [frame][0], written by the same shadow kernel. Empty
     // without a far map.
     pub(super) far_shadow_bindless_pipeline: Option<OwnedPipeline>,
@@ -606,10 +604,10 @@ pub(super) struct AutoExposureState {
 }
 
 // Composite pass: tonemaps the HDR resolve onto the swapchain and draws text.
-// One framebuffer per swapchain image, one set per frame in flight.
+// One set per frame in flight.
 pub(super) struct CompositeState {
-    pub render_pass: OwnedRenderPass,
-    pub framebuffers: Vec<OwnedFramebuffer>,
+    // The swapchain format the composite and text pipelines render to.
+    pub formats: PassFormats,
     pub pipeline: OwnedPipeline,
     pub pipeline_layout: OwnedPipelineLayout,
     pub _set_layout: OwnedSetLayout,
@@ -714,14 +712,12 @@ impl SwapchainState {
     }
 }
 
-// The render-resolution scene targets: the main render pass with its
-// per-frame-in-flight HDR attachments and framebuffers, and the transient image
-// pool. `rebuild_swapchain` rebuilds everything but the render pass.
+// The render-resolution scene targets: the per-frame-in-flight HDR attachments
+// and the transient image pool, which `rebuild_swapchain` rebuilds.
 pub(super) struct Targets {
     // The 3D scene's render resolution: `swapchain.extent`, or the reduced size
     // when temporal upscaling is on. Bloom and composite stay at display size.
     pub(super) render_extent: vk::Extent2D,
-    pub(super) main_render_pass: OwnedRenderPass,
     pub(super) msaa_samples: vk::SampleCountFlags,
     // Off-screen HDR attachments, one set per frame-in-flight slot (indexed by
     // `current_frame`). The main pass renders into these; the composite pass
@@ -732,9 +728,6 @@ pub(super) struct Targets {
     // The reactive mask the particle and transparent passes write, one per
     // frame-in-flight slot (see `vulkan/reactive_mask.rs`).
     pub(super) reactive_mask_images: Vec<GpuImage>,
-    // Main-pass framebuffers (one per frame-in-flight slot): HDR color +
-    // depth (+ resolve when multisampled).
-    pub(super) framebuffers: Vec<OwnedFramebuffer>,
     // The render graph's transient images, resolved by label.
     pub(super) transient_pool: super::transient_pool::TransientImagePool,
 }
@@ -916,11 +909,11 @@ pub(crate) struct VkContext {
 
     // Composite (post-process) pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
-    // What each frame slot's sets and framebuffers naming a rebuildable
-    // feature's output were last wired with. See `feature_wires.rs`.
+    // What each frame slot's sets naming a rebuildable feature's output were
+    // last wired with. See `feature_wires.rs`.
     pub(super) feature_wires: super::feature_wires::FeatureWires,
 
-    // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
+    // Cascaded shadow map + its pipelines, slice views, UBO, and sampler.
     pub(super) shadow: ShadowState,
 
     // Spot shadow map resources. See [`SpotShadowState`].
@@ -957,9 +950,9 @@ pub(crate) struct VkContext {
     // needs the velocity pre-pass but replaces the TAA resolve.
     pub(super) taa: Option<TaaResources>,
 
-    // What every shared fullscreen post pass draws through: the cached render
-    // passes and framebuffers, and the per-frame descriptor arena. Held once for
-    // the backend rather than once per effect, which is the point of the seam.
+    // What every shared fullscreen post pass draws through: the per-frame
+    // descriptor arena. Held once for the backend rather than once per effect,
+    // which is the point of the seam.
     pub(super) post: PostSupport,
 
     // Temporal upscaling (FSR / DLSS / XeSS). `Some` when upscaling is on and a
@@ -1271,11 +1264,10 @@ impl VkContext {
         // Command pools (each frees the buffers allocated from it).
         self.commands.destroy(device);
 
-        // Framebuffers + attachments.
+        // Attachments.
         self.destroy_swapchain_resources();
 
-        // Shadow (framebuffers, pipelines, layouts, map, render pass, UBO,
-        // sampler).
+        // Shadow (pipelines, layouts, map, UBO, sampler).
         self.shadow.destroy(device);
         self.spot_shadow.destroy(device);
         self.area_light.destroy(device);
@@ -1298,10 +1290,7 @@ impl VkContext {
         // Composite pass resources (the LUT retires through the allocator).
         self.scene.color_lut = GpuImage::null();
 
-        // The shared post passes' framebuffers, before the targets whose views
-        // they name, then the TAA resolve and the bloom chain themselves
-        // (pipelines + targets).
-        self.post.cache.destroy();
+        // The TAA resolve and the bloom chain (pipelines + targets).
         self.taa = None;
         self.bloom = None;
 
@@ -1349,8 +1338,8 @@ impl VkContext {
             decals.destroy(device);
         }
 
-        // Line resources (pipeline + per-frame uniforms + vertex buffers +
-        // framebuffers). Only present once a frame published lines.
+        // Line resources (pipeline + per-frame uniforms + vertex buffers). Only
+        // present once a frame published lines.
         if let Some(mut lines) = self.lines.resources.take() {
             lines.destroy(device);
         }
@@ -1363,27 +1352,27 @@ impl VkContext {
             fog.destroy(device);
         }
 
-        // The atmosphere's tables, uniforms and framebuffers.
+        // The atmosphere's tables and uniforms.
         if let Some(mut atmosphere) = self.atmosphere.take() {
             atmosphere.destroy();
         }
 
         // Raymarched SDF volume resources (per-volume pipelines + UBOs, view
-        // ring, descriptor pool, render passes, snapshot image).
+        // ring, descriptor pool, snapshot image).
         if let Some(mut rm) = self.raymarch.take() {
             rm.destroy(device);
         }
 
-        // Planar reflection resources (mirror targets + framebuffers + per-(plane,
+        // Planar reflection resources (mirror targets + per-(plane,
         // frame) view ring + global sets + descriptor pool). Destroyed before the
         // transparent pass, whose per-record sets reference the planar target views.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.destroy(device);
         }
 
-        // Transparent-pass resources (both producers' pipelines, their per-record
-        // buffers + UBOs, the per-frame view ring, descriptor pool, render pass,
-        // framebuffers, snapshot image).
+        // Transparent-pass resources (both producers' pipelines, their
+        // per-record buffers + UBOs, the per-frame view ring, descriptor pool,
+        // snapshot image).
         if let Some(mut transparent) = self.transparent.take() {
             transparent.destroy(device);
         }
@@ -1417,8 +1406,6 @@ impl VkContext {
             // references it.
             unsafe { device.destroy_query_pool(pool, None) };
         }
-
-        // Render passes.
 
         // Skinned-mesh resources.
         self.skinned.destroy();

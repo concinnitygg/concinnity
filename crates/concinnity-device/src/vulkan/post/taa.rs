@@ -48,8 +48,7 @@ impl TaaResources {
     }
 
     // Rebuild the accumulation images at a new extent. The caller
-    // (`rebuild_swapchain`) has already idled the device and cleared the
-    // framebuffer cache, which keys on the views this drops.
+    // (`rebuild_swapchain`) has already idled the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkPostDevice<'_>,

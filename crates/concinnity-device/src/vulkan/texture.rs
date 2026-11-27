@@ -1146,7 +1146,7 @@ pub(super) fn create_shadow_map_array(
     Ok(img)
 }
 
-// Create a device-local depth image for the main render pass.
+// Create a device-local depth image for the main pass.
 pub(super) fn create_depth_image(
     ctx: &GpuUploadContext<'_>,
     width: u32,

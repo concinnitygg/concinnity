@@ -134,7 +134,7 @@ pub(super) fn build_cull(
             material_params,
             vertices: geometry.vertex_range(),
             swapchain_format,
-            gbuffer_render_pass: gbuffer.map(|gb| gb.prepass_render_pass.handle()),
+            gbuffer: gbuffer.is_some(),
         },
     )?;
     let world_pipelines = bindless::build_world_pipelines(gpu, &bindless, world_shaders)?;
@@ -184,7 +184,6 @@ pub(super) fn build_cull(
         &compute,
         plan,
         indirect_commands,
-        targets.msaa_samples,
         occlusion_two_pass,
     )?;
     let cull_kernels = compute.kernels.map(|kernels| CullKernels {
@@ -225,8 +224,6 @@ pub(super) fn build_cull(
         cull_sets_late: two_pass.sets,
         _two_pass_pool: two_pass.pool,
         indirect_buffers_late: two_pass.indirect_buffers,
-        main_render_pass_early: two_pass.main_render_pass_early,
-        main_render_pass_late: two_pass.main_render_pass_late,
         hiz: compute.hiz,
         shadow_cull_pipeline: shadow_cull.cull_pipeline,
         shadow_cull_pipeline_layout: shadow_cull.cull_pipeline_layout,

@@ -1,9 +1,8 @@
-//! Per-frame-slot re-pointing of the descriptor sets and framebuffers a frame
-//! records against but that are written ahead of it, wherever they name the
-//! output of a feature a settings change can rebuild: the composite's scene
-//! input and channels, the main camera's screen-space indirect light, the
-//! post-chain scene the transparent and particle passes draw into, and the
-//! glass reflection layers.
+//! Per-frame-slot re-pointing of the descriptor sets a frame records against
+//! but that are written ahead of it, wherever they name the output of a
+//! feature a settings change can rebuild: the composite's scene input and
+//! channels, the main camera's screen-space indirect light, and the glass
+//! reflection layers.
 //!
 //! A settings change never rewrites them itself: a frame still in flight may be
 //! reading the set it would write. Each slot is checked right after its own
@@ -12,7 +11,6 @@
 //! writes.
 
 use ash::vk;
-use concinnity_engine::render::backend::error::RenderResult;
 
 use super::context::VkContext;
 use super::descriptor_layout::SCREEN_INDIRECT_BINDING;
@@ -33,7 +31,6 @@ struct CompositeWire {
 pub(in crate::vulkan) struct FeatureWires {
     composite: WireCache<CompositeWire>,
     screen_indirect: WireCache<vk::ImageView>,
-    post_scene: WireCache<vk::ImageView>,
 }
 
 impl FeatureWires {
@@ -41,7 +38,6 @@ impl FeatureWires {
         Self {
             composite: WireCache::new(frames),
             screen_indirect: WireCache::new(frames),
-            post_scene: WireCache::new(frames),
         }
     }
 }
@@ -76,17 +72,15 @@ impl VkContext {
         for frame in 0..self.frames_in_flight {
             let composite = self.composite_wire(frame);
             let indirect = self.global_bindings().screen_indirect(frame);
-            let scene = self.post_scene_image(frame).view;
             let wires = &mut self.feature_wires;
             wires.composite.changed(frame, composite);
             wires.screen_indirect.changed(frame, indirect);
-            wires.post_scene.changed(frame, scene);
         }
     }
 
-    // Re-point frame slot `frame`'s sets and framebuffers at what they should
+    // Re-point frame slot `frame`'s sets at what they should
     // name now. Called past the slot's fence, before the frame records.
-    pub(in crate::vulkan) fn rewire_features(&mut self, frame: usize) -> RenderResult<()> {
+    pub(in crate::vulkan) fn rewire_features(&mut self, frame: usize) {
         let composite = self.composite_wire(frame);
         if self.feature_wires.composite.changed(frame, composite)
             && let Some(&set) = self.composite.sets.get(frame)
@@ -118,33 +112,11 @@ impl VkContext {
             );
         }
 
-        let scene = self.post_scene_image(frame);
-        let scene = (scene.view, scene.image);
-        let mask = self
-            .targets
-            .reactive_mask_images
-            .get(frame)
-            .map_or(self.scene.ssao_white.view, |m| m.view);
-        let extent = self.targets.render_extent;
-        if self.feature_wires.post_scene.changed(frame, scene.0) {
-            if let Some(p) = self.particle.resources.as_mut() {
-                p.rescene(&self.hw.device, frame, scene.0, mask, extent)?;
-            }
-            if let Some(t) = self.transparent.as_mut() {
-                t.rescene(&self.hw.device, frame, scene, mask, extent)?;
-            }
-        }
-
-        if let Some(clouds) = self.atmosphere.as_mut().and_then(|a| a.clouds.as_mut()) {
-            clouds.rescene(&self.hw.device, frame, scene.0, extent)?;
-        }
-
         if let (Some(t), Some(depth)) = (
             self.transparent.as_mut(),
             self.targets.depth_images.get(frame),
         ) {
             t.rewire_reflection_views(&self.hw.device, frame, depth.view);
         }
-        Ok(())
     }
 }

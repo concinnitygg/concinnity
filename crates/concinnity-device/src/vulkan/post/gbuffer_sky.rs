@@ -7,7 +7,7 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderResult;
 
-use super::gbuffer::{GBUFFER_VIEW_UBO_SIZE, PREPASS_TARGETS};
+use super::gbuffer::{GBUFFER_VIEW_UBO_SIZE, PREPASS_FORMATS, PREPASS_TARGETS};
 use crate::vulkan::allocator::PooledBuffer;
 use crate::vulkan::builtin_shaders::{self, CompileProgram};
 use crate::vulkan::descriptor_layout::{Binding, PoolSizes};
@@ -35,11 +35,10 @@ pub(in crate::vulkan) struct GbufferSky {
 }
 
 impl GbufferSky {
-    // One set per frame over that frame's view UBO, and the pipeline against
-    // the pre-pass render pass.
+    // One set per frame over that frame's view UBO, and the pipeline into the
+    // pre-pass targets.
     pub(in crate::vulkan) fn build(
         device: &VkDevice,
-        render_pass: vk::RenderPass,
         view_ubos: &[PooledBuffer],
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -64,7 +63,7 @@ impl GbufferSky {
                 .uniform_buffer(0, ubo.buffer(), GBUFFER_VIEW_UBO_SIZE)
                 .apply(device);
         }
-        let pipeline = Self::build_pipeline(device, layout.handle(), render_pass, hot_reload)?;
+        let pipeline = Self::build_pipeline(device, layout.handle(), hot_reload)?;
         Ok(Self {
             _pool: pool,
             _set_layout: set_layout,
@@ -79,14 +78,13 @@ impl GbufferSky {
     fn build_pipeline(
         device: &VkDevice,
         layout: vk::PipelineLayout,
-        render_pass: vk::RenderPass,
         hot_reload: bool,
     ) -> RenderResult<OwnedPipeline> {
         let vs = builtin_shaders::GBUFFER_SKY_VERT.compile(hot_reload)?;
         let fs = builtin_shaders::GBUFFER_SKY_FRAG.compile(hot_reload)?;
         GraphicsPipelineDesc {
             depth: Depth::read_only(),
-            ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, render_pass, &PREPASS_TARGETS)
+            ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, PREPASS_FORMATS, &PREPASS_TARGETS)
         }
         .build(device, "gbuffer sky")
     }
@@ -95,16 +93,15 @@ impl GbufferSky {
     pub(in crate::vulkan) fn rebuild_pipeline(
         &self,
         device: &VkDevice,
-        render_pass: vk::RenderPass,
     ) -> RenderResult<OwnedPipeline> {
-        Self::build_pipeline(device, self.layout.handle(), render_pass, true)
+        Self::build_pipeline(device, self.layout.handle(), true)
     }
 
     pub(in crate::vulkan) fn swap_pipeline(&mut self, pipeline: OwnedPipeline) {
         self.pipeline = pipeline;
     }
 
-    // Draw the sky's motion inside the open pre-pass render pass.
+    // Draw the sky's motion inside the open pre-pass scope.
     pub(in crate::vulkan) fn encode(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(&set) = self.sets.get(frame_idx) else {
             return;

@@ -55,10 +55,9 @@ pub(super) struct BindlessInputs<'a> {
     // The shared vertex stream and its size, which a planet tile's morph reads.
     pub(super) vertices: BufferRange,
     pub(super) swapchain_format: vk::Format,
-    // The G-buffer's render pass when the world starts with a G-buffer
-    // consumer; the buckets' pre-pass pipelines build against it, and only
-    // then.
-    pub(super) gbuffer_render_pass: Option<vk::RenderPass>,
+    // Whether the world starts with a G-buffer consumer; the buckets build
+    // pre-pass pipelines only then.
+    pub(super) gbuffer: bool,
 }
 
 // Build the bindless static pass: bucket 0's pipeline, the per-frame object
@@ -83,7 +82,7 @@ pub(super) fn build_bindless_pass(
         material_params,
         vertices,
         swapchain_format,
-        gbuffer_render_pass,
+        gbuffer,
     } = inputs;
     let CullPlan {
         n_cull,
@@ -168,10 +167,8 @@ pub(super) fn build_bindless_pass(
         // takes the world default Shader's where it declares one.
         let engine_spv = compile_bindless_shaders(hot_reload)?;
         let bucket_targets = BucketPipelineTargets {
-            render_pass: targets.main_render_pass.handle(),
             layout: pipeline_layout.handle(),
-            prepass: gbuffer_render_pass.map(|render_pass| PrepassTargets {
-                render_pass,
+            prepass: gbuffer.then(|| PrepassTargets {
                 layout: prepass_layout.pipeline_layout.handle(),
             }),
             msaa_samples: targets.msaa_samples,

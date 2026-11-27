@@ -270,7 +270,7 @@ impl TransientImagePool {
 
     // Rebuild every managed image at a new extent / frame count. The caller has
     // already idled the device. The old images are freed first, so any feature
-    // framebuffer / descriptor that referenced their views must be rebuilt by
+    // descriptor that referenced their views must be rebuilt by
     // the caller afterward.
     pub(super) fn rebuild(
         &mut self,
@@ -284,8 +284,8 @@ impl TransientImagePool {
     }
 
     // Free every managed image, view, and slot allocation. The caller has
-    // already idled the device and destroyed any framebuffer that referenced
-    // these views.
+    // already idled the device and dropped anything that referenced these
+    // views.
     pub(super) fn destroy(&mut self, device: &VkDevice) {
         // The caller has idled the device, so no submission still references these handles.
         for p in &self.images {
@@ -466,8 +466,8 @@ mod tests {
         assert_eq!(bloom.format, bloom::chain_desc(output).format);
 
         // The G-buffer color channels. A format divergence here would silently
-        // mis-back an MRT attachment the pre-pass render pass declares, which is
-        // a framebuffer-incompatibility error rather than a wrong picture.
+        // mis-back an MRT attachment the pre-pass pipelines declare, which is a
+        // rendering-format mismatch rather than a wrong picture.
         use super::super::post::gbuffer::{
             GBUFFER_NORMAL_DEPTH_FORMAT, GBUFFER_ROUGHNESS_FORMAT, GBUFFER_VELOCITY_FORMAT,
         };

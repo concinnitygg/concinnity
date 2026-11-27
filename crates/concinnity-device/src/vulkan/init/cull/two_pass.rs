@@ -1,6 +1,5 @@
 //! Two-pass Hi-Z occlusion: the late cull pipeline with its dedicated pool
-//! and sets, the second indirect buffers, and the early pass and late main
-//! render passes.
+//! and sets, and the second indirect buffers.
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
@@ -11,12 +10,10 @@ use super::CullPlan;
 use super::bindless::BindlessPass;
 use super::compute::{ComputeCull, main_cull_set};
 use crate::vulkan::builtin_shaders::{CULL_LATE, CompileProgram as _};
-use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::descriptor_layout::PoolSizes;
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::owned::{OwnedDescriptorPool, OwnedPipeline, OwnedRenderPass};
+use crate::vulkan::owned::{OwnedDescriptorPool, OwnedPipeline};
 use crate::vulkan::pipeline_desc::compute_pipeline;
-use crate::vulkan::render_pass::create_main_render_pass_two_pass;
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::set_writes::SetWrites;
 
@@ -29,19 +26,16 @@ pub(super) struct TwoPassCull {
     pub(super) indirect_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     // Each frame's late packing set, from `pool`.
     pub(super) compact_sets: Vec<vk::DescriptorSet>,
-    pub(super) main_render_pass_early: Option<OwnedRenderPass>,
-    pub(super) main_render_pass_late: Option<OwnedRenderPass>,
 }
 
 // Build the two-pass Hi-Z occlusion resources: the late cull pipeline and
-// sets, the second indirect buffers, and the early pass and late render passes.
+// sets, and the second indirect buffers.
 pub(super) fn build_two_pass_cull(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,
     compute: &ComputeCull,
     plan: &CullPlan,
     indirect_commands: usize,
-    msaa_samples: vk::SampleCountFlags,
     occlusion_two_pass: bool,
 ) -> RenderResult<TwoPassCull> {
     let InitGpu {
@@ -58,16 +52,13 @@ pub(super) fn build_two_pass_cull(
         &compute.status_buffers,
     );
     // Two-pass Hi-Z occlusion, when requested on the bindless path: the late cull
-    // pipeline, second indirect buffers, the late cull sets, and the early and late
-    // main render passes.
+    // pipeline, second indirect buffers, and the late cull sets.
     type TwoPassCullResources = (
         Option<OwnedPipeline>,
         Vec<vk::DescriptorSet>,
         Option<OwnedDescriptorPool>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
         Vec<vk::DescriptorSet>,
-        Option<OwnedRenderPass>,
-        Option<OwnedRenderPass>,
     );
     let (
         cull_pipeline_late,
@@ -75,8 +66,6 @@ pub(super) fn build_two_pass_cull(
         two_pass_pool,
         indirect_buffers_late,
         compact_sets_late,
-        main_render_pass_early,
-        main_render_pass_late,
     ): TwoPassCullResources = if let Some(kernels) = compute.kernels.as_ref()
         && let Some(compact) = compute.compact.as_ref()
         && occlusion_two_pass
@@ -163,22 +152,15 @@ pub(super) fn build_two_pass_cull(
             );
         }
 
-        // Early (STORE MSAA color) + late (LOAD color + depth) main
-        // render passes, both compatible with the existing framebuffers.
-        let rp1 = create_main_render_pass_two_pass(device, HDR_FORMAT, msaa_samples, false)?;
-        let late_rp = create_main_render_pass_two_pass(device, HDR_FORMAT, msaa_samples, true)?;
-
         (
             Some(late_pipeline),
             late_sets,
             Some(pool),
             ind2_buffers,
             compact_sets_late,
-            Some(rp1),
-            Some(late_rp),
         )
     } else {
-        (None, Vec::new(), None, Vec::new(), Vec::new(), None, None)
+        (None, Vec::new(), None, Vec::new(), Vec::new())
     };
     Ok(TwoPassCull {
         pipeline: cull_pipeline_late,
@@ -186,8 +168,6 @@ pub(super) fn build_two_pass_cull(
         pool: two_pass_pool,
         indirect_buffers: indirect_buffers_late,
         compact_sets: compact_sets_late,
-        main_render_pass_early,
-        main_render_pass_late,
     })
 }
 

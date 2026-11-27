@@ -139,9 +139,7 @@ pub(in crate::vulkan) struct GrassPassLayouts<'a> {
 // What a grass draw pipeline renders into.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GrassTargets {
-    pub main_render_pass: vk::RenderPass,
     pub msaa_samples: vk::SampleCountFlags,
-    pub shadow_render_pass: vk::RenderPass,
     // The device's depth-bias clamp, as the shadow casters use it.
     pub shadow_bias_clamp: f32,
 }
@@ -192,7 +190,7 @@ impl GrassPipelines {
                 &vs,
                 &[],
                 layouts.shadow.handle(),
-                targets.shadow_render_pass,
+                super::context::SHADOW_FORMATS,
                 &[],
             )
         }
@@ -207,7 +205,7 @@ impl GrassPipelines {
                     &vs,
                     fs,
                     layouts.main.handle(),
-                    targets.main_render_pass,
+                    super::main_pass::MAIN_FORMATS,
                     &[Blend::Opaque],
                 )
             }
@@ -232,7 +230,6 @@ impl GrassPipelines {
 fn build_prepass_pipelines(
     device: &VkDevice,
     layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
     hot_reload: bool,
 ) -> RenderResult<GrassDrawPipelines> {
     let vs = builtin_shaders::GRASS_PREPASS_VERT.compile(hot_reload)?;
@@ -244,7 +241,7 @@ fn build_prepass_pipelines(
                 &vs,
                 fs,
                 layout,
-                render_pass,
+                super::post::gbuffer::PREPASS_FORMATS,
                 &super::post::gbuffer::PREPASS_TARGETS,
             )
         }
@@ -656,26 +653,19 @@ impl GrassResources {
         self.pipelines = pipelines;
     }
 
-    // Build the pre-pass draw into the G-buffer's `render_pass` when it is
-    // missing, or `rebuild` it anyway after a shader edit. A pipeline that
-    // fails to build leaves the blades out of the G-buffer, never out of the
-    // lit scene.
+    // Build the pre-pass draw into the G-buffer when it is missing, or
+    // `rebuild` it anyway after a shader edit. A pipeline that fails to build
+    // leaves the blades out of the G-buffer, never out of the lit scene.
     pub(in crate::vulkan) fn sync_prepass(
         &mut self,
         device: &VkDevice,
-        render_pass: vk::RenderPass,
         rebuild: bool,
         hot_reload: bool,
     ) {
         if self.prepass.is_some() && !rebuild {
             return;
         }
-        match build_prepass_pipelines(
-            device,
-            self.layouts.prepass.handle(),
-            render_pass,
-            hot_reload,
-        ) {
+        match build_prepass_pipelines(device, self.layouts.prepass.handle(), hot_reload) {
             Ok(pipeline) => self.prepass = Some(pipeline),
             Err(e) => tracing::warn!("grass: the G-buffer pre-pass draw failed to build: {e}"),
         }
@@ -746,25 +736,19 @@ impl VkContext {
     // Build the grass pre-pass draw against the G-buffer once one exists, or
     // `rebuild` it after a shader edit.
     pub(in crate::vulkan) fn sync_grass_prepass(&mut self, rebuild: bool) {
-        let Some(render_pass) = self
-            .gbuffer
-            .as_ref()
-            .map(|gb| gb.prepass_render_pass.handle())
-        else {
+        if self.gbuffer.is_none() {
             return;
-        };
+        }
         let hot_reload = self.hot_reload.enabled;
         if let Some(grass) = self.grass.as_mut() {
-            grass.sync_prepass(&self.hw.device, render_pass, rebuild, hot_reload);
+            grass.sync_prepass(&self.hw.device, rebuild, hot_reload);
         }
     }
 
     // The targets the lit grass draw and the cascade draw render into.
     pub(in crate::vulkan) fn grass_targets(&self) -> GrassTargets {
         GrassTargets {
-            main_render_pass: self.targets.main_render_pass.handle(),
             msaa_samples: self.targets.msaa_samples,
-            shadow_render_pass: self.shadow.render_pass.handle(),
             shadow_bias_clamp: self.hw.device.depth_bias_clamp(bias::RASTER_CLAMP),
         }
     }
@@ -1035,7 +1019,7 @@ impl VkContext {
         rec.bind_descriptor_sets(vk::PipelineBindPoint::GRAPHICS, layout, 0, sets, &[]);
         for region in 0..GRASS_REGION_COUNT {
             if region == GRASS_BAND_REGION {
-                // The band pipeline shares the level pipeline's layout and render pass, so
+                // The band pipeline shares the level pipeline's layout and formats, so
                 // the sets bound above stay valid under it.
                 rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &pipelines.band);
             }

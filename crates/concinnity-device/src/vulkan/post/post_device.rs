@@ -4,8 +4,8 @@
 //! Each pass's objects are derived here from what the single source declares:
 //! the descriptor set layout is N sampled images and their N samplers, the
 //! pipeline layout adds a fragment push-constant range of the declared size and,
-//! for a probe-reading program, the forward global set as set 1, and the render
-//! pass comes from the target's format and load action. The sets are allocated
+//! for a probe-reading program, the forward global set as set 1, and the
+//! pipeline renders to the target's format. The sets are allocated
 //! per frame (`post/set_arena.rs`) rather than pre-wired per effect, so no pass
 //! has to rewire an input another effect owns.
 
@@ -24,9 +24,11 @@ use crate::vulkan::builtin_shaders::{self, CompileProgram};
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
 use crate::vulkan::pipeline_desc::{Blend, GraphicsPipelineDesc};
-use crate::vulkan::post::pass_cache::{AttachmentRest, PostPassCache};
 use crate::vulkan::post::set_arena::PostSetArena;
 use crate::vulkan::record::Recorder;
+use crate::vulkan::rendering::{
+    Attachment, ColorAttachments, ImageUse, Load, PassFormats, RenderTargets, Transition,
+};
 use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::{
     GpuImage, LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
@@ -53,7 +55,6 @@ pub(in crate::vulkan) struct PostTarget {
     label: &'static str,
     image: GpuImage,
     extent: vk::Extent2D,
-    format: PixelFormat,
     levels: u32,
 }
 
@@ -108,13 +109,35 @@ fn level_range_view(
         .map_err(|e| map_vk_result(e, "post target view"))
 }
 
-// A draw's color target: view, extent, render-pass format and resting layout.
+// Where an attachment's layout rests between passes, which decides who moves
+// it in and out around a draw.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::vulkan) enum AttachmentRest {
+    // Shader-readable, with the draw moving it in and back out. Every post
+    // target and the HDR scene rest here.
+    Sampled,
+    // In the color-attachment layout, with the graph executor moving it in and
+    // out around the pass, so the draw leaves it where it found it.
+    Graph,
+}
+
+// A draw's color target: its image (and the one mip it draws, for a level
+// attachment), view, extent and resting layout.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct VkAttachment {
+    pub image: vk::Image,
+    pub level: Option<u32>,
     pub view: vk::ImageView,
     pub extent: vk::Extent2D,
-    pub format: PixelFormat,
     pub rest: AttachmentRest,
+}
+
+impl VkAttachment {
+    // The attachment's move between two uses.
+    fn transition(&self, from: ImageUse, to: ImageUse) -> Transition {
+        let t = Transition::color(self.image, from, to);
+        self.level.map_or(t, |level| t.at_level(level))
+    }
 }
 
 // The forward global set, as a probe-reading program binds it for the probe
@@ -142,8 +165,6 @@ pub(in crate::vulkan) struct VkPostDevice<'a> {
     pub device: &'a VkDevice,
     pub alloc: &'a DeviceAllocator,
     pub queue: PostQueue,
-    // Render passes + framebuffers, cached across frames and passes.
-    pub cache: &'a PostPassCache,
     // Per-frame descriptor sets.
     pub arena: &'a PostSetArena,
     // The linear clamp-to-edge state every screen-space source is sampled
@@ -221,15 +242,6 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
             .create_pipeline_layout(&layout_info)
             .map_err(|e| map_vk_result(e, "post pipeline layout"))?;
 
-        // A pipeline is created against a render pass but is compatible with any
-        // pass of the same attachment shape, so the cached one for this format
-        // serves both the build and every draw.
-        let render_pass = self.cache.render_pass(
-            self.device,
-            format,
-            PostLoadOp::DontCare,
-            AttachmentRest::Sampled,
-        )?;
         // Every fullscreen post pass has the same pipeline shape, which is why it
         // is built once here instead of once per effect.
         let (vert, frag) = compile(program, self.hot_reload)?;
@@ -237,7 +249,7 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
             &vert,
             &frag,
             layout.handle(),
-            render_pass.handle(),
+            PassFormats::color(image_format(format)),
             &[Blend::from(blend)],
         )
         .build(self.device, "post")?;
@@ -281,7 +293,7 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
         // Pre-transitioned so the first frame can sample a slot before anything
         // has rendered into it: a temporal pass binds its history on the very
         // first draw, gated to ignore what it reads. Every level rests readable,
-        // and a draw's render pass moves the one level it writes in and out.
+        // and a draw moves the one level it writes in and out.
         one_shot_submit(
             self.device,
             self.queue.command_pool,
@@ -318,7 +330,6 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
                 width: spec.width,
                 height: spec.height,
             },
-            format: spec.format,
             levels,
         })
     }
@@ -329,7 +340,9 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
 
     fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a> {
         VkAttachment {
-            // The top level alone: a framebuffer attachment is one level.
+            image: target.image.image,
+            // The top level alone: an attachment is one level.
+            level: Some(0),
             view: target
                 .image
                 .aux_views
@@ -337,7 +350,6 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
                 .copied()
                 .unwrap_or(target.image.view),
             extent: target.extent,
-            format: target.format,
             rest: AttachmentRest::Sampled,
         }
     }
@@ -357,12 +369,13 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
     ) -> RenderResult<Self::Attachment<'a>> {
         let extent = level_extent(post_extent(target.extent), level);
         Ok(VkAttachment {
+            image: target.image.image,
+            level: Some(level),
             view: target.level_view(level)?,
             extent: vk::Extent2D {
                 width: extent.width,
                 height: extent.height,
             },
-            format: target.format,
             rest: AttachmentRest::Sampled,
         })
     }
@@ -370,8 +383,6 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
         let pipe = draw.pipeline;
         draw.check(pipe.bindings)?;
-        // A render pass writes its attachment's layout in and out itself, so
-        // who owns the target's state between passes changes nothing here.
         let probe_set = match self.probes_for(pipe.bindings) {
             None => None,
             Some(probes) => Some(*probes.sets.get(self.frame).ok_or_else(|| {
@@ -382,12 +393,6 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
             })?),
         };
         let target = draw.target;
-        let render_pass =
-            self.cache
-                .render_pass(self.device, target.format, draw.load, target.rest)?;
-        let framebuffer =
-            self.cache
-                .framebuffer(self.device, &render_pass, target.view, target.extent)?;
 
         // One set per draw from this frame's arena, written from what the pass
         // holds now. Nothing here is cached across frames, so no input needs a
@@ -407,7 +412,26 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
 
         let extent = target.extent;
         let area = vk::Rect2D::default().extent(extent);
-        rec.begin_render_pass(&render_pass, &framebuffer, area, &[]);
+        // A sampled target moves in and back out around the draw, opening
+        // discarded under a draw that overwrites it; a graph-driven one is
+        // already an attachment.
+        let (load, discard) = match draw.load {
+            PostLoadOp::Load => (Load::Keep, false),
+            PostLoadOp::DontCare => (Load::Discard, true),
+        };
+        let sampled = target.rest == AttachmentRest::Sampled;
+        if sampled {
+            let open = target.transition(ImageUse::Sampled, ImageUse::ColorAttachment);
+            rec.transition(&[open.discarding_if(discard)]);
+        }
+        rec.begin_rendering(&RenderTargets {
+            area,
+            colors: ColorAttachments::new([Attachment {
+                load,
+                ..Attachment::loaded(target.view)
+            }]),
+            depth: None,
+        });
         rec.set_viewport(&vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -445,7 +469,10 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
         // The vertex stage builds the fullscreen triangle from the vertex id,
         // so the draw reads no vertex buffer.
         rec.draw(3, 1, 0, 0);
-        rec.end_render_pass();
+        rec.end_rendering();
+        if sampled {
+            rec.transition(&[target.transition(ImageUse::ColorAttachment, ImageUse::Sampled)]);
+        }
         Ok(())
     }
 }
@@ -468,7 +495,6 @@ impl crate::vulkan::context::VkContext {
                 command_pool: self.commands.command_pool,
                 queue: self.hw.graphics_queue,
             },
-            cache: &self.post.cache,
             arena: &self.post.arena,
             sampler: self.post.sampler.handle(),
             cube_sampler: self.scene.cube_sampler.handle(),
@@ -483,11 +509,12 @@ impl crate::vulkan::context::VkContext {
 
     // This frame slot's HDR scene, as a post draw's target.
     pub(in crate::vulkan) fn hdr_scene_attachment(&self, frame: usize) -> VkAttachment {
+        let scene = &self.targets.hdr_resolve_images[frame % self.targets.hdr_resolve_images.len()];
         VkAttachment {
-            view: self.targets.hdr_resolve_images[frame % self.targets.hdr_resolve_images.len()]
-                .view,
+            image: scene.image,
+            level: None,
+            view: scene.view,
             extent: self.targets.render_extent,
-            format: PixelFormat::Rgba16Float,
             rest: AttachmentRest::Sampled,
         }
     }

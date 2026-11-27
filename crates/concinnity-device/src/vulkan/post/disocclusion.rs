@@ -6,12 +6,10 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::post::disocclusion::{
-    self, DisocclusionInputs, DisocclusionPass, MASK_FORMAT,
-};
+use concinnity_engine::render::post::disocclusion::{self, DisocclusionInputs, DisocclusionPass};
 
 use crate::vulkan::context::VkContext;
-use crate::vulkan::post::pass_cache::AttachmentRest;
+use crate::vulkan::post::post_device::AttachmentRest;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkAttachment, post_extent};
 use crate::vulkan::record::Recorder;
 
@@ -72,9 +70,10 @@ impl VkContext {
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
                 mask: VkAttachment {
+                    image: mask.image,
+                    level: None,
                     view: mask.view,
                     extent: self.targets.render_extent,
-                    format: MASK_FORMAT,
                     // The mask rests sampled and its writers move it in and
                     // out; the mark covers every pixel, so it opens discarded.
                     rest: AttachmentRest::Sampled,

@@ -69,8 +69,6 @@ impl VkContext {
         if self.reflection_path().composite() || self.reflection_composite.is_none() {
             return false;
         }
-        // The cached framebuffers name the targets about to drop.
-        self.post.cache.forget_views();
         self.reflection_composite = None;
         true
     }
@@ -93,10 +91,6 @@ impl VkContext {
             let blur = rc.set_blur_scale(&self.post_device(0), blur_scale, extent);
             let denoiser = rc.set_denoise(&self.post_device(0), denoise, extent);
             self.reflection_composite = Some(rc);
-            if matches!(blur, Ok(Some(_))) || matches!(denoiser, Ok(Some(_))) {
-                // The cached framebuffers name the targets about to drop.
-                self.post.cache.forget_views();
-            }
             return blur.and(denoiser).map(|_| ());
         }
         let rc = build_reflection_composite(

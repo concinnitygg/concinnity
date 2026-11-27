@@ -34,7 +34,7 @@ pub(super) struct ShadowCull {
     pub(super) bindless_pipeline: Option<OwnedPipeline>,
     pub(super) bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) spot_views: Vec<Vec<ShadowCullView>>,
-    // The far view's pipeline, for its D16 render pass, and its views,
+    // The far view's pipeline, for its D16 format, and its views,
     // [frame][0]; `None`/empty without a far map.
     pub(super) far_bindless_pipeline: Option<OwnedPipeline>,
     pub(super) far_views: Vec<Vec<ShadowCullView>>,
@@ -123,15 +123,15 @@ pub(super) fn build_shadow_cull(
         let sb_spv = SHADOW_VERT_BINDLESS.compile(hot_reload)?;
         let sb_pipeline = create_shadow_pipeline(
             device,
-            shadow.render_pass.handle(),
+            crate::vulkan::context::SHADOW_FORMATS,
             sb_pl.handle(),
             &sb_spv,
             bias::RASTER_CLAMP,
         )?;
-        if let Some(far) = &shadow.far {
+        if shadow.far.is_some() {
             far_bindless_pipeline = Some(create_shadow_pipeline(
                 device,
-                far.render_pass.handle(),
+                crate::vulkan::context::FAR_SHADOW_FORMATS,
                 sb_pl.handle(),
                 &sb_spv,
                 bias::FAR_RASTER_CLAMP,

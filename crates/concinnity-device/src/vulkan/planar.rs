@@ -6,7 +6,7 @@
 //! scene-correct reflection instead of the box-projected probe cube.
 //!
 //! One mirror render per DISTINCT plane: near-coplanar reflectors (one wall of
-//! windows) share a render, and reflectors past the budget (`MAX_PLANAR_PLANES`)
+//! windows) share a render, and reflectors past the budget
 //! fall back to the probe cube. The layout, the per-frame plan and the mirror
 //! matrices come from the pure, unit-tested `planar_reflection`.
 //!
@@ -27,8 +27,7 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::ClusterParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::planar_reflection::{
-    self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarFramePlan,
-    PlanarReflectors,
+    MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarFramePlan, PlanarReflectors,
 };
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 
@@ -42,18 +41,16 @@ use super::graph_exec::GraphFrameParams;
 use super::light_cull::{
     LightCullInputs, cluster_list_size, light_cull_set_bindings, write_light_cull_set,
 };
-use super::probe::{FaceArea, FacePacking, FaceView};
+use super::probe::{FacePacking, FaceView};
 use super::record::Recorder;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
 use super::texture::{
     GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit, transition_image_layout,
 };
-use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
-
-// The engine's ceiling on distinct reflection planes, shared by every backend.
-// A quality budget can lower it; panes past it fall back to the probe cube.
-pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
+use crate::vulkan::main_pass::{MainAttachments, Target};
+use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
+use crate::vulkan::rendering::ImageUse;
 
 const PLANAR_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
@@ -66,10 +63,6 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     sample_count: vk::SampleCountFlags,
     width: u32,
     height: u32,
-    // Borrowed from VkContext (render-pass-compatible with the bindless main
-    // pipeline). Not owned, never destroyed here.
-    main_render_pass: vk::RenderPass,
-
     // Shared MSAA color (Some only when MSAA) + shared depth, reused across
     // planes (rendered one plane at a time on the frame's cmd buffer) and across
     // frames (the single graphics queue executes submissions in order). Recreated
@@ -80,7 +73,6 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // single-sample color attachment itself. The glass pass samples it. Recreated
     // on resize.
     targets: Vec<GpuImage>,
-    framebuffers: Vec<OwnedFramebuffer>,
 
     // Per-(plane, frame) reflected ViewUniforms UBO ring (HOST_VISIBLE, mapped),
     // indexed plane * frames + frame, so the CPU writes this frame's slot without
@@ -252,7 +244,7 @@ fn create_targets(
     }
     // Every target rests readable from the start: a reflector binds its mirror
     // on frames the plane is culled, and a plane culled since creation has not
-    // been through the render pass that would otherwise leave it readable.
+    // been through the render that would otherwise leave it readable.
     one_shot_submit(device, command_pool, queue, |rec| {
         for target in &targets {
             transition_image_layout(
@@ -265,62 +257,6 @@ fn create_targets(
         }
     })?;
     Ok((color, depth, targets))
-}
-
-// The attachments + geometry for the per-plane framebuffers: the compatible main
-// pass, the MSAA sample count, the shared color (MSAA only) + shared depth reused
-// across planes, the per-plane targets (one framebuffer each), and the pixel
-// dimensions.
-#[derive(Clone, Copy)]
-struct PlanarFramebufferInputs<'a> {
-    main_render_pass: vk::RenderPass,
-    sample_count: vk::SampleCountFlags,
-    color: Option<&'a GpuImage>,
-    depth: &'a GpuImage,
-    targets: &'a [GpuImage],
-    width: u32,
-    height: u32,
-}
-
-// One framebuffer per plane, render-pass-compatible with the bindless main pass:
-// MSAA -> [shared color, shared depth, plane target (resolve)], single-sample ->
-// [plane target (color), shared depth].
-fn create_framebuffers(
-    device: &VkDevice,
-    inputs: PlanarFramebufferInputs<'_>,
-) -> RenderResult<Vec<OwnedFramebuffer>> {
-    let PlanarFramebufferInputs {
-        main_render_pass,
-        sample_count,
-        color,
-        depth,
-        targets,
-        width,
-        height,
-    } = inputs;
-    let msaa = sample_count != vk::SampleCountFlags::TYPE_1;
-    let mut out = Vec::with_capacity(targets.len());
-    for target in targets {
-        let attachments: Vec<vk::ImageView> = if msaa {
-            vec![
-                color
-                    .expect("a multisampled planar target has a color image")
-                    .view,
-                depth.view,
-                target.view,
-            ]
-        } else {
-            vec![target.view, depth.view]
-        };
-        let fb = device.framebuffer(
-            main_render_pass,
-            &attachments,
-            vk::Extent2D { width, height },
-            "planar framebuffer",
-        )?;
-        out.push(fb);
-    }
-    Ok(out)
 }
 
 // The frame-independent render config for a planar set: how many frames the ring
@@ -375,14 +311,25 @@ impl PlanarReflectionSet {
         !self.targets.is_empty()
     }
 
-    // Build the planar set: shared color and depth, per-plane targets and
-    // framebuffers, the reflected-view UBO ring with its global sets, and the
+    // The images plane `slot` renders over within `area`: the shared color
+    // resolving into the plane's target with MSAA, else that target itself.
+    fn attachments(&self, slot: usize, area: vk::Rect2D) -> MainAttachments {
+        let target = Target::of(&self.targets[slot]);
+        let (color, resolve) = match &self.color {
+            Some(color) => (Target::of(color), Some(target)),
+            None => (target, None),
+        };
+        // The glass pass last sampled the target.
+        MainAttachments::off_camera((color, resolve), ImageUse::Sampled, &self.depth, area)
+    }
+
+    // Build the planar set: shared color and depth, per-plane targets, the
+    // reflected-view UBO ring with its global sets, and the
     // per-(plane, frame) cull resources. The bindless set is the frame's.
     pub(in crate::vulkan) fn new(
         gpu: PlanarDevice<'_>,
         config: PlanarConfig,
         reflectors: PlanarReflectors,
-        main_render_pass: &OwnedRenderPass,
         globals: PlanarGlobalSet<'_>,
         cull: PlanarCullSources<'_>,
     ) -> RenderResult<Self> {
@@ -407,18 +354,6 @@ impl PlanarReflectionSet {
                 width,
                 height,
                 plane_count,
-            },
-        )?;
-        let framebuffers = create_framebuffers(
-            device,
-            PlanarFramebufferInputs {
-                main_render_pass: main_render_pass.handle(),
-                sample_count,
-                color: color.as_ref(),
-                depth: &depth,
-                targets: &targets,
-                width,
-                height,
             },
         )?;
 
@@ -587,11 +522,9 @@ impl PlanarReflectionSet {
             sample_count,
             width,
             height,
-            main_render_pass: main_render_pass.handle(),
             color,
             depth,
             targets,
-            framebuffers,
             view_bufs,
             global_sets,
             cluster_params_bufs,
@@ -672,7 +605,7 @@ impl PlanarReflectionSet {
         }
     }
 
-    // Recreate the targets and framebuffers for a new render resolution. The
+    // Recreate the targets for a new render resolution. The
     // caller then re-points the transparent pass's planar bindings.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
@@ -680,9 +613,8 @@ impl PlanarReflectionSet {
         render_w: u32,
         render_h: u32,
     ) -> RenderResult<()> {
-        let device = gpu.device;
         let (width, height) = self.layout.target_size(render_w, render_h);
-        // Build the new targets + framebuffers first, then retire the old ones, so
+        // Build the new targets first, then retire the old ones, so
         // a failure leaves the existing set intact.
         let (color, depth, targets) = create_targets(
             gpu,
@@ -693,24 +625,11 @@ impl PlanarReflectionSet {
                 plane_count: self.layout.planes().len(),
             },
         )?;
-        let framebuffers = create_framebuffers(
-            device,
-            PlanarFramebufferInputs {
-                main_render_pass: self.main_render_pass,
-                sample_count: self.sample_count,
-                color: color.as_ref(),
-                depth: &depth,
-                targets: &targets,
-                width,
-                height,
-            },
-        )?;
 
         // The replaced targets retire through the allocator as they drop.
         self.color = color;
         self.depth = depth;
         self.targets = targets;
-        self.framebuffers = framebuffers;
         self.width = width;
         self.height = height;
         Ok(())
@@ -720,7 +639,6 @@ impl PlanarReflectionSet {
         // The pool frees every global / cull / Hi-Z set allocated from it.
         self.color = None;
         self.depth = GpuImage::null();
-        self.framebuffers.clear();
         self.targets.clear();
         self.view_bufs.clear();
         self.cluster_params_bufs.clear();
@@ -840,43 +758,20 @@ impl VkContext {
             if cluster_params.use_clusters != 0 {
                 self.encode_mirror_light_cull(rec, set, slot, ring);
             }
-            // Order the last render's attachment writes before this render pass's
-            // `UNDEFINED` layout transition; the render pass's external dependency makes
-            // nothing available. Needed for the first plane too.
-            let attachment_waw = vk::MemoryBarrier::default()
-                .src_access_mask(
-                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                )
-                .dst_access_mask(
-                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                );
-            rec.pipeline_barrier(
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                std::slice::from_ref(&attachment_waw),
-                &[],
-                &[],
-            );
+            let area = vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: i32::saturating_from(crop.x),
+                    y: i32::saturating_from(crop.y),
+                },
+                extent: vk::Extent2D {
+                    width: crop.width,
+                    height: crop.height,
+                },
+            };
             self.encode_main_into_face(
                 rec,
-                &set.framebuffers[slot],
-                FaceArea {
-                    extent,
-                    render_area: vk::Rect2D {
-                        offset: vk::Offset2D {
-                            x: i32::saturating_from(crop.x),
-                            y: i32::saturating_from(crop.y),
-                        },
-                        extent: vk::Extent2D {
-                            width: crop.width,
-                            height: crop.height,
-                        },
-                    },
-                },
+                &set.attachments(slot, area),
+                extent,
                 FaceView {
                     global_set: set.global_sets[ring],
                     storage,
@@ -886,36 +781,6 @@ impl VkContext {
                 packing,
             );
         }
-
-        // Make every rendered target visible to the transparent pass's reads; the
-        // render pass adds no output dependency. Capped at `MAX_PLANAR_PLANES`.
-        let mut barriers = [vk::ImageMemoryBarrier::default(); MAX_PLANAR_PLANES];
-        debug_assert!(crops.len() <= MAX_PLANAR_PLANES);
-        let n = crops.len().min(MAX_PLANAR_PLANES);
-        for (barrier, &(slot, _)) in barriers.iter_mut().zip(crops) {
-            *barrier = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(set.targets[slot].image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-        }
-        rec.pipeline_barrier(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
-            &[],
-            &[],
-            &barriers[..n],
-        );
     }
 }
 
@@ -981,14 +846,5 @@ mod tests {
                 (&compact, ring),
             ]));
         }
-    }
-
-    #[test]
-    fn planar_capacity_is_four() {
-        // The reserved planar targets are sized off this. It now aliases the single
-        // `gfx::planar_reflection` source, so this guards that the shared capacity
-        // the allocation assumes is still 4.
-        assert_eq!(MAX_PLANAR_PLANES, 4);
-        assert_eq!(MAX_PLANAR_PLANES, planar_reflection::MAX_PLANAR_PLANES);
     }
 }

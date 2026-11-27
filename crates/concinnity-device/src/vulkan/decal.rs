@@ -28,13 +28,13 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, Raster};
+use super::rendering::PassFormats;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings};
 use super::set_writes::SetWrites;
 use super::texture::GpuImage;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
 
@@ -53,7 +53,6 @@ const PARAMS_STRIDE: u64 = 256;
 // UBO (0), the dynamic `DecalParams` ring (1), and the main depth (2). Set 1 is
 // per decal: its albedo (0) and sampler (1).
 pub(in crate::vulkan) struct DecalResources {
-    pub(in crate::vulkan) render_pass: OwnedRenderPass,
     pub(in crate::vulkan) pipeline: OwnedPipeline,
     pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
     pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
@@ -79,10 +78,6 @@ pub(in crate::vulkan) struct DecalResources {
     // executor only binds the set for visible records.
     pub(in crate::vulkan) albedo_sets: Vec<vk::DescriptorSet>,
 
-    // One framebuffer per frame-in-flight slot, each binding its frame
-    // slot's `hdr_resolve_images[i].view` as the sole color attachment.
-    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
-
     // Last-uploaded texture-pool slot per decal id. Used by
     // `rewrite_texture_slot` to detect which decal albedo sets need
     // re-writing when a streamed texture pool entry swaps.
@@ -101,15 +96,12 @@ pub(in crate::vulkan) struct DecalDeviceContext<'a> {
 }
 
 // Render-target inputs the decal pass writes into / samples from: the
-// resolved HDR color attachment (format + per-frame views), the main
-// depth views, the albedo sampler, and the framebuffer extent.
+// resolved HDR color format, the main depth views and the albedo sampler.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct DecalPassTargets<'a> {
     pub(in crate::vulkan) hdr_format: vk::Format,
-    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
     pub(in crate::vulkan) sampler: vk::Sampler,
-    pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
 impl DecalResources {
@@ -132,12 +124,9 @@ impl DecalResources {
         } = ctx;
         let DecalPassTargets {
             hdr_format,
-            hdr_resolve_views,
             depth_views,
             sampler,
-            extent,
         } = targets;
-        let render_pass = create_decal_render_pass(device, hdr_format)?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let albedo_set_layout = create_descriptor_set_layout(device, &source_set_bindings(1))?;
         let pipeline_layout = create_decal_pipeline_layout(
@@ -149,7 +138,7 @@ impl DecalResources {
         let (vert_spv, frag_spv) = compile_decal_shaders(hot_reload, msaa)?;
         let pipeline = create_decal_pipeline(
             device,
-            render_pass.handle(),
+            hdr_format,
             pipeline_layout.handle(),
             &vert_spv,
             &frag_spv,
@@ -227,17 +216,7 @@ impl DecalResources {
             SetWrites::new(set).sampler(1, sampler).apply(device);
         }
 
-        // Per-frame framebuffers (one per frame slot binding that slot's
-        // hdr_resolve view as the color attachment).
-        let framebuffers = device.single_view_framebuffers(
-            render_pass.handle(),
-            hdr_resolve_views.iter().copied().take(frames),
-            extent,
-            "decal framebuffer",
-        )?;
-
         Ok(Self {
-            render_pass,
             pipeline,
             pipeline_layout,
             _view_set_layout: view_set_layout,
@@ -249,40 +228,28 @@ impl DecalResources {
             params_ubos,
             view_sets,
             albedo_sets,
-            framebuffers,
             decal_texture_slots: Cell::new([usize::MAX; MAX_DECALS]),
         })
     }
 
-    // Rebuild the framebuffers and re-point the view set's depth after a resize.
-    pub(in crate::vulkan) fn rebuild(
-        &mut self,
+    // Re-point each per-frame view set's depth binding (binding 2) at the
+    // rebuilt depth view after a resize.
+    pub(in crate::vulkan) fn repoint_depth(
+        &self,
         device: &VkDevice,
-        hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
-        extent: vk::Extent2D,
-    ) -> RenderResult<()> {
-        self.framebuffers = device.single_view_framebuffers(
-            self.render_pass.handle(),
-            hdr_resolve_views.iter().copied().take(self.view_ubos.len()),
-            extent,
-            "decal framebuffer (rebuild)",
-        )?;
-        // Re-point each per-frame view set's depth binding (binding 2)
-        // at the rebuilt depth view.
+    ) {
         for (i, &set) in self.view_sets.iter().enumerate() {
             SetWrites::new(set)
                 .sampled_image(2, depth_views[i.min(depth_views.len().saturating_sub(1))])
                 .apply(device);
         }
-        Ok(())
     }
 
     // Destroy every GPU resource. Called from `VkContext::destroy` after
     // `wait_idle`; the pooled buffers retire through the allocator as their
     // fields clear.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
-        self.framebuffers.clear();
         self.view_ubos.clear();
         self.params_ubos.clear();
         self.vertex_buffer = PooledBuffer::null();
@@ -290,64 +257,7 @@ impl DecalResources {
     }
 }
 
-// Render pass / pipeline construction
-
-fn create_decal_render_pass(
-    device: &VkDevice,
-    format: vk::Format,
-) -> RenderResult<OwnedRenderPass> {
-    // The resolved HDR scene as the one attachment; the subpass dependencies make
-    // the SHADER_READ_ONLY round trip.
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::LOAD)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    // Entry: anyone sampling the resolved HDR (e.g. the main pass's resolve
-    // attachment writer, which finished with this image in
-    // SHADER_READ_ONLY) must complete before the decal subpass starts
-    // writing it.
-    let dep_in = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
-        );
-    // Exit: any subsequent SSR / TAA / bloom / composite pass reading the
-    // resolved HDR must wait for our writes to complete and become
-    // available + visible to the fragment shader.
-    let dep_out = vk::SubpassDependency::default()
-        .src_subpass(0)
-        .dst_subpass(vk::SUBPASS_EXTERNAL)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    let deps = [dep_in, dep_out];
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| super::error::map_vk_result(e, "decal render pass"))
-}
+// Pipeline construction
 
 // Set 0, per frame: the view UBO, the per-decal params dynamic UBO and the
 // main depth.
@@ -399,10 +309,9 @@ fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>,
     Ok((vert, frag))
 }
 
-// Rebuild the decal graphics pipeline against the existing render pass +
-// layout. Used by the Vulkan shader hot-reload path. The caller is
-// responsible for destroying the previous pipeline only after this call
-// succeeds.
+// Rebuild the decal graphics pipeline against the existing layout. Used by the
+// Vulkan shader hot-reload path. The caller is responsible for destroying the
+// previous pipeline only after this call succeeds.
 pub(in crate::vulkan) fn rebuild_decal_pipeline(
     device: &VkDevice,
     decals: &DecalResources,
@@ -412,7 +321,7 @@ pub(in crate::vulkan) fn rebuild_decal_pipeline(
     let (vert_spv, frag_spv) = compile_decal_shaders(hot_reload, msaa)?;
     create_decal_pipeline(
         device,
-        decals.render_pass.handle(),
+        super::context::HDR_FORMAT,
         decals.pipeline_layout.handle(),
         &vert_spv,
         &frag_spv,
@@ -424,7 +333,7 @@ pub(in crate::vulkan) fn rebuild_decal_pipeline(
 // resolved HDR regardless of the main pass's MSAA.
 fn create_decal_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
+    hdr_format: vk::Format,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
@@ -449,7 +358,7 @@ fn create_decal_pipeline(
             vert_spv,
             frag_spv,
             layout,
-            render_pass,
+            PassFormats::color(hdr_format),
             &[Blend::AlphaOver],
         )
     }
@@ -549,49 +458,43 @@ impl VkContext {
             max_depth: 1.0,
         };
 
-        rec.begin_render_pass(
-            &decals.render_pass,
-            &decals.framebuffers[frame_idx],
-            area,
-            &[],
-        );
-        rec.set_viewport(&vp_state);
-        rec.set_scissor(&area);
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &decals.pipeline);
-        rec.bind_vertex_buffers(0, &[decals.vertex_buffer.buffer()], &[0]);
-        rec.bind_index_buffer(decals.index_buffer.buffer(), 0, vk::IndexType::UINT16);
+        rec.render_over_sampled(&self.targets.hdr_resolve_images[frame_idx], extent, |rec| {
+            rec.set_viewport(&vp_state);
+            rec.set_scissor(&area);
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &decals.pipeline);
+            rec.bind_vertex_buffers(0, &[decals.vertex_buffer.buffer()], &[0]);
+            rec.bind_index_buffer(decals.index_buffer.buffer(), 0, vk::IndexType::UINT16);
 
-        for decal in visible {
-            // This frame's ring slot keeps what an earlier frame wrote, so a
-            // decal whose record has not changed since is already uploaded.
-            if decal.take_upload(frame_idx) {
-                decals.params_ubos[frame_idx].write_val(
-                    decal.id * usize::saturating_from(PARAMS_STRIDE),
-                    decal.params,
+            for decal in visible {
+                // This frame's ring slot keeps what an earlier frame wrote, so a
+                // decal whose record has not changed since is already uploaded.
+                if decal.take_upload(frame_idx) {
+                    decals.params_ubos[frame_idx].write_val(
+                        decal.id * usize::saturating_from(PARAMS_STRIDE),
+                        decal.params,
+                    );
+                }
+                // Selects this decal's record inside the params UBO written above.
+                let dynamic_offset = u32::saturating_from(decal.id as u64 * PARAMS_STRIDE);
+                rec.bind_descriptor_sets(
+                    vk::PipelineBindPoint::GRAPHICS,
+                    &decals.pipeline_layout,
+                    0,
+                    std::slice::from_ref(&decals.view_sets[frame_idx]),
+                    std::slice::from_ref(&dynamic_offset),
                 );
+                rec.bind_descriptor_sets(
+                    vk::PipelineBindPoint::GRAPHICS,
+                    &decals.pipeline_layout,
+                    1,
+                    std::slice::from_ref(&decals.albedo_sets[decal.id]),
+                    &[],
+                );
+                // 36 indices is the cube's full index count.
+                rec.draw_indexed(36, 1, 0, 0, 0);
+                self.inc_draw_calls(1);
             }
-            // Selects this decal's record inside the params UBO written above.
-            let dynamic_offset = u32::saturating_from(decal.id as u64 * PARAMS_STRIDE);
-            rec.bind_descriptor_sets(
-                vk::PipelineBindPoint::GRAPHICS,
-                &decals.pipeline_layout,
-                0,
-                std::slice::from_ref(&decals.view_sets[frame_idx]),
-                std::slice::from_ref(&dynamic_offset),
-            );
-            rec.bind_descriptor_sets(
-                vk::PipelineBindPoint::GRAPHICS,
-                &decals.pipeline_layout,
-                1,
-                std::slice::from_ref(&decals.albedo_sets[decal.id]),
-                &[],
-            );
-            // 36 indices is the cube's full index count.
-            rec.draw_indexed(36, 1, 0, 0, 0);
-            self.inc_draw_calls(1);
-        }
-
-        rec.end_render_pass();
+        });
     }
 }
 

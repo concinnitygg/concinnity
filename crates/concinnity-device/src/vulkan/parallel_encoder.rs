@@ -40,7 +40,7 @@
 //!      first-frame velocity priming gate, stored during encode; atomic, so
 //!      concurrent access is sound.
 //!   6. The owning device handle (`VkDevice`), reachable through `&VkContext`
-//!      from every owned pipeline / layout / render pass. It is `Arc` +
+//!      from every owned pipeline / layout / sampler. It is `Arc` +
 //!      `Mutex`, so cloning it here and retiring a handle from here are both
 //!      sound. That is not a spare tire: several passes on this fan-out
 //!      (`encode_main_pass`, `encode_main_pass_late`, the shadow, probe and RT

@@ -7,10 +7,9 @@
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::bloom::{BloomInputs, BloomPass, top_extent};
-use concinnity_engine::render::render_graph::PixelFormat;
 
 use crate::vulkan::context::VkContext;
-use crate::vulkan::post::pass_cache::AttachmentRest;
+use crate::vulkan::post::post_device::AttachmentRest;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkAttachment, post_extent};
 use crate::vulkan::record::Recorder;
 use crate::vulkan::transient_pool::TransientImagePool;
@@ -47,13 +46,19 @@ impl VkContext {
             .view_for("bloom_top", frame_idx)
             .ok_or_else(|| RenderError::Other("bloom_top missing from transient pool".into()))?;
         let extent = top_extent(post_extent(self.swapchain.extent));
+        let image = self
+            .targets
+            .transient_pool
+            .image_for("bloom_top", frame_idx)
+            .ok_or_else(|| RenderError::Other("bloom_top missing from transient pool".into()))?;
         let top = VkAttachment {
+            image,
+            level: None,
             view,
             extent: vk::Extent2D {
                 width: extent.width,
                 height: extent.height,
             },
-            format: PixelFormat::Rgba16Float,
             rest: AttachmentRest::Sampled,
         };
         bloom.encode(

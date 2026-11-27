@@ -14,10 +14,10 @@ use ash::vk;
 use concinnity_engine::gfx::render_types::SsaoParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::ssao::settings::SsaoSettings;
-use concinnity_engine::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass};
+use concinnity_engine::render::post::ssao::{SsaoInputs, SsaoPass};
 
 use super::super::context::VkContext;
-use crate::vulkan::post::pass_cache::AttachmentRest;
+use crate::vulkan::post::post_device::AttachmentRest;
 use crate::vulkan::post::post_device::{
     PostPipeline, PostTarget, VkAttachment, VkPostDevice, post_extent,
 };
@@ -89,9 +89,16 @@ impl VkContext {
             &SsaoInputs {
                 normal_depth: gbuffer.normal_depth,
                 output: VkAttachment {
+                    image: self
+                        .targets
+                        .transient_pool
+                        .image_for("ao_output", frame_idx)
+                        .ok_or_else(|| {
+                            RenderError::Other("ao_output missing from transient pool".into())
+                        })?,
+                    level: None,
                     view,
                     extent: self.targets.render_extent,
-                    format: OCCLUSION_FORMAT,
                     // The executor moves `ao_output` into the attachment layout
                     // ahead of this pass and out before the main pass samples it.
                     rest: AttachmentRest::Graph,

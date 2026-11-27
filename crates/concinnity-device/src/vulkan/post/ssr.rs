@@ -47,7 +47,7 @@ impl SsrResources {
     }
 
     // Recreate the reflection target at a new render extent. The caller has
-    // already idled the device and dropped the framebuffers naming the old view.
+    // already idled the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkPostDevice<'_>,

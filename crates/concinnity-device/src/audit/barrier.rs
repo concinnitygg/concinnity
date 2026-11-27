@@ -62,15 +62,12 @@ enum Reason {
     // that records through `Recorder`, and each of those call sites is counted
     // under `rec.pipeline_barrier(` with its own reason.
     RecordingSurface,
-    // A Vulkan render pass's attachment layout declaration. These are frame-path
-    // transitions the driver performs at pass boundaries rather than calls the
-    // encoder makes, which is why they need counting at all: the scene targets'
-    // whole round trip (SHADER_READ_ONLY -> COLOR_ATTACHMENT and back) is
-    // expressed this way and would otherwise be invisible to this audit. Making
-    // them graph-derived means the graph choosing each pass's initial and final
-    // layouts, not replacing them with barriers -- a render pass folding its own
-    // transitions is the efficient form and the one a tiler wants.
-    AttachmentLayout,
+    // A Vulkan rendering scope's moves of its own attachments in and out: the
+    // scene targets' round trip (SHADER_READ_ONLY -> COLOR_ATTACHMENT and back)
+    // around each pass that draws into them, through the shared scope helpers.
+    // Making them graph-derived means the graph choosing each pass's attachment
+    // layouts, which is a change to the graph rather than to the executor.
+    ScopeLayout,
 }
 
 // One backend's barrier surface: every call that emits a barrier, and the exact
@@ -79,11 +76,11 @@ enum Reason {
 //
 // `calls` is a list because a backend emits frame-path transitions through more
 // than one API, and counting only the obvious one exempts the rest from the
-// audit: Vulkan has `cmd_pipeline_barrier` and the attachment layout
-// declarations a render pass performs at its own boundaries. The table is keyed
-// by (file, call) rather than by file, because one file legitimately holds
-// several kinds for different reasons -- `transparent.rs` has two inline
-// transfer barriers and one attachment round trip.
+// audit: Vulkan has `cmd_pipeline_barrier` and the synchronization2 moves a
+// rendering scope makes around its attachments. The table is keyed by (file,
+// call) rather than by file, because one file legitimately holds several kinds
+// for different reasons -- `record.rs` holds the recording surface's
+// `cmd_pipeline_barrier` and the shared scope helper's moves.
 struct BackendAudit {
     backend: &'static str,
     root: &'static str,
@@ -98,7 +95,7 @@ const AUDITS: &[BackendAudit] = &[
         calls: &[
             "cmd_pipeline_barrier",
             "rec.pipeline_barrier(",
-            ".final_layout(",
+            ".transition(&",
         ],
         sites: &[
             (
@@ -108,13 +105,44 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::GraphDriven,
             ),
             ("hiz.rs", "rec.pipeline_barrier(", 1, Reason::IntraPass),
+            // One each for the legacy and the synchronization2 barrier.
             (
                 "record.rs",
                 "cmd_pipeline_barrier",
-                1,
+                2,
                 Reason::RecordingSurface,
             ),
-            // The reactive mask cleared outside a render pass, for a writer that
+            // The shared scope helpers: the main pass's, the G-buffer's, the
+            // post seam's, the reactive writers', and the recorder's own
+            // draw-over-the-scene scope.
+            ("main_pass.rs", ".transition(&", 3, Reason::ScopeLayout),
+            (
+                "post/gbuffer_scope.rs",
+                ".transition(&",
+                2,
+                Reason::ScopeLayout,
+            ),
+            (
+                "post/post_device.rs",
+                ".transition(&",
+                2,
+                Reason::ScopeLayout,
+            ),
+            ("reactive_mask.rs", ".transition(&", 4, Reason::ScopeLayout),
+            ("record.rs", ".transition(&", 2, Reason::ScopeLayout),
+            // The swapchain image, discarded into the composite and handed to
+            // the presentation engine after it.
+            ("draw/composite.rs", ".transition(&", 2, Reason::Present),
+            // The refraction snapshot's copy: the scene opened as the source and
+            // the snapshot closed for sampling, inside the Raymarch node.
+            ("raymarch/mod.rs", ".transition(&", 2, Reason::IntraPass),
+            // The refraction snapshot's copy, the scene opened as its source and
+            // the snapshot closed for sampling, and the glass reflection layers,
+            // opened for their pre-pass and closed for the scene pass to read.
+            // The snapshot and layers are private to the transparent node, and
+            // the scene leaves it as it came, through the writer scope.
+            ("transparent.rs", ".transition(&", 4, Reason::IntraPass),
+            // The reactive mask cleared outside a rendering scope, for a writer that
             // draws nothing on the frame it was to clear or an upscaler that
             // must have a mask on a frame with no writer: from its resting
             // layout to a transfer and back, inside the node.
@@ -192,65 +220,26 @@ const AUDITS: &[BackendAudit] = &[
                 1,
                 Reason::Ungraphed,
             ),
-            // Two for the mirror targets: one orders each plane's render behind
-            // the previous render's attachment writes, which the shared main
-            // render pass declares `UNDEFINED` and so transitions without a
-            // dependency; the other makes the finished targets visible to the
-            // transparent pass's sample. Two for each plane's cluster lists,
-            // binned over its reflected view: one orders the binning after the
-            // plane's previous mirror render read them, the other before this
-            // render reads them. Neither the targets, the shared mirror depth
-            // nor the per-plane lists are graph resources.
-            ("planar.rs", "rec.pipeline_barrier(", 4, Reason::Ungraphed),
-            // The prop probe's faces: one orders each face's cull and packing
-            // after the previous face's packing and indirect draw used the
-            // shared slot, the other each face's render after the previous
-            // face's (and the last frame's convolution's) use of its
-            // attachments. Neither the slot nor the capture is a graph resource.
+            // Two for each plane's cluster lists, binned over its reflected
+            // view: one orders the binning after the plane's previous mirror
+            // render read them, the other before this render reads them. The
+            // per-plane lists are not graph resources.
+            ("planar.rs", "rec.pipeline_barrier(", 2, Reason::Ungraphed),
+            // The prop probe's faces: each face's cull and packing after the
+            // previous face's packing and indirect draw used the shared slot,
+            // which is not a graph resource.
             (
                 "prop_probe.rs",
                 "rec.pipeline_barrier(",
-                2,
+                1,
                 Reason::Ungraphed,
             ),
-            // The refraction snapshot: both passes copy the scene image into a
-            // private snapshot and sample that, because a fragment cannot read
-            // the attachment it is blending into. The pair opens the copy and
-            // closes it, restoring the scene image to the layout the render
-            // pass's color LOAD declares -- so no net state crosses the node
-            // boundary and there is no graph edge to derive it from. The
-            // snapshot itself is not a graph resource.
-            (
-                "transparent.rs",
-                "rec.pipeline_barrier(",
-                2,
-                Reason::IntraPass,
-            ),
-            (
-                "raymarch/mod.rs",
-                "rec.pipeline_barrier(",
-                2,
-                Reason::IntraPass,
-            ),
-            ("draw/main.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
-            // SSGI's resolve output, written ahead of the main pass that samples
-            // it: the graph models it, but the registry leaves it to the pass,
-            // whose render pass rests it shader-readable.
-            ("post/ssgi.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
             (
                 "post/upscale/mod.rs",
                 "rec.pipeline_barrier(",
                 1,
                 Reason::Inline,
             ),
-            (
-                "render_pass.rs",
-                ".final_layout(",
-                8,
-                Reason::AttachmentLayout,
-            ),
-            ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
-            ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             // The atmosphere's kernels: each samples what the one before it
             // wrote, the irradiance cube opens for its kernel and closes for the
             // passes that sample it, and last frame's readers finish before the
@@ -293,50 +282,6 @@ const AUDITS: &[BackendAudit] = &[
                 "rec.pipeline_barrier(",
                 7,
                 Reason::IntraPass,
-            ),
-            // The haze pass's scene attachment, like the fog pass's.
-            (
-                "atmosphere.rs",
-                ".final_layout(",
-                1,
-                Reason::AttachmentLayout,
-            ),
-            // The scene attachment's round trip, and the glass reflection
-            // pre-pass's layer + depth, private to the transparent node.
-            (
-                "transparent.rs",
-                ".final_layout(",
-                3,
-                Reason::AttachmentLayout,
-            ),
-            ("line.rs", ".final_layout(", 1, Reason::AttachmentLayout),
-            ("particle.rs", ".final_layout(", 1, Reason::AttachmentLayout),
-            // The reactive mask's attachment in every writer's render passes.
-            (
-                "reactive_mask.rs",
-                ".final_layout(",
-                1,
-                Reason::AttachmentLayout,
-            ),
-            (
-                "raymarch/mod.rs",
-                ".final_layout(",
-                2,
-                Reason::AttachmentLayout,
-            ),
-            // One attachment builder for the G-buffer's cleared and loaded
-            // render passes.
-            (
-                "post/gbuffer.rs",
-                ".final_layout(",
-                1,
-                Reason::AttachmentLayout,
-            ),
-            (
-                "post/pass_cache.rs",
-                ".final_layout(",
-                1,
-                Reason::AttachmentLayout,
             ),
         ],
     },

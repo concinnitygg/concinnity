@@ -10,6 +10,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::depth::{DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE};
 use concinnity_engine::render::post::device::PostBlend;
 
+use super::rendering::PassFormats;
 use crate::vulkan::depth::compare_op;
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
@@ -26,6 +27,9 @@ pub(in crate::vulkan) enum Blend {
     PremultipliedOver,
     // `src.a * src + (1 - src.a) * dst`, alpha included.
     AlphaOver,
+    // `src.a * src + (1 - src.a) * dst`, the alpha accumulating coverage as
+    // `src.a + (1 - src.a) * dst.a`.
+    CoverageOver,
     // `max(src, dst)`.
     Max,
 }
@@ -44,14 +48,25 @@ impl Blend {
     fn raw(self) -> vk::PipelineColorBlendAttachmentState {
         let base = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA);
+        let alpha_over = (
+            vk::BlendFactor::SRC_ALPHA,
+            vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+        );
         let (src, dst) = match self {
             Self::Opaque => return base.blend_enable(false),
+            Self::CoverageOver => {
+                return base
+                    .blend_enable(true)
+                    .src_color_blend_factor(alpha_over.0)
+                    .dst_color_blend_factor(alpha_over.1)
+                    .color_blend_op(vk::BlendOp::ADD)
+                    .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                    .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                    .alpha_blend_op(vk::BlendOp::ADD);
+            }
             Self::Additive | Self::Max => (vk::BlendFactor::ONE, vk::BlendFactor::ONE),
             Self::PremultipliedOver => (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA),
-            Self::AlphaOver => (
-                vk::BlendFactor::SRC_ALPHA,
-                vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-            ),
+            Self::AlphaOver => alpha_over,
         };
         let op = match self {
             Self::Max => vk::BlendOp::MAX,
@@ -164,9 +179,9 @@ pub(in crate::vulkan) struct GraphicsPipelineDesc<'a> {
     // `None` for a depth-only pipeline.
     pub frag: Option<&'a [u8]>,
     pub layout: vk::PipelineLayout,
-    pub render_pass: vk::RenderPass,
-    pub subpass: u32,
-    // One blend per color attachment of the subpass, in order.
+    // The attachment formats the pipeline renders to.
+    pub formats: PassFormats,
+    // One blend per color attachment, in order.
     pub color_targets: &'a [Blend],
     pub depth: Depth,
     pub raster: Raster,
@@ -177,21 +192,20 @@ pub(in crate::vulkan) struct GraphicsPipelineDesc<'a> {
 }
 
 impl<'a> GraphicsPipelineDesc<'a> {
-    // A vertex-buffer-less fullscreen triangle into the subpass's color
-    // attachments, single-sample, no depth.
+    // A vertex-buffer-less fullscreen triangle into attachments of `formats`,
+    // single-sample, no depth.
     pub(in crate::vulkan) fn fullscreen(
         vert: &'a [u8],
         frag: &'a [u8],
         layout: vk::PipelineLayout,
-        render_pass: vk::RenderPass,
+        formats: PassFormats,
         color_targets: &'a [Blend],
     ) -> Self {
         Self {
             vert,
             frag: Some(frag),
             layout,
-            render_pass,
-            subpass: 0,
+            formats,
             color_targets,
             depth: Depth::Off,
             raster: Raster::default(),
@@ -254,12 +268,12 @@ impl<'a> GraphicsPipelineDesc<'a> {
             .multisample_state(&multisample)
             .depth_stencil_state(&depth)
             .dynamic_state(&dynamic)
-            .layout(self.layout)
-            .render_pass(self.render_pass)
-            .subpass(self.subpass);
+            .layout(self.layout);
         if !self.color_targets.is_empty() {
             info = info.color_blend_state(&color_blend);
         }
+        let mut rendering = self.formats.pipeline_info();
+        info = info.push_next(&mut rendering);
         crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
             .map_err(|e| map_vk_result(e, &format!("create {label} pipeline")))
     }
@@ -353,6 +367,24 @@ mod tests {
             (add.src_alpha_blend_factor, add.dst_alpha_blend_factor),
             (vk::BlendFactor::ONE, vk::BlendFactor::ONE)
         );
+        let coverage = Blend::CoverageOver.raw();
+        assert_eq!(
+            (
+                coverage.src_color_blend_factor,
+                coverage.dst_color_blend_factor
+            ),
+            (
+                vk::BlendFactor::SRC_ALPHA,
+                vk::BlendFactor::ONE_MINUS_SRC_ALPHA
+            )
+        );
+        assert_eq!(
+            (
+                coverage.src_alpha_blend_factor,
+                coverage.dst_alpha_blend_factor
+            ),
+            (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        );
         assert_eq!(Blend::from(PostBlend::Replace), Blend::Opaque);
     }
 
@@ -441,14 +473,13 @@ mod tests {
             &[],
             &[],
             vk::PipelineLayout::null(),
-            vk::RenderPass::null(),
+            PassFormats::color(vk::Format::R8G8B8A8_UNORM),
             &targets,
         );
         assert_eq!(d.samples, vk::SampleCountFlags::TYPE_1);
         assert_eq!(d.depth, Depth::Off);
         assert_eq!(d.topology, vk::PrimitiveTopology::TRIANGLE_LIST);
         assert!(d.vertex_bindings.is_empty() && d.vertex_attributes.is_empty());
-        assert_eq!(d.subpass, 0);
         assert_eq!(d.color_targets, &targets);
     }
 }

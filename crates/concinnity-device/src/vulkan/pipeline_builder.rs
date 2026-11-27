@@ -156,7 +156,6 @@ mod tests {
     #[test]
     fn targets_differ_across_a_template_reload() {
         let targets = |template_generation| BucketPipelineTargets {
-            render_pass: vk::RenderPass::null(),
             layout: vk::PipelineLayout::null(),
             prepass: None,
             msaa_samples: vk::SampleCountFlags::TYPE_1,

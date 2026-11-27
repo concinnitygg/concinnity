@@ -701,6 +701,7 @@ impl FrameDevice for VkContext {
             image_index,
             frame_idx,
             planar,
+            scene: self.scene_resumers(plan),
         };
         // The submission order before the caller's "end" buffer: `start`, then the
         // pass buffers in graph order, which is GPU order on the single queue.

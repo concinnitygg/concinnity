@@ -1,4 +1,4 @@
-//! Composite: the swapchain render pass and framebuffers, the tonemap pipeline,
+//! Composite: the swapchain formats, the tonemap pipeline,
 //! and one input set per frame in flight.
 
 use ash::vk;
@@ -12,12 +12,12 @@ use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::pipeline::{compile_composite_shaders, create_composite_pipeline};
 use crate::vulkan::post::bloom::composite_bloom_view;
 use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
-use crate::vulkan::render_pass::create_composite_render_pass;
+use crate::vulkan::rendering::PassFormats;
 use crate::vulkan::resources::{
     alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings,
 };
 use crate::vulkan::set_writes::SetWrites;
-use crate::vulkan::swapchain::{create_composite_framebuffers, write_composite_set};
+use crate::vulkan::swapchain::write_composite_set;
 
 // Sources the composite fragment samples, each through a sampler of its own.
 pub(super) const COMPOSITE_SOURCES: u32 = 8;
@@ -51,13 +51,7 @@ pub(super) fn build_composite(
         sampler,
         reflection_composite,
     } = inputs;
-    let render_pass = create_composite_render_pass(device, swapchain.format)?;
-    let framebuffers = create_composite_framebuffers(
-        device,
-        render_pass.handle(),
-        &swapchain.image_views,
-        swapchain.extent,
-    )?;
+    let formats = PassFormats::color(swapchain.format);
     // Composite set 0: scene (0), bloom top octave (1), color LUT (2), the debug
     // view channels (3-7), and each source's sampler at 8 + its index.
     let set_layout = create_descriptor_set_layout(device, &source_set_bindings(COMPOSITE_SOURCES))?;
@@ -77,13 +71,7 @@ pub(super) fn build_composite(
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "composite pipeline layout"))?;
     let pipeline = {
         let (cv, cf) = compile_composite_shaders(hot_reload)?;
-        create_composite_pipeline(
-            device,
-            render_pass.handle(),
-            pipeline_layout.handle(),
-            &cv,
-            &cf,
-        )?
+        create_composite_pipeline(device, formats, pipeline_layout.handle(), &cv, &cf)?
     };
 
     // One composite set per frame in flight; TAA later re-points binding 0.
@@ -112,8 +100,7 @@ pub(super) fn build_composite(
             .apply(device);
     }
     Ok(CompositeState {
-        render_pass,
-        framebuffers,
+        formats,
         pipeline,
         pipeline_layout,
         _set_layout: set_layout,

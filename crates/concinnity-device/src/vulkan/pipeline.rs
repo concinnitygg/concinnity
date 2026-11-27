@@ -1,4 +1,4 @@
-// Vulkan pipeline creation for the main, shadow, and text render passes, over
+// Vulkan pipeline creation for the main, shadow, and text passes, over
 // the single-source programs in `super::builtin_shaders` and a world Shader's
 // cooked artifacts.
 
@@ -8,6 +8,7 @@ use concinnity_engine::render::shader::programs::surface::{self, SurfaceVariant}
 use concinnity_engine::render::shader::world_pipelines::BucketSource;
 use concinnity_engine::render::shadow::bias;
 
+use super::rendering::PassFormats;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
 use crate::vulkan::pipeline_desc::{Blend, Depth, DepthBias, GraphicsPipelineDesc, Raster};
@@ -141,40 +142,6 @@ pub(in crate::vulkan) fn spv_module<'d>(
 // this backend.
 pub(in crate::vulkan) const SHADER_ENTRY: &std::ffi::CStr = c"main";
 
-// The vertex + fragment modules a graphics pipeline is built from, held together
-// so they outlive the create call and are destroyed once it returns.
-pub(in crate::vulkan) struct GraphicsStages<'d> {
-    vert: SpvModule<'d>,
-    frag: SpvModule<'d>,
-}
-
-impl<'d> GraphicsStages<'d> {
-    pub(in crate::vulkan) fn new(
-        device: &'d VkDevice,
-        vert_spv: &[u8],
-        frag_spv: &[u8],
-    ) -> RenderResult<Self> {
-        Ok(Self {
-            vert: spv_module(device, vert_spv)?,
-            frag: spv_module(device, frag_spv)?,
-        })
-    }
-
-    // The stage array a `GraphicsPipelineCreateInfo` borrows.
-    pub(in crate::vulkan) fn infos(&self) -> [vk::PipelineShaderStageCreateInfo<'_>; 2] {
-        [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(self.vert.handle())
-                .name(SHADER_ENTRY),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(self.frag.handle())
-                .name(SHADER_ENTRY),
-        ]
-    }
-}
-
 // The world Shader's `program`, as SPIR-V: the cook's artifact when the
 // engine template still matches, else a compile here.
 pub(super) fn world_entry(
@@ -248,12 +215,12 @@ const TEXT_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 4] = [
     attr(3, vk::Format::R32_SFLOAT, 28),
 ];
 
-// Render pass, pipeline layout, and the vertex + fragment SPIR-V a mesh
+// Attachment formats, pipeline layout, and the vertex + fragment SPIR-V a mesh
 // pipeline (main / instanced / skinned) is built against. Borrows the shader
 // byte slices for the duration of the build.
 #[derive(Clone, Copy)]
 pub(super) struct MeshPipelineTargets<'a> {
-    pub render_pass: vk::RenderPass,
+    pub formats: PassFormats,
     pub layout: vk::PipelineLayout,
     pub vert_spv: &'a [u8],
     pub frag_spv: &'a [u8],
@@ -274,21 +241,18 @@ pub(super) struct BucketPipelines {
     pub variant: SurfaceVariant,
 }
 
-// What a bucket's pre-pass pipeline is built against: the G-buffer's render
-// pass and the pre-pass layout.
+// What a bucket's pre-pass pipeline is built against: the pre-pass layout.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(super) struct PrepassTargets {
-    pub render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,
 }
 
 // What a shader bucket's pipelines are built against. Every bucket shares the
-// bindless main-pass layout and render pass, and the pre-pass's once the world
+// bindless main-pass layout, and the pre-pass's once the world
 // has a G-buffer, which is what decides whether a bucket gets a pre-pass
 // pipeline at all; only the stage SPIR-V differs.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(super) struct BucketPipelineTargets {
-    pub render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,
     pub prepass: Option<PrepassTargets>,
     pub msaa_samples: vk::SampleCountFlags,
@@ -393,7 +357,7 @@ pub(super) fn build_bucket_prepass(
     let built = super::post::gbuffer::create_prepass_pipeline(
         device,
         MeshPipelineTargets {
-            render_pass: prepass.render_pass,
+            formats: super::post::gbuffer::PREPASS_FORMATS,
             layout: prepass.layout,
             vert_spv,
             frag_spv,
@@ -421,7 +385,7 @@ fn create_bucket_main(
     create_main_pipeline(
         device,
         MeshPipelineTargets {
-            render_pass: targets.render_pass,
+            formats: super::main_pass::MAIN_FORMATS,
             layout: targets.layout,
             vert_spv: vert,
             frag_spv: frag,
@@ -477,18 +441,18 @@ fn create_main_pipeline_filled(
             targets.vert_spv,
             targets.frag_spv,
             targets.layout,
-            targets.render_pass,
+            targets.formats,
             &[Blend::Opaque],
         )
     }
     .build(device, "main")
 }
 
-// The depth-only bindless shadow pipeline for `render_pass`, whose map's depth
+// The depth-only bindless shadow pipeline into `formats`, whose map's depth
 // range takes the raster bias clamp `clamp`.
 pub(super) fn create_shadow_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
+    formats: PassFormats,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     clamp: f32,
@@ -509,14 +473,14 @@ pub(super) fn create_shadow_pipeline(
         },
         vertex_bindings: &MAIN_VERTEX_BINDING,
         vertex_attributes: &SHADOW_VERTEX_ATTRS,
-        ..GraphicsPipelineDesc::fullscreen(vert_spv, &[], layout, render_pass, &[])
+        ..GraphicsPipelineDesc::fullscreen(vert_spv, &[], layout, formats, &[])
     }
     .build(device, "shadow")
 }
 
 pub(super) fn create_text_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
+    formats: PassFormats,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
@@ -527,13 +491,7 @@ pub(super) fn create_text_pipeline(
         samples: msaa,
         vertex_bindings: &TEXT_VERTEX_BINDING,
         vertex_attributes: &TEXT_VERTEX_ATTRS,
-        ..GraphicsPipelineDesc::fullscreen(
-            vert_spv,
-            frag_spv,
-            layout,
-            render_pass,
-            &[Blend::AlphaOver],
-        )
+        ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, formats, &[Blend::AlphaOver])
     }
     .build(device, "text")
 }
@@ -543,12 +501,12 @@ pub(super) fn create_text_pipeline(
 // FXAA. Targets the single-sample swapchain backbuffer; no depth attachment.
 pub(super) fn create_composite_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
+    formats: PassFormats,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
+    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, formats, &[Blend::Opaque])
         .build(device, "composite")
 }
 

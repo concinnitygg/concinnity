@@ -1,5 +1,5 @@
 //! Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
-//! RT reflections / auto-exposure). Each gates a render pass whose GPU
+//! RT reflections / auto-exposure). Each gates a pass whose GPU
 //! resources (pipelines, render targets, descriptor sets) are built once at
 //! init from the world's settings assets, so applying a change at runtime means
 //! building or tearing down those resources, not flipping a uniform.
@@ -9,7 +9,7 @@
 //! rebuilds the swapchain. Everything a replaced feature owns is an owned
 //! handle or a pooled lease, which the device holds for `frames_in_flight + 1`
 //! frames after it drops, so a frame recorded before the change keeps what it
-//! names. The sets and framebuffers written ahead of a frame that name a
+//! names. The sets written ahead of a frame that name a
 //! feature's output (the composite's scene input, the screen-space indirect
 //! light, the transparent and particle passes' scene, the glass reflection
 //! layers) are re-pointed per frame slot, past that slot's fence, by
@@ -90,8 +90,6 @@ impl VkContext {
                 self.taa = Some(taa);
             }
             FeatureChange::Drop => {
-                // The cached framebuffers name the accumulation images' views.
-                self.post.cache.forget_views();
                 self.taa = None;
             }
             FeatureChange::Update | FeatureChange::Absent => {}
@@ -114,7 +112,6 @@ impl VkContext {
                     settings,
                     self.targets.render_extent,
                 )?;
-                self.post.cache.forget_views();
                 self.ssgi = Some(ssgi);
             }
             (Some(settings), _) => {
@@ -123,7 +120,6 @@ impl VkContext {
                 }
             }
             (None, true) => {
-                self.post.cache.forget_views();
                 self.ssgi = None;
             }
             (None, false) => {}
@@ -142,8 +138,6 @@ impl VkContext {
                 self.ssao = Some(ssao);
             }
             (None, true) => {
-                // The cached framebuffers name the raw occlusion's view.
-                self.post.cache.forget_views();
                 self.ssao = None;
             }
             _ => {}
@@ -375,8 +369,6 @@ impl FeatureRebuild for VkContext {
                 self.ssr = Some(ssr);
             }
             FeatureChange::Drop => {
-                // The cached framebuffers name the reflection target's view.
-                self.post.cache.forget_views();
                 self.ssr = None;
             }
             FeatureChange::Update | FeatureChange::Absent => {
@@ -389,8 +381,7 @@ impl FeatureRebuild for VkContext {
     }
 
     // Build or drop the pass to follow a settings change, at the current
-    // render extent. A drop first forgets the cached framebuffers that name the
-    // snapshots' views.
+    // render extent.
     fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
         match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
             FeatureChange::Build => {
@@ -400,7 +391,6 @@ impl FeatureRebuild for VkContext {
                 )?);
             }
             FeatureChange::Drop => {
-                self.post.cache.forget_views();
                 self.disocclusion = None;
             }
             FeatureChange::Update | FeatureChange::Absent => {}

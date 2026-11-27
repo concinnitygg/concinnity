@@ -1,5 +1,5 @@
 // The core depth convention in Vulkan terms: compare ops for pipeline depth
-// state and the shadow sampler, and the clear value for render-pass begin.
+// state and the shadow sampler, and the clear value a depth attachment opens with.
 
 use ash::vk;
 use concinnity_engine::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DepthCompare};

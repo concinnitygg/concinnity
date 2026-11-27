@@ -28,7 +28,11 @@
 use ash::vk;
 use concinnity_engine::render::shader::programs::abi::group::ThreadGroup;
 
-use super::owned::{OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass};
+use super::owned::{OwnedPipeline, OwnedPipelineLayout};
+use super::rendering::{
+    Attachment, ColorAttachments, ImageUse, MAX_COLORS, RenderTargets, Transition,
+};
+use super::texture::GpuImage;
 
 // A buffer and a byte offset into it, where a command reads.
 #[derive(Copy, Clone)]
@@ -36,6 +40,9 @@ pub(in crate::vulkan) struct BufferAt {
     pub(in crate::vulkan) buffer: vk::Buffer,
     pub(in crate::vulkan) offset: vk::DeviceSize,
 }
+
+// Most image transitions one barrier call carries.
+const MAX_TRANSITIONS: usize = 8;
 
 // A command buffer in the recording state. Borrows the raw device: recording
 // never creates or retires an owned object.
@@ -153,32 +160,68 @@ impl<'a> Recorder<'a> {
         };
     }
 
-    // Begin a render pass over `framebuffer`. Borrowing both owners is what
-    // keeps them alive across the pass this opens.
-    pub(in crate::vulkan) fn begin_render_pass(
-        &self,
-        render_pass: &OwnedRenderPass,
-        framebuffer: &OwnedFramebuffer,
-        area: vk::Rect2D,
-        clear_values: &[vk::ClearValue],
-    ) {
-        let info = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass.handle())
-            .framebuffer(framebuffer.handle())
-            .render_area(area)
-            .clear_values(clear_values);
-        // SAFETY: `self.cmd` is in the recording state by construction, the pass and framebuffer
-        // are alive because this borrows their owners, and the info and its slice are live for the
-        // call.
-        unsafe {
-            self.device
-                .cmd_begin_render_pass(self.cmd, &info, vk::SubpassContents::INLINE);
-        };
+    // Begin rendering over `targets`, each attachment in its attachment layout.
+    pub(in crate::vulkan) fn begin_rendering(&self, targets: &RenderTargets) {
+        let mut colors = [vk::RenderingAttachmentInfo::default(); MAX_COLORS];
+        let attachments = targets.colors.as_slice();
+        let count = attachments.len();
+        for (info, color) in colors.iter_mut().zip(attachments) {
+            *info = color.info(ImageUse::ColorAttachment.layout());
+        }
+        let depth = targets
+            .depth
+            .map(|d| d.info(ImageUse::DepthAttachment.layout()));
+        let mut info = vk::RenderingInfo::default()
+            .render_area(targets.area)
+            .layer_count(1)
+            .color_attachments(&colors[..count]);
+        if let Some(depth) = depth.as_ref() {
+            info = info.depth_attachment(depth);
+        }
+        // SAFETY: `self.cmd` is in the recording state by construction, and the info, its
+        // attachment array and the views they name are live for the call.
+        unsafe { self.device.cmd_begin_rendering(self.cmd, &info) };
     }
 
-    pub(in crate::vulkan) fn end_render_pass(&self) {
+    pub(in crate::vulkan) fn end_rendering(&self) {
         // SAFETY: `self.cmd` is in the recording state by construction.
-        unsafe { self.device.cmd_end_render_pass(self.cmd) };
+        unsafe { self.device.cmd_end_rendering(self.cmd) };
+    }
+
+    // Render over a sampled color image: move it to a color attachment, run
+    // `draw` inside a rendering scope that keeps its contents, and leave it
+    // sampled again.
+    pub(in crate::vulkan) fn render_over_sampled(
+        &self,
+        image: &GpuImage,
+        extent: vk::Extent2D,
+        draw: impl FnOnce(&Self),
+    ) {
+        let to = |from, to| Transition::color(image.image, from, to);
+        self.transition(&[to(ImageUse::Sampled, ImageUse::ColorAttachment)]);
+        self.begin_rendering(&RenderTargets {
+            area: vk::Rect2D::default().extent(extent),
+            colors: ColorAttachments::new([Attachment::loaded(image.view)]),
+            depth: None,
+        });
+        draw(self);
+        self.end_rendering();
+        self.transition(&[to(ImageUse::ColorAttachment, ImageUse::Sampled)]);
+    }
+
+    // Move each image to its next use.
+    pub(in crate::vulkan) fn transition(&self, transitions: &[Transition]) {
+        let mut barriers = [vk::ImageMemoryBarrier2::default(); MAX_TRANSITIONS];
+        for chunk in transitions.chunks(MAX_TRANSITIONS) {
+            for (barrier, t) in barriers.iter_mut().zip(chunk) {
+                *barrier = t.barrier();
+            }
+            let info =
+                vk::DependencyInfo::default().image_memory_barriers(&barriers[..chunk.len()]);
+            // SAFETY: `self.cmd` is in the recording state by construction, and the dependency
+            // info, its barriers and the images they name are live for the call.
+            unsafe { self.device.cmd_pipeline_barrier2(self.cmd, &info) };
+        }
     }
 
     pub(in crate::vulkan) fn set_viewport(&self, viewport: &vk::Viewport) {

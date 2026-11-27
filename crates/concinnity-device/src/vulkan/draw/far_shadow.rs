@@ -3,7 +3,7 @@
 //! GPU-driven like the cascades: the shadow kernel culls the far view against
 //! its projection, keeping the casters whose bounds span enough of its texels
 //! and the planet terrain at any size, and the view draws them through the
-//! bindless shadow pipeline built against the far map's own render pass, with
+//! bindless shadow pipeline built for the far map's own format, with
 //! this frame's one-matrix uniforms at set 0. A frame that keeps the map
 //! records nothing, so the shaded passes read what it last drew.
 
@@ -29,14 +29,14 @@ impl VkContext {
         };
         upload_shadow_uniforms(ubo, &far_view_uniforms(&shadow.uniforms.far));
 
-        // Cull before opening the render pass: Vulkan allows no compute inside
+        // Cull before opening the scope: Vulkan allows no compute inside
         // one.
         let views = self.cull.far_views.get(frame_idx);
         let gpu_driven = self.shadow_views_drawable() && views.is_some();
         if gpu_driven {
             self.encode_far_cull(rec, frame_idx);
         }
-        Self::begin_shadow_slice(rec, &far.render_pass, &far.framebuffer, far.size);
+        Self::begin_shadow_slice(rec, far.map.view, far.size);
         if gpu_driven && let Some(view) = views.and_then(|v| v.first()) {
             self.draw_shadow_view(
                 rec,
@@ -50,6 +50,6 @@ impl VkContext {
                 },
             );
         }
-        rec.end_render_pass();
+        rec.end_rendering();
     }
 }

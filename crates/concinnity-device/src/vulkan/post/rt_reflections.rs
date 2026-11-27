@@ -682,7 +682,7 @@ impl RtReflectionsResources {
 
     // Take `settings`, rebuilding the output at its trace resolution for a
     // `width` x `height` render when that moved. Nothing in the resolve sets
-    // names the output, and the replaced image and framebuffer wait out the
+    // names the output, and the replaced image waits out the
     // frames in flight on their own.
     pub(in crate::vulkan) fn retrace(
         &mut self,

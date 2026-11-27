@@ -21,12 +21,12 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc};
+use super::rendering::PassFormats;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
 
@@ -69,11 +69,10 @@ struct VertexSlot {
     capacity: u64,
 }
 
-// The line pass, built lazily: the pipeline, its render pass and framebuffers
-// over `hdr_resolve`, the view UBO ring, and per-frame vertex buffers. Set 0 is
-// per frame: `LineView` (0) and the main depth (1).
+// The line pass, built lazily: the pipeline drawing over `hdr_resolve`, the
+// view UBO ring, and per-frame vertex buffers. Set 0 is per frame: `LineView`
+// (0) and the main depth (1).
 pub(in crate::vulkan) struct LineResources {
-    render_pass: OwnedRenderPass,
     pub(in crate::vulkan) pipeline: OwnedPipeline,
     pipeline_layout: OwnedPipelineLayout,
     _view_set_layout: OwnedSetLayout,
@@ -87,10 +86,6 @@ pub(in crate::vulkan) struct LineResources {
 
     // Per-frame view sets (binding 0 view UBO, 1 depth).
     view_sets: Vec<vk::DescriptorSet>,
-
-    // One framebuffer per frame-in-flight slot, each binding its frame slot's
-    // `hdr_resolve_images[i].view` as the sole color attachment.
-    framebuffers: Vec<OwnedFramebuffer>,
 }
 
 // Vulkan handles needed to create the line pass's GPU resources. Borrowed for
@@ -102,14 +97,11 @@ pub(in crate::vulkan) struct LineDeviceContext<'a> {
 }
 
 // Render-target inputs the line pass writes into / samples from: the resolved
-// HDR color attachment (format + per-frame views), the main depth views, and
-// the framebuffer extent.
+// HDR color format and the main depth views.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct LinePassTargets<'a> {
     pub(in crate::vulkan) hdr_format: vk::Format,
-    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
 impl LineResources {
@@ -123,18 +115,15 @@ impl LineResources {
         let LineDeviceContext { alloc, device } = ctx;
         let LinePassTargets {
             hdr_format,
-            hdr_resolve_views,
             depth_views,
-            extent,
         } = targets;
-        let render_pass = create_line_render_pass(device, hdr_format)?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let pipeline_layout = create_line_pipeline_layout(device, view_set_layout.handle())?;
 
         let (vert_spv, frag_spv) = compile_line_shaders(hot_reload, msaa)?;
         let pipeline = create_line_pipeline(
             device,
-            render_pass.handle(),
+            hdr_format,
             pipeline_layout.handle(),
             &vert_spv,
             &frag_spv,
@@ -162,15 +151,7 @@ impl LineResources {
                 .apply(device);
         }
 
-        let framebuffers = device.single_view_framebuffers(
-            render_pass.handle(),
-            hdr_resolve_views.iter().copied().take(frames),
-            extent,
-            "line framebuffer",
-        )?;
-
         Ok(Self {
-            render_pass,
             pipeline,
             pipeline_layout,
             _view_set_layout: view_set_layout,
@@ -178,39 +159,27 @@ impl LineResources {
             view_ubos,
             vertex_slots,
             view_sets,
-            framebuffers,
         })
     }
 
-    // Rebuild the framebuffers + re-point the per-frame view set's depth
-    // binding after a swapchain resize. Same pattern as `DecalResources`; the
-    // pipeline, layouts and buffers all survive.
-    pub(in crate::vulkan) fn rebuild(
-        &mut self,
+    // Re-point the per-frame view set's depth binding after a swapchain
+    // resize; the pipeline, layouts and buffers all survive.
+    pub(in crate::vulkan) fn repoint_depth(
+        &self,
         device: &VkDevice,
-        hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
-        extent: vk::Extent2D,
-    ) -> RenderResult<()> {
-        self.framebuffers = device.single_view_framebuffers(
-            self.render_pass.handle(),
-            hdr_resolve_views.iter().copied().take(self.view_ubos.len()),
-            extent,
-            "line framebuffer",
-        )?;
+    ) {
         for (i, &set) in self.view_sets.iter().enumerate() {
             SetWrites::new(set)
                 .sampled_image(1, depth_views[i.min(depth_views.len().saturating_sub(1))])
                 .apply(device);
         }
-        Ok(())
     }
 
     // Destroy every GPU resource. Called from `VkContext::destroy` after
     // `wait_idle`; the pooled buffers retire through the allocator as their
     // fields clear.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
-        self.framebuffers.clear();
         self.view_ubos.clear();
         self.vertex_slots.clear();
     }
@@ -226,56 +195,7 @@ fn new_vertex_slot(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<Verte
     Ok(VertexSlot { buffer, capacity })
 }
 
-// Render pass / pipeline construction
-
-fn create_line_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
-    // One color attachment: the resolved HDR scene. The preceding pass left it
-    // in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT during the
-    // subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so SSR / TAA / bloom
-    // / composite can sample it. Mirrors the decal render pass.
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::LOAD)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let dep_in = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
-        );
-    let dep_out = vk::SubpassDependency::default()
-        .src_subpass(0)
-        .dst_subpass(vk::SUBPASS_EXTERNAL)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    let deps = [dep_in, dep_out];
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| super::error::map_vk_result(e, "line render pass"))
-}
+// Pipeline construction
 
 // The per-frame view set: the LineView UBO and the main depth.
 fn view_set_bindings() -> [Binding; 2] {
@@ -322,7 +242,7 @@ fn compile_line_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, 
     Ok((vert, frag))
 }
 
-// Rebuild the line graphics pipeline against the existing render pass + layout.
+// Rebuild the line graphics pipeline against the existing layout.
 // Used by the Vulkan shader hot-reload path. The caller destroys the previous
 // pipeline only after this call succeeds.
 pub(in crate::vulkan) fn rebuild_line_pipeline(
@@ -334,7 +254,7 @@ pub(in crate::vulkan) fn rebuild_line_pipeline(
     let (vert_spv, frag_spv) = compile_line_shaders(hot_reload, msaa)?;
     create_line_pipeline(
         device,
-        lines.render_pass.handle(),
+        super::context::HDR_FORMAT,
         lines.pipeline_layout.handle(),
         &vert_spv,
         &frag_spv,
@@ -345,7 +265,7 @@ pub(in crate::vulkan) fn rebuild_line_pipeline(
 // ribbon faces the camera, but its winding depends on which way the line runs.
 fn create_line_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
+    hdr_format: vk::Format,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
@@ -380,7 +300,7 @@ fn create_line_pipeline(
             vert_spv,
             frag_spv,
             layout,
-            render_pass,
+            PassFormats::color(hdr_format),
             &[Blend::AlphaOver],
         )
     }
@@ -408,12 +328,6 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            let hdr_resolve_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
             let built = LineResources::new(
                 LineDeviceContext {
                     alloc: &self.hw.alloc,
@@ -421,9 +335,7 @@ impl VkContext {
                 },
                 LinePassTargets {
                     hdr_format: super::context::HDR_FORMAT,
-                    hdr_resolve_views: &hdr_resolve_views,
                     depth_views: &depth_views,
-                    extent: self.targets.render_extent,
                 },
                 self.frames_in_flight,
                 self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
@@ -513,25 +425,20 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        rec.begin_render_pass(
-            &lines.render_pass,
-            &lines.framebuffers[frame_idx],
-            vk::Rect2D::default().extent(extent),
-            &[],
-        );
-        rec.set_viewport(&vp_state);
-        rec.set_scissor(&scissor);
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &lines.pipeline);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &lines.pipeline_layout,
-            0,
-            std::slice::from_ref(&lines.view_sets[frame_idx]),
-            &[],
-        );
-        rec.bind_vertex_buffers(0, &[slot.buffer.buffer()], &[0]);
-        rec.draw(u32::saturating_from(vertices.len()), 1, 0, 0);
-        rec.end_render_pass();
+        rec.render_over_sampled(&self.targets.hdr_resolve_images[frame_idx], extent, |rec| {
+            rec.set_viewport(&vp_state);
+            rec.set_scissor(&scissor);
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &lines.pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &lines.pipeline_layout,
+                0,
+                std::slice::from_ref(&lines.view_sets[frame_idx]),
+                &[],
+            );
+            rec.bind_vertex_buffers(0, &[slot.buffer.buffer()], &[0]);
+            rec.draw(u32::saturating_from(vertices.len()), 1, 0, 0);
+        });
 
         self.inc_draw_calls(1);
     }

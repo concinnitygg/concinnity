@@ -1,6 +1,6 @@
 //! Owning handles for the Vulkan objects the backend creates once and keeps:
-//! pipelines, pipeline layouts, descriptor set layouts, descriptor pools, render
-//! passes, framebuffers and samplers.
+//! pipelines, pipeline layouts, descriptor set layouts, descriptor pools and
+//! samplers.
 //!
 //! ash spells every one of those as a `Copy` u64 newtype. That is why the
 //! `destroy_*` family and the command-recording family could not be given safe
@@ -40,8 +40,6 @@ enum Retired {
     PipelineLayout(vk::PipelineLayout),
     SetLayout(vk::DescriptorSetLayout),
     DescriptorPool(vk::DescriptorPool),
-    RenderPass(vk::RenderPass),
-    Framebuffer(vk::Framebuffer),
     Sampler(vk::Sampler),
 }
 
@@ -71,16 +69,6 @@ impl Retired {
                 // SAFETY: the retire window has passed, so no submission still reads a set
                 // allocated from this pool, and it is destroyed exactly once.
                 unsafe { device.destroy_descriptor_pool(h, None) };
-            }
-            Self::RenderPass(h) => {
-                // SAFETY: the render pass came from `device`, and no recording or in-flight
-                // submission still names it once its retire window passed.
-                unsafe { device.destroy_render_pass(h, None) };
-            }
-            Self::Framebuffer(h) => {
-                // SAFETY: the framebuffer is retired once, after every submission that drew into
-                // it has had `retire_depth` ticks to complete.
-                unsafe { device.destroy_framebuffer(h, None) };
             }
             Self::Sampler(h) => {
                 // SAFETY: the sampler came from `device`, is destroyed exactly once, and no
@@ -379,16 +367,6 @@ create_owned!(
     vk::DescriptorPoolCreateInfo<'_>,
     OwnedDescriptorPool
 );
-create_owned!(
-    create_render_pass,
-    vk::RenderPassCreateInfo<'_>,
-    OwnedRenderPass
-);
-create_owned!(
-    create_framebuffer,
-    vk::FramebufferCreateInfo<'_>,
-    OwnedFramebuffer
-);
 create_owned!(create_sampler, vk::SamplerCreateInfo<'_>, OwnedSampler);
 
 // Generate one owning wrapper: the handle and a device share; `Drop` queues
@@ -458,8 +436,6 @@ owned_handle!(OwnedPipeline, vk::Pipeline, Pipeline);
 owned_handle!(OwnedPipelineLayout, vk::PipelineLayout, PipelineLayout);
 owned_handle!(OwnedSetLayout, vk::DescriptorSetLayout, SetLayout);
 owned_handle!(OwnedDescriptorPool, vk::DescriptorPool, DescriptorPool);
-owned_handle!(OwnedRenderPass, vk::RenderPass, RenderPass);
-owned_handle!(OwnedFramebuffer, vk::Framebuffer, Framebuffer);
 owned_handle!(OwnedSampler, vk::Sampler, Sampler);
 
 #[cfg(test)]
@@ -522,8 +498,6 @@ mod tests {
             Retired::PipelineLayout(vk::PipelineLayout::from_raw(1)),
             Retired::SetLayout(vk::DescriptorSetLayout::from_raw(1)),
             Retired::DescriptorPool(vk::DescriptorPool::from_raw(1)),
-            Retired::RenderPass(vk::RenderPass::from_raw(1)),
-            Retired::Framebuffer(vk::Framebuffer::from_raw(1)),
             Retired::Sampler(vk::Sampler::from_raw(1)),
         ];
         for (i, a) in entries.iter().enumerate() {

@@ -1,16 +1,17 @@
 // The reactive mask: one R8 render-resolution image per frame in flight,
 // written beside the scene by the particle and transparent passes and read by
 // TAA, the upscalers and the reactive view. It rests SHADER_READ_ONLY and its
-// writers' render passes move it, so the graph leaves its barriers to them.
-// Each writer has three compatible render passes, one per `ReactiveWrite`.
+// writers move it around their draws, so the graph leaves its barriers to them.
 // Without `independentBlend` the mask is off for the run.
 
 use ash::vk;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 
-use super::owned::OwnedRenderPass;
 use super::pipeline_desc::Blend;
+use super::rendering::{
+    Attachment, ColorAttachments, ImageUse, Load, PassFormats, RenderTargets, Transition,
+};
 use super::texture::{
     GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
     create_image_view, one_shot_submit, transition_image_layout_range,
@@ -19,7 +20,7 @@ use crate::vulkan::record::Recorder;
 
 pub(in crate::vulkan) const REACTIVE_MASK_FORMAT: vk::Format = vk::Format::R8_UNORM;
 
-// The clear a writer's render pass begins with, for the mask's attachment.
+// The clear a writer's pass begins with, for the mask's attachment.
 pub(in crate::vulkan) const REACTIVE_MASK_CLEAR: vk::ClearValue = vk::ClearValue {
     color: vk::ClearColorValue { float32: [0.0; 4] },
 };
@@ -92,37 +93,6 @@ pub(in crate::vulkan) fn create_reactive_masks(
     Ok(masks)
 }
 
-// The mask's attachment in a writer render pass that treats it as `write`
-// says. Every variant ends sampled, where the mask rests.
-pub(in crate::vulkan) fn attachment(write: ReactiveWrite) -> vk::AttachmentDescription {
-    let (load, store, initial) = match write {
-        ReactiveWrite::Unstored => (
-            vk::AttachmentLoadOp::DONT_CARE,
-            vk::AttachmentStoreOp::DONT_CARE,
-            vk::ImageLayout::UNDEFINED,
-        ),
-        ReactiveWrite::Clear => (
-            vk::AttachmentLoadOp::CLEAR,
-            vk::AttachmentStoreOp::STORE,
-            vk::ImageLayout::UNDEFINED,
-        ),
-        ReactiveWrite::Load => (
-            vk::AttachmentLoadOp::LOAD,
-            vk::AttachmentStoreOp::STORE,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        ),
-    };
-    vk::AttachmentDescription::default()
-        .format(REACTIVE_MASK_FORMAT)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(load)
-        .store_op(store)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(initial)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-}
-
 // The color targets a writer pass draws.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::vulkan) enum WriterTargets {
@@ -154,79 +124,93 @@ impl WriterTargets {
         }
     }
 
-    // The writer's color attachments, scene first: the mask's attachment (as
-    // `write` treats it) follows the scene's when carried.
-    pub(in crate::vulkan) fn attachments(
-        self,
-        scene: vk::AttachmentDescription,
-        write: Option<ReactiveWrite>,
-    ) -> Vec<vk::AttachmentDescription> {
-        let mut attachments = vec![scene];
-        if let Some(write) = write.filter(|_| self.carries_mask()) {
-            attachments.push(attachment(write));
-        }
-        attachments
-    }
-
-    // A writer framebuffer's views, scene first.
-    pub(in crate::vulkan) fn views(
-        self,
-        scene: vk::ImageView,
-        mask: vk::ImageView,
-    ) -> Vec<vk::ImageView> {
+    // The attachment formats a writer pipeline renders to, scene first.
+    pub(in crate::vulkan) fn formats(self, scene: vk::Format) -> PassFormats {
         if self.carries_mask() {
-            vec![scene, mask]
+            PassFormats::colors([scene, REACTIVE_MASK_FORMAT])
         } else {
-            vec![scene]
+            PassFormats::color(scene)
+        }
+    }
+
+    // Render a writer pass over the sampled `scene` and, when carried, `mask`,
+    // treating the mask as `write` says. Both end sampled, where they rest.
+    pub(in crate::vulkan) fn render(
+        self,
+        rec: &Recorder<'_>,
+        pass: WriterPass<'_>,
+        draw: impl FnOnce(&Recorder<'_>),
+    ) {
+        let WriterPass {
+            scene,
+            scene_from,
+            mask,
+            write,
+            extent,
+        } = pass;
+        let mask = mask.filter(|_| self.carries_mask());
+        let (mask_load, mask_store, mask_discard) = mask_write(write);
+        let color = |image: &GpuImage, from, to| Transition::color(image.image, from, to);
+        let scene_in = color(scene, scene_from, ImageUse::ColorAttachment);
+        let scene_out = color(scene, ImageUse::ColorAttachment, ImageUse::Sampled);
+        let scene_attachment = Attachment::loaded(scene.view);
+        let colors = if let Some(mask) = mask {
+            let mask_in = color(mask, ImageUse::Sampled, ImageUse::ColorAttachment)
+                .discarding_if(mask_discard);
+            rec.transition(&[scene_in, mask_in]);
+            ColorAttachments::new([
+                scene_attachment,
+                Attachment {
+                    view: mask.view,
+                    load: mask_load,
+                    store: mask_store,
+                    resolve: None,
+                },
+            ])
+        } else {
+            rec.transition(&[scene_in]);
+            ColorAttachments::new([scene_attachment])
+        };
+        rec.begin_rendering(&RenderTargets {
+            area: vk::Rect2D::default().extent(extent),
+            colors,
+            depth: None,
+        });
+        draw(rec);
+        rec.end_rendering();
+        match mask {
+            Some(mask) => rec.transition(&[
+                scene_out,
+                color(mask, ImageUse::ColorAttachment, ImageUse::Sampled),
+            ]),
+            None => rec.transition(&[scene_out]),
         }
     }
 }
 
-// A writer's render passes: one per way it can treat the mask, or a single
-// scene-only pass when it carries none.
-pub(in crate::vulkan) enum WriterRenderPasses {
-    SceneAndMask {
-        unstored: OwnedRenderPass,
-        clear: OwnedRenderPass,
-        load: OwnedRenderPass,
-    },
-    SceneOnly(OwnedRenderPass),
-}
-
-impl WriterRenderPasses {
-    // Build them from `create`, which makes the writer's render pass with the
-    // mask attachment it is handed, or with none.
-    pub(in crate::vulkan) fn new(
-        targets: WriterTargets,
-        mut create: impl FnMut(Option<ReactiveWrite>) -> RenderResult<OwnedRenderPass>,
-    ) -> RenderResult<Self> {
-        Ok(match targets {
-            WriterTargets::SceneAndMask => Self::SceneAndMask {
-                unstored: create(Some(ReactiveWrite::Unstored))?,
-                clear: create(Some(ReactiveWrite::Clear))?,
-                load: create(Some(ReactiveWrite::Load))?,
-            },
-            WriterTargets::SceneOnly => Self::SceneOnly(create(None)?),
-        })
-    }
-
-    pub(in crate::vulkan) fn get(&self, write: ReactiveWrite) -> &OwnedRenderPass {
-        match (self, write) {
-            (Self::SceneAndMask { unstored, .. }, ReactiveWrite::Unstored) => unstored,
-            (Self::SceneAndMask { clear, .. }, ReactiveWrite::Clear) => clear,
-            (Self::SceneAndMask { load, .. }, ReactiveWrite::Load) => load,
-            (Self::SceneOnly(pass), _) => pass,
-        }
-    }
-
-    // The pass pipelines and framebuffers are built against; any of them would
-    // do, since they are compatible.
-    pub(in crate::vulkan) fn compatible(&self) -> vk::RenderPass {
-        self.get(ReactiveWrite::Load).handle()
+// How a writer pass treats the mask as `write` says: what its attachment
+// loads, whether it stores, and whether it discards what the mask held.
+fn mask_write(write: ReactiveWrite) -> (Load, bool, bool) {
+    match write {
+        ReactiveWrite::Unstored => (Load::Discard, false, true),
+        ReactiveWrite::Clear => (Load::Clear(REACTIVE_MASK_CLEAR), true, true),
+        ReactiveWrite::Load => (Load::Keep, true, false),
     }
 }
 
-// Clear `mask` outside any render pass, for a writer that draws nothing on a
+// What one writer pass renders over: the scene, the frame's reactive mask,
+// and how the frame treats it.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct WriterPass<'a> {
+    pub scene: &'a GpuImage,
+    // The scene's last use before the pass.
+    pub scene_from: ImageUse,
+    pub mask: Option<&'a GpuImage>,
+    pub write: ReactiveWrite,
+    pub extent: vk::Extent2D,
+}
+
+// Clear `mask` outside any rendering scope, for a writer that draws nothing on a
 // clearing frame or a reader with no writer this frame.
 pub(in crate::vulkan) fn clear_outside_pass(rec: &Recorder<'_>, mask: vk::Image) {
     let reads = vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER;
@@ -276,7 +260,7 @@ pub(in crate::vulkan) fn clear_outside_pass(rec: &Recorder<'_>, mask: vk::Image)
 }
 
 impl super::context::VkContext {
-    // Clear frame slot `frame_idx`'s mask outside any render pass.
+    // Clear frame slot `frame_idx`'s mask outside any rendering scope.
     pub(in crate::vulkan) fn clear_reactive_mask(&self, rec: &Recorder<'_>, frame_idx: usize) {
         if let Some(mask) = self.targets.reactive_mask_images.get(frame_idx) {
             clear_outside_pass(rec, mask.image);
@@ -297,54 +281,30 @@ mod tests {
     // mask off; one with it gets the mask max-blended beside the scene.
     #[test]
     fn the_device_decides_whether_the_writers_carry_the_mask() {
+        let scene = vk::Format::R16G16B16A16_SFLOAT;
         let carried = WriterTargets::for_device(true);
         assert!(carried.carries_mask());
         assert_eq!(carried.blends(), [Blend::AlphaOver, Blend::Max]);
-        let scene = vk::AttachmentDescription::default().format(vk::Format::R16G16B16A16_SFLOAT);
         assert_eq!(
-            carried.attachments(scene, Some(ReactiveWrite::Load)).len(),
-            2
-        );
-        assert_eq!(
-            carried
-                .views(vk::ImageView::null(), vk::ImageView::null())
-                .len(),
-            2
+            carried.formats(scene).color_formats(),
+            [scene, REACTIVE_MASK_FORMAT]
         );
 
         let alone = WriterTargets::for_device(false);
         assert!(!alone.carries_mask());
         assert_eq!(alone.blends(), [Blend::AlphaOver]);
-        assert_eq!(alone.attachments(scene, None).len(), 1);
-        assert_eq!(alone.attachments(scene, Some(ReactiveWrite::Load)).len(), 1);
-        assert_eq!(
-            alone
-                .views(vk::ImageView::null(), vk::ImageView::null())
-                .len(),
-            1
-        );
+        assert_eq!(alone.formats(scene).color_formats(), [scene]);
     }
 
-    // The three variants differ only in what render-pass compatibility ignores,
-    // so one pipeline and one framebuffer serve them all; each ends sampled.
+    // Only a loading write keeps the mask's contents; the unstored write also
+    // discards what it drew.
     #[test]
-    fn the_writer_attachments_are_compatible_and_end_sampled() {
-        let all = [
-            attachment(ReactiveWrite::Unstored),
-            attachment(ReactiveWrite::Clear),
-            attachment(ReactiveWrite::Load),
-        ];
-        for a in all {
-            assert_eq!(a.format, REACTIVE_MASK_FORMAT);
-            assert_eq!(a.samples, vk::SampleCountFlags::TYPE_1);
-            assert_eq!(a.final_layout, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        }
-        assert_eq!(all[0].store_op, vk::AttachmentStoreOp::DONT_CARE);
-        assert_eq!(all[1].load_op, vk::AttachmentLoadOp::CLEAR);
-        assert_eq!(all[2].load_op, vk::AttachmentLoadOp::LOAD);
-        assert_eq!(
-            all[2].initial_layout,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-        );
+    fn each_write_loads_stores_and_opens_as_it_treats_the_mask() {
+        let (load, store, discard) = mask_write(ReactiveWrite::Unstored);
+        assert!(matches!(load, Load::Discard) && !store && discard);
+        let (load, store, discard) = mask_write(ReactiveWrite::Clear);
+        assert!(matches!(load, Load::Clear(_)) && store && discard);
+        let (load, store, discard) = mask_write(ReactiveWrite::Load);
+        assert!(matches!(load, Load::Keep) && store && !discard);
     }
 }

@@ -20,11 +20,7 @@ impl VkContext {
     // world has no raymarch pass.
     pub(in crate::vulkan) fn volume_pipeline_targets(&self) -> Option<VolumePipelineTargets> {
         let rm = self.raymarch.as_ref()?;
-        Some(rm.volume_targets(
-            self.shadow.render_pass.handle(),
-            self.targets.msaa_samples,
-            self.hot_reload.enabled,
-        ))
+        Some(rm.volume_targets(self.targets.msaa_samples, self.hot_reload.enabled))
     }
 }
 

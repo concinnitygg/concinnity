@@ -49,9 +49,10 @@ use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
-use crate::vulkan::depth;
-use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use crate::vulkan::main_pass::{self, MainAttachments, MainClose, MainOpen, Target};
+use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
 use crate::vulkan::record::Recorder;
+use crate::vulkan::rendering::ImageUse;
 use concinnity_engine::render::uniforms::cull::CullView;
 use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera};
 
@@ -266,31 +267,16 @@ impl VkContext {
         // Allocated from this device's pool and not in flight: its face fence was waited on.
         let rec = Recorder::begin(&device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .map_err(|e| super::error::map_vk_result(e, "probe face begin"))?;
-        // Order the previous face's cube copy and indirect read before this face's
-        // cull and resolve, and its attachment writes before this face's render pass:
-        // the shared framebuffer's `UNDEFINED` initial layout transitions on every
-        // begin, and the render pass's external dependency makes nothing available.
+        // Order the previous face's indirect read before this face's cull. The
+        // face's own attachments are discarded as it opens, which waits on the
+        // previous face's use of them.
         if face > 0 {
             let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(
-                    vk::AccessFlags::TRANSFER_READ
-                        | vk::AccessFlags::INDIRECT_COMMAND_READ
-                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                )
-                .dst_access_mask(
-                    vk::AccessFlags::SHADER_WRITE
-                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                );
+                .src_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
             rec.pipeline_barrier(
-                vk::PipelineStageFlags::TRANSFER
-                    | vk::PipelineStageFlags::DRAW_INDIRECT
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
                 std::slice::from_ref(&barrier),
                 &[],
                 &[],
@@ -306,8 +292,8 @@ impl VkContext {
         self.encode_probe_cull(&rec, cull_set, hiz_set, packing, view);
         self.encode_main_into_face(
             &rec,
-            &capture.bake.framebuffer,
-            FaceArea::whole(extent),
+            &capture.bake.attachments(extent),
+            extent,
             FaceView {
                 global_set,
                 storage: FaceStorage::PROBE,
@@ -316,7 +302,7 @@ impl VkContext {
             bindless_set,
             packing,
         );
-        // The face color rests in SHADER_READ_ONLY_OPTIMAL after the render pass;
+        // The face color rests in SHADER_READ_ONLY_OPTIMAL after the render;
         // flip it to TRANSFER_SRC for the copy into the capture cube. This exact
         // transition is the one the shared layout-transition table omits.
         let to_src = vk::ImageMemoryBarrier::default()
@@ -517,13 +503,14 @@ impl VkContext {
     }
 
     // Draw the bindless static + instance + chunk prefix into a probe face or
-    // mirror plane within `area.render_area`, with the caller's global set and one
-    // indirect draw. The skinned tail is omitted.
+    // mirror plane within `at.area`, its projection mapped onto all of
+    // `extent`, with the caller's global set and one indirect draw. The skinned
+    // tail is omitted. Texels outside the area are left undefined.
     pub(in crate::vulkan) fn encode_main_into_face(
         &self,
         rec: &Recorder<'_>,
-        framebuffer: &OwnedFramebuffer,
-        area: FaceArea,
+        at: &MainAttachments,
+        extent: vk::Extent2D,
         view: FaceView,
         bindless_set: vk::DescriptorSet,
         packing: FacePacking,
@@ -545,17 +532,6 @@ impl VkContext {
                 float32: [r, g, b, a],
             },
         };
-        let clear_depth = depth::CLEAR_VALUE;
-        let clears: &[vk::ClearValue] = if self.targets.msaa_samples == vk::SampleCountFlags::TYPE_1
-        {
-            &[clear_color, clear_depth]
-        } else {
-            &[clear_color, clear_depth, vk::ClearValue::default()]
-        };
-        let FaceArea {
-            extent,
-            render_area,
-        } = area;
         // Negative-height viewport (Y flip), matching the main pass so the captured
         // faces share the cube convention `face_view_projection` was built against.
         let vp = vk::Viewport {
@@ -566,14 +542,9 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        rec.begin_render_pass(
-            &self.targets.main_render_pass,
-            framebuffer,
-            render_area,
-            clears,
-        );
+        main_pass::begin(rec, at, MainOpen::Clear(clear_color), MainClose::Sampled);
         rec.set_viewport(&vp);
-        rec.set_scissor(&render_area);
+        rec.set_scissor(&at.area);
         let vertex_buffer = self.geometry.vertex_buffer.buffer();
         rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
         rec.bind_index_buffer(
@@ -603,7 +574,7 @@ impl VkContext {
         {
             self.encode_sky(rec, global_set, self.current_frame);
         }
-        rec.end_render_pass();
+        main_pass::end(rec, at, MainClose::Sampled);
     }
 }
 
@@ -817,25 +788,6 @@ pub(in crate::vulkan) struct FaceView {
     pub(in crate::vulkan) background: FaceBackground,
 }
 
-// Where an off-camera render draws in its framebuffer: the full `extent` the
-// viewport maps the projection onto, and the `render_area` (inside it) that is
-// cleared, drawn and stored. Texels outside the area keep whatever they held.
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct FaceArea {
-    pub(in crate::vulkan) extent: vk::Extent2D,
-    pub(in crate::vulkan) render_area: vk::Rect2D,
-}
-
-impl FaceArea {
-    // The whole framebuffer.
-    pub(in crate::vulkan) fn whole(extent: vk::Extent2D) -> Self {
-        Self {
-            extent,
-            render_area: vk::Rect2D::default().extent(extent),
-        }
-    }
-}
-
 // One in-flight probe's capture state while its six faces submit one per frame;
 // the per-face command buffers and fences accumulate until the convolution.
 pub(crate) struct RenderingBake {
@@ -966,10 +918,8 @@ fn free_face_recordings(
 // to the convolution.
 struct BakeResources {
     color: GpuImage,
-    // Held for the bake's lifetime; the framebuffer and sets alias them.
-    _depth: GpuImage,
+    depth: GpuImage,
     resolve: Option<GpuImage>,
-    framebuffer: OwnedFramebuffer,
     object_buf: PooledBuffer,
     draw_args_buf: PooledBuffer,
     indirect_buf: PooledBuffer,
@@ -1001,12 +951,26 @@ struct BakeResources {
 impl BakeResources {
     // The image the capture-cube copy reads: the single-sample resolve when MSAA is on,
     // else the (single-sample) color attachment. Both rest in SHADER_READ_ONLY
-    // after the render pass.
+    // after the render.
     fn copy_source(&self) -> vk::Image {
         match &self.resolve {
             Some(r) => r.image,
             None => self.color.image,
         }
+    }
+
+    // The images a face renders over, all of `extent`.
+    fn attachments(&self, extent: vk::Extent2D) -> MainAttachments {
+        // The previous face was copied out of the target into the cube.
+        MainAttachments::off_camera(
+            (
+                Target::of(&self.color),
+                self.resolve.as_ref().map(Target::of),
+            ),
+            ImageUse::TransferSrc,
+            &self.depth,
+            vk::Rect2D::default().extent(extent),
+        )
     }
 
     fn new(ctx: &VkContext) -> RenderResult<Self> {
@@ -1016,8 +980,7 @@ impl BakeResources {
         let msaa = ctx.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
         let size = PROBE_FACE_SIZE;
 
-        // Color + depth (+ single-sample resolve when MSAA), then a framebuffer
-        // compatible with `main_render_pass`.
+        // Color + depth (+ single-sample resolve when MSAA).
         let color_pooled = create_image(
             alloc,
             &ImageSpec {
@@ -1083,28 +1046,6 @@ impl BakeResources {
         } else {
             None
         };
-        let fb_attachments: Vec<vk::ImageView> = if msaa {
-            vec![
-                color.view,
-                depth.view,
-                resolve
-                    .as_ref()
-                    .expect("a multisampled probe target has a resolve image")
-                    .view,
-            ]
-        } else {
-            vec![color.view, depth.view]
-        };
-        let framebuffer = device.framebuffer(
-            ctx.targets.main_render_pass.handle(),
-            &fb_attachments,
-            vk::Extent2D {
-                width: size,
-                height: size,
-            },
-            "probe framebuffer",
-        )?;
-
         // Bake-owned cull ring, sized like the per-frame rings.
         let n = ctx.state.draw.record_count();
         let object_size = (n * size_of::<GpuObjectData>()) as u64;
@@ -1272,9 +1213,8 @@ impl BakeResources {
 
         let bake = Self {
             color,
-            _depth: depth,
+            depth,
             resolve,
-            framebuffer,
             object_buf,
             draw_args_buf,
             indirect_buf,

@@ -53,14 +53,14 @@ pub(super) fn build_text(
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "text pipeline layout"))?;
 
     // Text renders in the composite pass (post-tonemap, single-sample), so
-    // its pipeline targets the composite render pass.
+    // its pipeline renders to the composite's formats.
     let pipeline = if atlas_textures.is_empty() {
         None
     } else {
         let (tv, tf) = compile_text_shaders(hot_reload)?;
         let tp = create_text_pipeline(
             device,
-            composite.render_pass.handle(),
+            composite.formats,
             pipeline_layout.handle(),
             &tv,
             &tf,

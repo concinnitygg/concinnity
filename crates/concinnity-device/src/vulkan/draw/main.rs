@@ -1,7 +1,7 @@
 //! Main scene pass for the Vulkan backend: linear-light HDR off-screen
 //! render that draws every static / instanced / skinned object into the
 //! multisampled HDR color + depth attachments (resolved into
-//! `hdr_resolve` for the post stack). One Vulkan render pass, two indirect
+//! `hdr_resolve` for the post stack). One rendering scope, two indirect
 //! draws over the GPU-cull-written indirect buffer per shader bucket: the
 //! static + instance + runtime prefix against the shared VB/IB, then the skinned
 //! tail against this frame's deformed vertices.
@@ -16,8 +16,10 @@ use ash::vk;
 use concinnity_engine::gfx::render_types::SKINNED_STREAM;
 
 use super::super::context::VkContext;
-use crate::vulkan::depth;
+use crate::vulkan::graph_exec::GraphFrameParams;
+use crate::vulkan::main_pass::{self, MainClose, MainOpen, SceneResumers};
 use crate::vulkan::record::Recorder;
+use crate::vulkan::rendering::ImageUse;
 
 impl VkContext {
     // Encode the main HDR scene pass for frame slot `frame_idx`, resolving into
@@ -25,13 +27,13 @@ impl VkContext {
     pub(in crate::vulkan) fn encode_main_pass(
         &self,
         rec: &Recorder<'_>,
-        frame_idx: usize,
-        world_hidden: bool,
+        params: &GraphFrameParams<'_>,
         grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
+        let (frame_idx, world_hidden) = (params.frame_idx, params.frame.world_hidden);
         let extent = self.targets.render_extent;
 
-        // Behind an opaque menu on the MSAA path, skip the render pass entirely: its
+        // Behind an opaque menu on the MSAA path, skip the pass entirely: its
         // resolve of an undrawn frame would be the paused frame's main GPU cost. A
         // lone barrier leaves hdr_resolve ready to sample. The single-sample path has
         // no resolve, so it keeps its clear-only pass.
@@ -46,52 +48,21 @@ impl VkContext {
             return;
         }
 
-        // Clears for the main HDR attachments. With MSAA on, the
-        // resolve attachment doesn't need a clear (resolve overwrites);
-        // a `ClearValue::default()` placeholder keeps the slice index
-        // aligned with `main_render_pass`'s attachment count.
         let [r, g, b, a] = self.pre_exposure.clear_color(self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
             },
         };
-        let clear_depth = depth::CLEAR_VALUE;
-        let clears: &[vk::ClearValue] = if self.targets.msaa_samples == vk::SampleCountFlags::TYPE_1
-        {
-            &[clear_color, clear_depth]
-        } else {
-            &[clear_color, clear_depth, vk::ClearValue::default()]
-        };
-
-        // The early pass under two-pass occlusion, and the raymarch pass, need the
-        // MSAA color stored for a later load, so they take a store-color variant with
-        // the same clears.
-        let render_pass = if self.two_pass_occlusion_active() {
-            self.cull
-                .main_render_pass_early
-                .as_ref()
-                .unwrap_or(&self.targets.main_render_pass)
-        } else if let Some(rp) = self
-            .raymarch
-            .as_ref()
-            .and_then(|r| r.main_store_color_pass.as_ref())
-        {
-            rp
-        } else {
-            &self.targets.main_render_pass
-        };
-        rec.begin_render_pass(
-            render_pass,
-            &self.targets.framebuffers[frame_idx],
-            vk::Rect2D::default().extent(extent),
-            clears,
-        );
+        // The scene was last sampled by the previous frame's readers.
+        let attachments = self.main_attachments(frame_idx, ImageUse::Sampled);
+        let close = params.scene.main_close(self.main_msaa());
+        main_pass::begin(rec, &attachments, MainOpen::Clear(clear_color), close);
 
         // Behind an opaque menu on the single-sample path the clear above is all there
         // is.
         if world_hidden {
-            rec.end_render_pass();
+            main_pass::end(rec, &attachments, close);
             return;
         }
 
@@ -216,60 +187,54 @@ impl VkContext {
             self.encode_main_sky(rec, frame_idx);
         }
 
-        // End the main scene pass. The render pass leaves the HDR resolve
-        // image in SHADER_READ_ONLY_OPTIMAL for the composite pass to sample.
-        rec.end_render_pass();
+        // End the main scene pass, leaving the HDR resolve sampled for the
+        // post stack unless a later scope resumes it.
+        main_pass::end(rec, &attachments, close);
     }
 
     // Late main pass for two-pass occlusion: load the early color and depth, draw
     // what `CullLate` kept, and resolve into `hdr_resolve`. Skinned geometry is
-    // not Hi-Z-culled, so it drew fully in the early pass. Uses the main pipeline,
-    // which is render-pass-compatible with the late pass.
-    pub(in crate::vulkan) fn encode_main_pass_late(&self, rec: &Recorder<'_>, frame_idx: usize) {
-        let (Some(render_pass), Some(pipeline), Some(layout)) = (
-            self.cull.main_render_pass_late.as_ref(),
+    // not Hi-Z-culled, so it drew fully in the early pass. Uses the main pipeline.
+    pub(in crate::vulkan) fn encode_main_pass_late(
+        &self,
+        rec: &Recorder<'_>,
+        frame_idx: usize,
+        scene: SceneResumers,
+    ) {
+        let msaa = self.main_msaa();
+        let close = scene.late_close(msaa);
+        // The early pass left a multisampled scene's resolve sampled, and held a
+        // single-sample scene as an attachment.
+        let scene_from = if msaa {
+            ImageUse::Sampled
+        } else {
+            ImageUse::ColorAttachment
+        };
+        let attachments = self.main_attachments(frame_idx, scene_from);
+        // With nothing to draw the late pass still leaves the scene where it
+        // would have.
+        let skip = || {
+            if close == MainClose::Sampled {
+                main_pass::release(rec, &attachments);
+            }
+        };
+        let (true, Some(pipeline), Some(layout)) = (
+            self.two_pass_occlusion_built(),
             self.cull.bindless_pipeline.as_ref(),
             self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
+            skip();
             return;
         };
         let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
         if self.state.draw.n_objects == 0 || self.cull.indirect_buffers_late.is_empty() {
+            skip();
             return;
         }
         let extent = self.targets.render_extent;
 
-        // The late pass loads the early attachments, and the shared subpass dependency
-        // does not order those writes before the load, so order them here.
-        let load_barrier = vk::MemoryBarrier::default()
-            .src_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            )
-            .dst_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_READ
-                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            );
-        rec.pipeline_barrier(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-            std::slice::from_ref(&load_barrier),
-            &[],
-            &[],
-        );
-
-        // LOAD render pass: no clears (loadOp = LOAD / DONT_CARE), so no clear
-        // values are required.
-        rec.begin_render_pass(
-            render_pass,
-            &self.targets.framebuffers[frame_idx],
-            vk::Rect2D::default().extent(extent),
-            &[],
-        );
+        // Resume the early pass's color and depth.
+        main_pass::begin(rec, &attachments, MainOpen::Resume, close);
 
         // Same negative-height viewport flip as the early main pass so the
         // disoccluded geometry rasterizes into identical pixels.
@@ -331,9 +296,8 @@ impl VkContext {
             self.inc_draw_calls(1);
         }
 
-        // End the late pass. The render pass resolves the combined early +
-        // late MSAA color into `hdr_resolve` and leaves it
-        // SHADER_READ_ONLY_OPTIMAL, so the post stack reads the combined scene.
-        rec.end_render_pass();
+        // End the late pass, which resolves the combined early + late MSAA color
+        // into `hdr_resolve` and leaves it sampled for the post stack.
+        main_pass::end(rec, &attachments, close);
     }
 }

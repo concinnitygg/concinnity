@@ -612,7 +612,7 @@ impl VkContext {
 
         // Scene color: the reflection composite's output when a reflection
         // resolve ran, else this slot's HDR resolve. Either rests in
-        // SHADER_READ_ONLY_OPTIMAL after its last render pass writer.
+        // SHADER_READ_ONLY_OPTIMAL after its last writer.
         let scene = self.post_scene_image(frame);
         let (rw, rh) = extent.render;
         let render_image = |image, view, format, aspect| UpscaleImage {
@@ -742,7 +742,7 @@ impl VkContext {
 
         // Flip the output GENERAL -> SHADER_READ_ONLY so bloom + composite can
         // sample it. (Inputs are left where the upscaler leaves them; the next
-        // frame's render passes reset them.)
+        // frame's passes reset them.)
         image_barrier(
             rec,
             output.image.image,

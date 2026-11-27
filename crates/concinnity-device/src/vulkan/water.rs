@@ -1,5 +1,5 @@
 //! `WaterSurface`: one producer of the engine's transparent pass on the Vulkan
-//! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
+//! backend (`transparent.rs` owns the pass itself, the scene snapshot, the
 //! shared descriptor / pipeline layouts and the combined back-to-front draw
 //! order; `glass.rs` is the other producer). Each surface is a flat tessellated
 //! XZ grid built once at init and displaced per frame by the vertex stage's
@@ -178,7 +178,6 @@ fn build_water_pipelines(
     let (vert_spv, frag_spv) = compile_water_shaders(programs, ctx.hot_reload, ctx.msaa)?;
     let pipeline = create_transparent_pipeline(
         ctx.device,
-        ctx.render_pass,
         ctx.layout,
         &vert_spv,
         &frag_spv,
@@ -220,7 +219,6 @@ fn build_water_rt_pipelines(
         compile_water_rt_shaders(programs, ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
     let flat = create_transparent_pipeline(
         ctx.device,
-        ctx.render_pass,
         flat_layout,
         &shaders.vs,
         &shaders.flat_fs,
@@ -229,7 +227,6 @@ fn build_water_rt_pipelines(
     let textured = match (ctx.rt_layout_textured, &shaders.textured_fs) {
         (Some(layout), Some(fs)) => Some(create_transparent_pipeline(
             ctx.device,
-            ctx.render_pass,
             layout,
             &shaders.vs,
             fs,

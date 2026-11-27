@@ -1,4 +1,4 @@
-//! Shadow pass for the Vulkan backend: one depth-only render pass per
+//! Shadow pass for the Vulkan backend: one depth-only scope per
 //! cascade slice of the shadow-map array. Both of `shadow_map`'s transitions are
 //! graph-driven: `shadow_map` is the render graph's `shadow_map` resource, so the
 //! executor emits (over every cascade layer) the Shadow producer barrier
@@ -27,8 +27,9 @@ use concinnity_engine::render::uniforms::grass::GrassCascadeGpu;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
-use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, OwnedRenderPass};
+use crate::vulkan::owned::OwnedPipeline;
 use crate::vulkan::record::Recorder;
+use crate::vulkan::rendering::{Attachment, ColorAttachments, RenderTargets};
 
 // One depth-only shadow view to draw from its packed lists: the set 0 holding
 // its `ShadowUniforms`, which of their `light_vps` the vertex shader projects
@@ -39,13 +40,13 @@ pub(in crate::vulkan) struct ShadowView<'a> {
     pub uniforms_set: vk::DescriptorSet,
     pub vp_index: u32,
     pub view: &'a crate::vulkan::cull::ShadowCullView,
-    // The depth-only pipeline built against the render pass the view draws in.
+    // The depth-only pipeline built for the depth the view draws into.
     pub pipeline: Option<&'a OwnedPipeline>,
 }
 
 impl VkContext {
-    // Encode the cascade shadow passes for frame slot `frame_idx`, one render pass
-    // per cascade. A no-op with shadows off; the caller uploaded the cascade VPs.
+    // Encode the cascade shadow passes for frame slot `frame_idx`, one scope per
+    // cascade. A no-op with shadows off; the caller uploaded the cascade VPs.
     pub(in crate::vulkan) fn encode_shadow_pass(
         &self,
         rec: &Recorder<'_>,
@@ -73,28 +74,23 @@ impl VkContext {
             self.state.planner.shadow.cascade_mask
         };
 
-        // Nothing to cull means nothing to draw: the render passes below still
+        // Nothing to cull means nothing to draw: the scopes below still
         // run, so every re-rendered cascade is cleared for the raymarched
         // casters that follow the rasterized ones.
         let gpu_driven = self.shadow_views_drawable();
 
         // GPU-driven cull prologue: dispatch every re-rendered cascade's cull
-        // before opening any render pass (Vulkan disallows compute inside a
-        // render pass). Each packs that cascade's lists.
+        // before opening any scope (Vulkan disallows compute inside one). Each
+        // packs that cascade's lists.
         if gpu_driven {
             self.encode_shadow_culls(rec, frame_idx, render_mask);
         }
 
-        for (cascade_idx, shadow_fb) in self.shadow.framebuffers.iter().enumerate() {
+        for (cascade_idx, &slice) in self.shadow.slices.iter().enumerate() {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            Self::begin_shadow_slice(
-                rec,
-                &self.shadow.render_pass,
-                shadow_fb,
-                self.shadow.map_size,
-            );
+            Self::begin_shadow_slice(rec, slice, self.shadow.map_size);
 
             if gpu_driven
                 && let Some(view) = self
@@ -127,10 +123,10 @@ impl VkContext {
             }
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the
-            // rasterized casters and within the same render pass (no re-clear);
+            // rasterized casters and within the same scope (no re-clear);
             // the depth write test keeps the nearer occluder.
             self.encode_sdf_shadow_cascade(rec, frame_idx, cascade_idx);
-            rec.end_render_pass();
+            rec.end_rendering();
         }
 
         // The shadow map's transitions are graph-driven; it rests sampled between
@@ -142,25 +138,22 @@ impl VkContext {
         self.cull.shadow_bindless_pipeline.is_some() && self.state.draw.record_count() > 0
     }
 
-    // Open the depth-only shadow render pass `render_pass` on one square `size`
+    // Begin rendering the depth-only shadow casters into `slice`, one square `size`
     // slice, which clears it, with the viewport and scissor over it.
     pub(in crate::vulkan) fn begin_shadow_slice(
         rec: &Recorder<'_>,
-        render_pass: &OwnedRenderPass,
-        framebuffer: &OwnedFramebuffer,
+        slice: vk::ImageView,
         size: u32,
     ) {
         let extent = vk::Extent2D {
             width: size,
             height: size,
         };
-        let clear_depth = depth::CLEAR_VALUE;
-        rec.begin_render_pass(
-            render_pass,
-            framebuffer,
-            vk::Rect2D::default().extent(extent),
-            std::slice::from_ref(&clear_depth),
-        );
+        rec.begin_rendering(&RenderTargets {
+            area: vk::Rect2D::default().extent(extent),
+            colors: ColorAttachments::new([]),
+            depth: Some(Attachment::cleared(slice, depth::CLEAR_VALUE)),
+        });
         // Negative-height viewport: Y-flips NDC so Y-up matches Metal, and
         // matches the `-ndc.y` the forward sampler applies.
         let vp = vk::Viewport {
@@ -176,7 +169,7 @@ impl VkContext {
         rec.set_scissor(&scissor);
     }
 
-    // One shadow view inside the caller's render pass: the depth-only bindless
+    // One shadow view inside the caller's scope: the depth-only bindless
     // pipeline draws the view's kept records and skinned tail by count, through
     // `light_vps[view.vp_index]`.
     pub(in crate::vulkan) fn draw_shadow_view(

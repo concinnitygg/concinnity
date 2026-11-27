@@ -109,7 +109,6 @@ pub(super) fn shared_post_device<'a>(
             command_pool,
             queue: hw.graphics_queue,
         },
-        cache: &post_support.cache,
         arena: &post_support.arena,
         sampler: post_support.sampler.handle(),
         cube_sampler: scene.cube_sampler.handle(),
@@ -378,10 +377,8 @@ pub(super) fn build_world_effects(
         },
         crate::vulkan::decal::DecalPassTargets {
             hdr_format: HDR_FORMAT,
-            hdr_resolve_views: &hdr_resolve_views,
             depth_views: &depth_views,
             sampler: scene.linear_sampler.handle(),
-            extent: render_extent,
         },
         frames,
         msaa_samples != vk::SampleCountFlags::TYPE_1,
@@ -403,9 +400,7 @@ pub(super) fn build_world_effects(
                 frames,
                 msaa: msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hdr_format: HDR_FORMAT,
-                hdr_resolve_views: &hdr_resolve_views,
                 depth_views: &depth_views,
-                extent: render_extent,
             },
             crate::vulkan::fog::FogShadowResources {
                 ubos: &shadow.ubos,
@@ -420,7 +415,7 @@ pub(super) fn build_world_effects(
     };
 
     // Raymarched SDF volumes: per-volume pipelines + the shared view ring,
-    // descriptor pool, render passes, and scene snapshot. `None` when the world
+    // descriptor pool, and scene snapshot. `None` when the world
     // declares no `SdfVolume`, so the Raymarch pass is omitted from the frame graph.
     let raymarch = RaymarchResources::try_new(
         crate::vulkan::raymarch::RaymarchDeviceContext {
@@ -445,7 +440,6 @@ pub(super) fn build_world_effects(
             linear_sampler: scene.linear_sampler.handle(),
             light_ubos: &uniforms.light_ubo_buffers,
             shadow_ubos: &shadow.ubos,
-            shadow_render_pass: shadow.render_pass.handle(),
         },
         &fx.sdf_volumes,
         hot_reload,
@@ -500,7 +494,6 @@ pub(super) fn build_world_effects(
                 height: render_extent.height,
             },
             planar,
-            &targets.main_render_pass,
             crate::vulkan::planar::PlanarGlobalSet {
                 layout: descriptors.global_set_layout.handle(),
                 bindings: *bindings,
@@ -540,25 +533,8 @@ pub(super) fn build_world_effects(
     {
         None
     } else {
-        let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..frames)
-            .map(|i| {
-                if let Some(c) = rt.composite.as_ref() {
-                    (c.output().view(), c.output().image().image)
-                } else {
-                    (
-                        targets.hdr_resolve_images[i].view,
-                        targets.hdr_resolve_images[i].image,
-                    )
-                }
-            })
-            .unzip();
         let transparent_depth_views: Vec<vk::ImageView> =
             targets.depth_images.iter().map(|img| img.view).collect();
-        let reactive_mask_views: Vec<vk::ImageView> = targets
-            .reactive_mask_images
-            .iter()
-            .map(|img| img.view)
-            .collect();
         // The initial acceleration-structure handles for the RT path (`None`
         // when RT is off at launch or there is no BVH yet; the per-frame
         // `rt_dynamic_update` fills the ring before the RT path is taken). The
@@ -594,9 +570,6 @@ pub(super) fn build_world_effects(
                 reflection_divisor: graphics.rt_reflections().map_or(1, |rt| rt.divisor),
             },
             crate::vulkan::transparent::TransparentSceneTargets {
-                scene_views: &scene_views,
-                scene_images: &scene_images,
-                reactive_mask_views: &reactive_mask_views,
                 depth_views: &transparent_depth_views,
                 sampler: scene.linear_sampler.handle(),
             },

@@ -4,8 +4,7 @@
 //! the panorama that pass writes for the shaded passes and the sky's cubes; the
 //! half-resolution targets the march and the reconstruction fill, one frame's
 //! and the previous frame's in turn; and the composite that blends it over the
-//! scene behind the haze, through the haze pass's render pass and
-//! framebuffers.
+//! scene behind the haze, drawn the way the haze pass draws.
 //!
 //! The volume, the panorama and the targets rest in `GENERAL` for good: the
 //! kernels write them as storage images and every reader samples them there,
@@ -37,13 +36,14 @@ use super::builtin_shaders::{
 };
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
 use super::record::Recorder;
+use super::rendering::PassFormats;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
+use super::texture::GpuImage;
 use super::texture::{
     GpuUploadContext, LayoutTransition, SubresourceRange, one_shot_submit,
     transition_image_layout_range,
@@ -246,7 +246,7 @@ fn pipeline_layout(
 }
 
 /// What the clouds borrow from the atmosphere: its per-frame constants, its
-/// tables and their sampler, and the haze pass's render pass, plus the scene
+/// tables and their sampler, plus the scene
 /// depth they stop at.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct CloudInputs<'a> {
@@ -256,7 +256,7 @@ pub(in crate::vulkan) struct CloudInputs<'a> {
     pub(in crate::vulkan) multiscatter: vk::ImageView,
     pub(in crate::vulkan) sky_view: vk::ImageView,
     pub(in crate::vulkan) table_sampler: vk::Sampler,
-    pub(in crate::vulkan) composite_pass: vk::RenderPass,
+    pub(in crate::vulkan) scene_format: vk::Format,
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
     pub(in crate::vulkan) extent: vk::Extent2D,
     pub(in crate::vulkan) msaa: bool,
@@ -307,11 +307,6 @@ pub(in crate::vulkan) struct CloudState {
     composite_pipeline: OwnedPipeline,
     // Per frame slot, the composite's set reading each of `targets`.
     composite_sets: Vec<[vk::DescriptorSet; 2]>,
-    // The haze pass's render pass, which the composite draws through.
-    composite_pass: vk::RenderPass,
-    // Per frame slot, the pre-TAA scene the composite draws into, its extent,
-    // and the framebuffer over it.
-    scenes: Vec<Option<(vk::ImageView, vk::Extent2D, OwnedFramebuffer)>>,
 }
 
 impl CloudState {
@@ -455,7 +450,7 @@ impl CloudState {
         let composite_pipeline = build_composite_pipeline(
             device,
             composite_layout.handle(),
-            inputs.composite_pass,
+            inputs.scene_format,
             inputs.msaa,
             hot_reload,
         )?;
@@ -499,8 +494,6 @@ impl CloudState {
             composite_layout,
             composite_pipeline,
             composite_sets,
-            composite_pass: inputs.composite_pass,
-            scenes: (0..frames).map(|_| None).collect(),
         };
         clouds.write_sets(device, &inputs);
         Ok(clouds)
@@ -599,7 +592,7 @@ impl CloudState {
     pub(in crate::vulkan) fn rebuild_pipelines(
         &mut self,
         device: &VkDevice,
-        composite_pass: vk::RenderPass,
+        scene_format: vk::Format,
         msaa: bool,
     ) -> RenderResult<()> {
         let noise_kernel = compute_pipeline(
@@ -625,7 +618,7 @@ impl CloudState {
         let composite_pipeline = build_composite_pipeline(
             device,
             self.composite_layout.handle(),
-            composite_pass,
+            scene_format,
             msaa,
             true,
         )?;
@@ -905,75 +898,42 @@ impl CloudState {
         );
     }
 
-    // Point frame slot `frame`'s composite at the pre-TAA scene `scene`,
-    // `extent` across, when it names another. The slot's fence has passed;
-    // a replaced framebuffer waits out the owned-handle retire.
-    pub(in crate::vulkan) fn rescene(
-        &mut self,
-        device: &VkDevice,
-        frame: usize,
-        scene: vk::ImageView,
-        extent: vk::Extent2D,
-    ) -> RenderResult<()> {
-        let Some(slot) = self.scenes.get_mut(frame) else {
-            return Ok(());
-        };
-        if slot
-            .as_ref()
-            .is_some_and(|(view, at, _)| *view == scene && *at == extent)
-        {
-            return Ok(());
-        }
-        let attachments = [scene];
-        let framebuffer = device.framebuffer(
-            self.composite_pass,
-            &attachments,
-            extent,
-            "cloud composite framebuffer",
-        )?;
-        *slot = Some((scene, extent, framebuffer));
-        Ok(())
-    }
-
-    // Blend the target over frame slot `frame_idx`'s pre-TAA scene, through
-    // `pass`.
+    // Blend the target over frame slot `frame_idx`'s pre-TAA scene, `extent`
+    // across.
     pub(in crate::vulkan) fn encode_composite(
         &self,
         rec: &Recorder<'_>,
         frame_idx: usize,
-        pass: &OwnedRenderPass,
+        scene: &GpuImage,
+        extent: vk::Extent2D,
     ) {
-        let (Some(sets), Some(Some((_, extent, framebuffer)))) = (
-            self.composite_sets.get(frame_idx),
-            self.scenes.get(frame_idx),
-        ) else {
+        let Some(sets) = self.composite_sets.get(frame_idx) else {
             return;
         };
         let set = &sets[self.schedule.write()];
         if self.params.is_none() {
             return;
         }
-        let extent = *extent;
-        rec.begin_render_pass(pass, framebuffer, vk::Rect2D::default().extent(extent), &[]);
-        rec.set_viewport(&vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
+        rec.render_over_sampled(scene, extent, |rec| {
+            rec.set_viewport(&vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            });
+            rec.set_scissor(&vk::Rect2D::default().extent(extent));
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &self.composite_pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &self.composite_layout,
+                0,
+                std::slice::from_ref(set),
+                &[],
+            );
+            rec.draw(3, 1, 0, 0);
         });
-        rec.set_scissor(&vk::Rect2D::default().extent(extent));
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &self.composite_pipeline);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &self.composite_layout,
-            0,
-            std::slice::from_ref(set),
-            &[],
-        );
-        rec.draw(3, 1, 0, 0);
-        rec.end_render_pass();
     }
 }
 
@@ -1015,7 +975,7 @@ fn depth_kernel(
 fn build_composite_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
+    scene_format: vk::Format,
     msaa: bool,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
@@ -1025,7 +985,7 @@ fn build_composite_pipeline(
         &vert,
         &frag,
         layout,
-        render_pass,
+        PassFormats::color(scene_format),
         &[Blend::PremultipliedOver],
     )
     .build(device, "cloud composite")

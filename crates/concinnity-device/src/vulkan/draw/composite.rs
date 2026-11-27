@@ -2,7 +2,7 @@
 //! reads the post-stack scene texture (TAA output > SSR output > HDR resolve,
 //! wired to `composite.sets` at init / on resize), the bloom top octave, and
 //! the 3D color-grading LUT, then writes ACES tonemap + gamma + FXAA into the
-//! swapchain image. Text is drawn after in the same render pass so it sits on
+//! swapchain image. Text is drawn after in the same scope so it sits on
 //! top of the tonemapped image in display-referred LDR space.
 //!
 //! The shape mirrors `metal/draw/composite.rs::encode_composite_and_text`;
@@ -22,6 +22,9 @@ use concinnity_engine::render::fullscreen::TextBindCache;
 use super::super::context::VkContext;
 use super::super::record::Recorder;
 use super::super::upload_ring::UPLOAD_ALIGN;
+use crate::vulkan::rendering::{
+    Attachment, ColorAttachments, ImageUse, Load, RenderTargets, Transition,
+};
 
 // Per-invocation binding context for the composite pass.
 pub(in crate::vulkan) struct CompositeArgs {
@@ -45,7 +48,7 @@ impl core::ops::Deref for CompositePass<'_> {
 }
 
 // Drives the shared `gfx::fullscreen` composite steps: tonemap the post-stack
-// scene into the swapchain framebuffer, then draw text on top in the same pass.
+// scene into the swapchain image, then draw text on top in the same pass.
 impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
     type Rec = Recorder<'a>;
     type Args = CompositeArgs;
@@ -53,12 +56,19 @@ impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
     fn begin_composite(&self, rec: &Self::Rec, args: &Self::Args) {
         let extent = self.swapchain.extent;
         let area = vk::Rect2D::default().extent(extent);
-        rec.begin_render_pass(
-            &self.composite.render_pass,
-            &self.composite.framebuffers[args.image_index],
+        // The fullscreen triangle overwrites every pixel, so the backbuffer's
+        // contents are discarded rather than loaded, after the stage the
+        // acquire semaphore releases.
+        let to_color = ImageUse::ColorAttachment;
+        rec.transition(&[self.backbuffer(args, to_color, to_color).discarding()]);
+        rec.begin_rendering(&RenderTargets {
             area,
-            &[],
-        );
+            colors: ColorAttachments::new([Attachment {
+                load: Load::Discard,
+                ..Attachment::loaded(self.swapchain.image_views[args.image_index])
+            }]),
+            depth: None,
+        });
         // The composite pass uses a standard positive-height viewport: the HDR
         // image is already upright, so it is a plain copy + post.
         rec.set_viewport(&vk::Viewport {
@@ -217,8 +227,16 @@ impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
         Ok(())
     }
 
-    fn end_composite(&self, rec: &Self::Rec, _args: &Self::Args) {
-        rec.end_render_pass();
+    fn end_composite(&self, rec: &Self::Rec, args: &Self::Args) {
+        rec.end_rendering();
+        rec.transition(&[self.backbuffer(args, ImageUse::ColorAttachment, ImageUse::Present)]);
+    }
+}
+
+impl CompositePass<'_> {
+    // The swapchain image `args` names moving from one use to another.
+    fn backbuffer(&self, args: &CompositeArgs, from: ImageUse, to: ImageUse) -> Transition {
+        Transition::color(self.swapchain.images[args.image_index], from, to)
     }
 }
 

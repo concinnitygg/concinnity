@@ -6,7 +6,7 @@
 //!     (x, y) tile; each thread walks Z front-to-back, accumulating the
 //!     per-slab scatter + transmittance with a CSM shadow tap per slice.
 //!
-//!   * The fullscreen `Fog` render pass (`encode_fog`) samples the volume by
+//!   * The fullscreen `Fog` pass (`encode_fog`) samples the volume by
 //!     `(screen_uv, view_z)` instead of marching per pixel and composites
 //!     `(scattered, 1 - T)` over the resolved HDR target with the standard
 //!     `over` blend (`final = scene * T + scattered`).
@@ -29,6 +29,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
+use super::rendering::PassFormats;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
@@ -36,8 +37,7 @@ use super::texture::{
 };
 use crate::vulkan::builtin_shaders::{CompileProgram, FOG_FROXEL};
 use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
 
@@ -50,7 +50,6 @@ const VOLUME_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 // uniform rings + the shared 3D froxel volume the kernel writes and the
 // fragment shader samples.
 pub(in crate::vulkan) struct FogResources {
-    pub(in crate::vulkan) render_pass: OwnedRenderPass,
     pub(in crate::vulkan) pipeline: OwnedPipeline,
     pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
     pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
@@ -79,10 +78,6 @@ pub(in crate::vulkan) struct FogResources {
     // sampled by the fog fragment; the graph drives both transitions.
     pub(in crate::vulkan) volume: PooledImage,
 
-    // One framebuffer per frame-in-flight slot, each binding its frame slot's
-    // `hdr_resolve_images[i].view` as the sole color attachment.
-    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
-
     // Linear-clamp sampler for the trilinear volume read.
     pub(in crate::vulkan) _volume_sampler: OwnedSampler,
 }
@@ -99,16 +94,13 @@ pub(in crate::vulkan) struct FogDeviceContext<'a> {
 }
 
 // The per-frame render targets + config the fog pipeline binds against: the
-// resolved HDR color views (framebuffer attachments), the scene depth views,
-// and the frame count / MSAA / format / extent.
+// scene depth views, and the frame count / MSAA / resolved HDR format.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogFrameTargets<'a> {
     pub(in crate::vulkan) frames: usize,
     pub(in crate::vulkan) msaa: bool,
     pub(in crate::vulkan) hdr_format: vk::Format,
-    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
 // The shared CSM and far shadow resources the froxel kernel taps per slab.
@@ -142,9 +134,7 @@ impl FogResources {
             frames,
             msaa,
             hdr_format,
-            hdr_resolve_views,
             depth_views,
-            extent,
         } = targets;
         let FogShadowResources {
             ubos: shadow_ubos,
@@ -152,14 +142,13 @@ impl FogResources {
             far_view: far_shadow_view,
             sampler: shadow_sampler,
         } = shadow;
-        let render_pass = create_fog_render_pass(device, hdr_format)?;
         let view_set_layout = create_descriptor_set_layout(device, &fog_set_bindings())?;
         let pipeline_layout = create_fog_pipeline_layout(device, view_set_layout.handle())?;
 
         let (vert_spv, frag_spv) = compile_fog_shaders(hot_reload, msaa)?;
         let pipeline = create_fog_pipeline(
             device,
-            render_pass.handle(),
+            hdr_format,
             pipeline_layout.handle(),
             &vert_spv,
             &frag_spv,
@@ -245,17 +234,7 @@ impl FogResources {
             );
         }
 
-        // Per-frame framebuffers (one per frame slot binding that slot's
-        // hdr_resolve view as the color attachment).
-        let framebuffers = device.single_view_framebuffers(
-            render_pass.handle(),
-            hdr_resolve_views.iter().copied().take(frames),
-            extent,
-            "fog framebuffer",
-        )?;
-
         Ok(Self {
-            render_pass,
             pipeline,
             pipeline_layout,
             _view_set_layout: view_set_layout,
@@ -268,43 +247,29 @@ impl FogResources {
             _froxel_set_layout: froxel_set_layout,
             froxel_sets,
             volume,
-            framebuffers,
             _volume_sampler: volume_sampler,
         })
     }
 
-    // Rebuild the framebuffers and re-point the view set's depth after a resize;
-    // the volume is not tied to render resolution.
-    pub(in crate::vulkan) fn rebuild(
-        &mut self,
+    // Re-point the view set's depth after a resize; the volume is not tied to
+    // render resolution.
+    pub(in crate::vulkan) fn repoint_depth(
+        &self,
         device: &VkDevice,
-        hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
-        extent: vk::Extent2D,
-    ) -> RenderResult<()> {
-        self.framebuffers = device.single_view_framebuffers(
-            self.render_pass.handle(),
-            hdr_resolve_views
-                .iter()
-                .copied()
-                .take(self.params_ubos.len()),
-            extent,
-            "fog framebuffer (rebuild)",
-        )?;
+    ) {
         let last_depth = depth_views.len().saturating_sub(1);
         for (i, &set) in self.view_sets.iter().enumerate() {
             SetWrites::new(set)
                 .sampled_image(1, depth_views[i.min(last_depth)])
                 .apply(device);
         }
-        Ok(())
     }
 
     // Destroy every non-pooled GPU resource and drop the pooled ones (the
     // UBO rings and the volume + its views retire through the allocator).
     // Called from `VkContext::drop` after `wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
-        self.framebuffers.clear();
         self.params_ubos.clear();
         self.froxel_ubos.clear();
         self.volume = PooledImage::null();
@@ -329,54 +294,7 @@ fn alloc_ubo_ring(
         .collect()
 }
 
-// Render pass / pipeline construction
-
-fn create_fog_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
-    // The resolved HDR scene as the one attachment, returned to SHADER_READ_ONLY on
-    // exit for the post passes.
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::LOAD)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let dep_in = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
-        );
-    let dep_out = vk::SubpassDependency::default()
-        .src_subpass(0)
-        .dst_subpass(vk::SUBPASS_EXTERNAL)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    let deps = [dep_in, dep_out];
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| super::error::map_vk_result(e, "fog render pass"))
-}
+// Pipeline construction
 
 // The fog-render view set: FogParams UBO, the scene depth (read by texel),
 // FogFroxelParams UBO, the froxel volume and the volume's sampler.
@@ -572,10 +490,9 @@ fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, V
     Ok((vert, frag))
 }
 
-// Rebuild the fog graphics pipeline against the existing render pass +
-// layout. Used by the Vulkan shader hot-reload path. The caller is
-// responsible for destroying the previous pipeline only after this call
-// succeeds.
+// Rebuild the fog graphics pipeline against the existing layout. Used by the
+// Vulkan shader hot-reload path. The caller is responsible for destroying the
+// previous pipeline only after this call succeeds.
 pub(in crate::vulkan) fn rebuild_fog_pipeline(
     device: &VkDevice,
     fog: &FogResources,
@@ -585,7 +502,7 @@ pub(in crate::vulkan) fn rebuild_fog_pipeline(
     let (vert_spv, frag_spv) = compile_fog_shaders(hot_reload, msaa)?;
     create_fog_pipeline(
         device,
-        fog.render_pass.handle(),
+        super::context::HDR_FORMAT,
         fog.pipeline_layout.handle(),
         &vert_spv,
         &frag_spv,
@@ -611,18 +528,20 @@ pub(in crate::vulkan) fn rebuild_fog_froxel_pipeline(
 // HDR target (`final = scattered + transmittance * scene`) regardless of MSAA.
 fn create_fog_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
+    hdr_format: vk::Format,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    GraphicsPipelineDesc::fullscreen(
-        vert_spv,
-        frag_spv,
-        layout,
-        render_pass,
-        &[Blend::PremultipliedOver],
-    )
+    GraphicsPipelineDesc {
+        ..GraphicsPipelineDesc::fullscreen(
+            vert_spv,
+            frag_spv,
+            layout,
+            PassFormats::color(hdr_format),
+            &[Blend::PremultipliedOver],
+        )
+    }
     .build(device, "fog")
 }
 
@@ -688,24 +607,19 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        rec.begin_render_pass(
-            &fog.render_pass,
-            &fog.framebuffers[frame_idx],
-            vk::Rect2D::default().extent(extent),
-            &[],
-        );
-        rec.set_viewport(&vp_state);
-        rec.set_scissor(&scissor);
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &fog.pipeline);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &fog.pipeline_layout,
-            0,
-            std::slice::from_ref(&fog.view_sets[frame_idx]),
-            &[],
-        );
-        rec.draw(3, 1, 0, 0);
-        rec.end_render_pass();
+        rec.render_over_sampled(&self.targets.hdr_resolve_images[frame_idx], extent, |rec| {
+            rec.set_viewport(&vp_state);
+            rec.set_scissor(&scissor);
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &fog.pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &fog.pipeline_layout,
+                0,
+                std::slice::from_ref(&fog.view_sets[frame_idx]),
+                &[],
+            );
+            rec.draw(3, 1, 0, 0);
+        });
     }
 }
 

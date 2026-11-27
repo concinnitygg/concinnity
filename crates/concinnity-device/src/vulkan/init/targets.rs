@@ -1,14 +1,13 @@
-//! Render targets: the main render pass, the off-screen HDR attachments and
-//! their framebuffers, and the transient image pool.
+//! Render targets: the off-screen HDR attachments and the transient image
+//! pool.
 
 use ash::vk;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::{Features, InitGpu};
-use crate::vulkan::context::{HDR_FORMAT, SwapchainState, Targets};
-use crate::vulkan::render_pass::create_main_render_pass;
-use crate::vulkan::swapchain::{AttachmentDeviceCtx, create_attachments, create_main_framebuffers};
+use crate::vulkan::context::{SwapchainState, Targets};
+use crate::vulkan::swapchain::{AttachmentDeviceCtx, create_attachments};
 use crate::vulkan::texture::GpuUploadContext;
 
 #[derive(Clone, Copy)]
@@ -35,7 +34,6 @@ pub(super) fn build_render_targets(
         render_extent,
     } = inputs;
     let (device, msaa_samples) = (&hw.device, features.msaa_samples);
-    let main_render_pass = create_main_render_pass(device, HDR_FORMAT, msaa_samples)?;
 
     // Off-screen HDR attachments, one set per frame-in-flight slot.
     let (color_images, depth_images, hdr_resolve_images) = create_attachments(
@@ -49,16 +47,6 @@ pub(super) fn build_render_targets(
         render_extent.height,
         msaa_samples,
         frames,
-    )?;
-
-    let framebuffers = create_main_framebuffers(
-        device,
-        main_render_pass.handle(),
-        &color_images,
-        &depth_images,
-        &hdr_resolve_images,
-        render_extent,
-        msaa_samples,
     )?;
 
     // The transient image pool (`ao_output`, `bloom_top`, the G-buffer channels),
@@ -91,13 +79,11 @@ pub(super) fn build_render_targets(
     )?;
     Ok(Targets {
         render_extent,
-        main_render_pass,
         msaa_samples,
         color_images,
         depth_images,
         hdr_resolve_images,
         reactive_mask_images,
-        framebuffers,
         transient_pool,
     })
 }

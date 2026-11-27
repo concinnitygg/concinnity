@@ -73,7 +73,6 @@ impl VkContext {
         let device = self.hw.device.clone();
         let msaa = self.targets.msaa_samples;
         let format = self.swapchain.format;
-        let render_pass = self.targets.main_render_pass.handle();
         let mut built = Wireframe {
             built: true,
             ..Default::default()
@@ -91,7 +90,7 @@ impl VkContext {
                 built.bindless = Some(create_main_pipeline_wireframe(
                     &device,
                     MeshPipelineTargets {
-                        render_pass,
+                        formats: super::main_pass::MAIN_FORMATS,
                         layout: layout.handle(),
                         vert_spv: vs,
                         frag_spv: fs,

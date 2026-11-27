@@ -47,7 +47,7 @@ impl VkContext {
         let (composite_vs, composite_ps) = compile_composite_shaders(hr)?;
         let composite_pipeline = create_composite_pipeline(
             device,
-            self.composite.render_pass.handle(),
+            self.composite.formats,
             self.composite.pipeline_layout.handle(),
             &composite_vs,
             &composite_ps,
@@ -58,7 +58,7 @@ impl VkContext {
             let (tv, tf) = compile_text_shaders(hr)?;
             create_text_pipeline(
                 device,
-                self.composite.render_pass.handle(),
+                self.composite.formats,
                 self.text.pipeline_layout.handle(),
                 &tv,
                 &tf,
@@ -88,7 +88,6 @@ impl VkContext {
             &self.hw.device,
             &super::builtin_shaders::SKY_FRAG,
             self.sky.layout(),
-            self.targets.main_render_pass.handle(),
             self.targets.msaa_samples,
             hr,
         )?;
@@ -97,10 +96,7 @@ impl VkContext {
         let gbuffer_sky_pipeline = self
             .gbuffer
             .as_ref()
-            .map(|gb| {
-                gb.sky
-                    .rebuild_pipeline(device, gb.prepass_render_pass.handle())
-            })
+            .map(|gb| gb.sky.rebuild_pipeline(device))
             .transpose()?;
         // The cull kernel, and its late twin (two-pass occlusion) when built:
         // the same source with the `CULL_LATE` define, over the shared layout.
@@ -312,7 +308,6 @@ impl VkContext {
                 &self.hw.device,
                 crate::vulkan::atmosphere::AtmosphereSky {
                     global_set_layout: self.descriptors.global_set_layout.handle(),
-                    main_render_pass: self.targets.main_render_pass.handle(),
                     samples: self.targets.msaa_samples,
                 },
                 self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,

@@ -12,14 +12,14 @@
 //!   taa.rs      the TAA jitter counter + inputs over the shared resolve
 //!
 //! The three files below the effects are the shared fullscreen post-pass seam's
-//! Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
-//! `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
+//! Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`, and
 //! `set_arena.rs` hands out descriptor sets per frame instead of per effect.
 //!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind `UpscaleBackend`
 
 pub(in crate::vulkan) mod bloom;
 pub(in crate::vulkan) mod disocclusion;
 pub(in crate::vulkan) mod gbuffer;
+mod gbuffer_scope;
 mod gbuffer_sky;
 pub(in crate::vulkan) mod reflection_composite;
 pub(in crate::vulkan) mod rt_reflections;
@@ -28,7 +28,6 @@ pub(in crate::vulkan) mod ssgi;
 pub(in crate::vulkan) mod ssr;
 pub(in crate::vulkan) mod taa;
 
-pub(in crate::vulkan) mod pass_cache;
 pub(in crate::vulkan) mod post_device;
 pub(in crate::vulkan) mod set_arena;
 pub(in crate::vulkan) mod upscale;
@@ -46,8 +45,6 @@ pub(in crate::vulkan) use taa::TaaResources;
 /// The resources every shared post pass draws through, held once for the
 /// backend rather than once per effect.
 pub(in crate::vulkan) struct PostSupport {
-    /// Render passes and framebuffers, keyed by attachment shape and view.
-    pub(in crate::vulkan) cache: pass_cache::PostPassCache,
     /// Descriptor sets, one pool per frame in flight.
     pub(in crate::vulkan) arena: set_arena::PostSetArena,
     /// The linear-clamp sampler the post passes, bloom and the composite read
@@ -62,7 +59,6 @@ impl PostSupport {
         frames: usize,
     ) -> concinnity_engine::render::backend::error::RenderResult<Self> {
         Ok(Self {
-            cache: pass_cache::PostPassCache::new(),
             arena: set_arena::PostSetArena::new(device, frames)?,
             sampler: crate::vulkan::texture::create_sampler_linear_clamp(device)?,
         })

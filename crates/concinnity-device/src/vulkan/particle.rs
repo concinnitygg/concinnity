@@ -38,14 +38,14 @@ use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{GraphicsPipelineDesc, compute_pipeline};
-use super::reactive_mask::{self, WriterRenderPasses};
+use super::reactive_mask;
+use super::rendering::ImageUse;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::GpuUploadContext;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
 
@@ -54,7 +54,7 @@ use crate::vulkan::record::Recorder;
 pub(in crate::vulkan) const MAX_EMITTERS: usize =
     concinnity_engine::render::particles::MAX_EMITTERS;
 
-// `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
+// `GpuParticle` (one simulation-pool slot) and `ParticleView` (the draw's
 // view UBO) are GPU-free layout structs that live in `core::render`
 // (imported above).
 
@@ -133,7 +133,7 @@ impl ParticleEmitterGpuState {
 }
 
 // Each emitter's GPU state, and the shared resources (pipelines, per-frame
-// view UBO, descriptor pool, framebuffers), built on the first `add_emitter`,
+// view UBO, descriptor pool), built on the first `add_emitter`,
 // authored emitters included.
 #[derive(Default)]
 pub(in crate::vulkan) struct ParticleState {
@@ -158,9 +158,7 @@ pub(in crate::vulkan) struct ParticleResources {
     rows: Vec<PooledBuffer>,
     rows_sets: Vec<vk::DescriptorSet>,
 
-    // Render passes: the particle.hlsl billboard pair over the scene and the
-    // reactive mask, one per way the frame treats the mask.
-    pub(in crate::vulkan) render_passes: WriterRenderPasses,
+    // The particle.hlsl billboard pair over the scene and the reactive mask.
     pub(in crate::vulkan) render_pipeline: OwnedPipeline,
     // The same pair for a lit emitter.
     pub(in crate::vulkan) render_pipeline_lit: OwnedPipeline,
@@ -184,14 +182,6 @@ pub(in crate::vulkan) struct ParticleResources {
     // Per-frame view set (binding 0 view UBO, 1 main depth). One per frame slot.
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
 
-    // One framebuffer per frame-in-flight slot, each binding its frame
-    // slot's `hdr_resolve_images[i].view` and reactive mask as the color
-    // attachments.
-    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
-    // The same over each slot's pre-TAA scene, which the emitters that draw
-    // after the see-through surfaces blend into.
-    late_framebuffers: Vec<OwnedFramebuffer>,
-
     // Linear-clamp sampler shared by every emitter's albedo binding.
     pub(in crate::vulkan) sampler: OwnedSampler,
 
@@ -199,47 +189,16 @@ pub(in crate::vulkan) struct ParticleResources {
     msaa: bool,
 }
 
-// Render-target inputs the particle pass writes into / samples from: the
-// per-frame resolved HDR color views, the per-frame main depth views, and the
-// framebuffer extent.
+// Render-target inputs the particle pass samples from: the per-frame main
+// depth views.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct ParticlePassTargets<'a> {
-    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
-    // The pre-TAA scene per frame slot, which the transparent pass draws into.
-    pub(in crate::vulkan) scene_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) reactive_mask_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) extent: vk::Extent2D,
-}
-
-// One framebuffer per frame slot over that slot's `scenes` view and reactive
-// mask.
-fn create_framebuffers(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    targets: &ParticlePassTargets<'_>,
-    scenes: &[vk::ImageView],
-    frames: usize,
-) -> RenderResult<Vec<OwnedFramebuffer>> {
-    scenes
-        .iter()
-        .zip(targets.reactive_mask_views)
-        .take(frames)
-        .map(|(&scene, &mask)| {
-            let attachments = device.writer_targets().views(scene, mask);
-            device.framebuffer(
-                render_pass,
-                &attachments,
-                targets.extent,
-                "particle framebuffer",
-            )
-        })
-        .collect()
 }
 
 impl ParticleResources {
-    // Build the particle pipelines, view UBO ring, sampler, descriptor pool and
-    // framebuffers, when the world declares an emitter.
+    // Build the particle pipelines, view UBO ring, sampler and descriptor pool,
+    // when the world declares an emitter.
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
         frames: usize,
@@ -249,9 +208,6 @@ impl ParticleResources {
     ) -> RenderResult<Self> {
         let &GpuUploadContext { alloc, device, .. } = gpu;
         let depth_views = targets.depth_views;
-        let render_passes = WriterRenderPasses::new(device.writer_targets(), |mask| {
-            create_render_pass(device, HDR_FORMAT, mask)
-        })?;
         let compute_set_layout = create_descriptor_set_layout(device, &compute_set_bindings())?;
         let rows_set_layout = create_descriptor_set_layout(device, &rows_set_bindings())?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
@@ -275,13 +231,7 @@ impl ParticleResources {
             "particle compute",
         )?;
         let render = |vertex: &[u8], fragment: &[u8]| {
-            create_render_pipeline(
-                device,
-                render_passes.compatible(),
-                render_pipeline_layout.handle(),
-                vertex,
-                fragment,
-            )
+            create_render_pipeline(device, render_pipeline_layout.handle(), vertex, fragment)
         };
         let render_pipeline = render(&spirv.vertex, &spirv.fragment)?;
         let render_pipeline_lit = render(&spirv.lit_vertex, &spirv.lit_fragment)?;
@@ -332,21 +282,6 @@ impl ParticleResources {
                 .apply(device);
         }
 
-        let framebuffers = create_framebuffers(
-            device,
-            render_passes.compatible(),
-            &targets,
-            targets.hdr_resolve_views,
-            frames,
-        )?;
-        let late_framebuffers = create_framebuffers(
-            device,
-            render_passes.compatible(),
-            &targets,
-            targets.scene_views,
-            frames,
-        )?;
-
         Ok(Self {
             compute_pipeline,
             compute_pipeline_layout,
@@ -354,7 +289,6 @@ impl ParticleResources {
             _rows_set_layout: rows_set_layout,
             rows,
             rows_sets,
-            render_passes,
             render_pipeline,
             render_pipeline_lit,
             render_pipeline_layout,
@@ -364,60 +298,24 @@ impl ParticleResources {
             spare_sets: EmitterSetFreeList::default(),
             view_ubos,
             view_sets,
-            framebuffers,
-            late_framebuffers,
             sampler,
             msaa,
         })
     }
 
-    // Rebuild the framebuffers + re-point the per-frame depth binding after a
-    // swapchain resize. Called from `VkContext::rebuild_swapchain`; same
-    // pattern as `FogResources` / `DecalResources`. The pipelines, layouts,
-    // buffers, sampler, and per-emitter descriptor sets all survive.
-    pub(in crate::vulkan) fn rebuild(
-        &mut self,
+    // Re-point the per-frame depth binding after a swapchain resize. The
+    // pipelines, layouts, buffers, sampler, and per-emitter descriptor sets all
+    // survive.
+    pub(in crate::vulkan) fn repoint_depth(
+        &self,
         device: &VkDevice,
         targets: ParticlePassTargets<'_>,
-    ) -> RenderResult<()> {
+    ) {
         for (i, &set) in self.view_sets.iter().enumerate() {
             SetWrites::new(set)
                 .sampled_image(1, frame_view(targets.depth_views, i))
                 .apply(device);
         }
-        self.framebuffers.clear();
-        self.late_framebuffers.clear();
-        let frames = self.view_ubos.len();
-        let pass = self.render_passes.compatible();
-        self.framebuffers =
-            create_framebuffers(device, pass, &targets, targets.hdr_resolve_views, frames)?;
-        self.late_framebuffers =
-            create_framebuffers(device, pass, &targets, targets.scene_views, frames)?;
-        Ok(())
-    }
-
-    // Re-point frame slot `frame`'s late framebuffer at `scene`, the post
-    // chain's scene image a settings change moved. The slot's fence has
-    // passed; the replaced framebuffer waits out the owned-handle retire.
-    pub(in crate::vulkan) fn rescene(
-        &mut self,
-        device: &VkDevice,
-        frame: usize,
-        scene: vk::ImageView,
-        mask: vk::ImageView,
-        extent: vk::Extent2D,
-    ) -> RenderResult<()> {
-        let attachments = device.writer_targets().views(scene, mask);
-        let fb = device.framebuffer(
-            self.render_passes.compatible(),
-            &attachments,
-            extent,
-            "particle framebuffer",
-        )?;
-        if let Some(slot) = self.late_framebuffers.get_mut(frame) {
-            *slot = fb;
-        }
-        Ok(())
     }
 
     // Construct the compute + render pipelines against the existing
@@ -437,7 +335,6 @@ impl ParticleResources {
         let render = |vertex: &[u8], fragment: &[u8]| {
             create_render_pipeline(
                 device,
-                self.render_passes.compatible(),
                 self.render_pipeline_layout.handle(),
                 vertex,
                 fragment,
@@ -463,8 +360,6 @@ impl ParticleResources {
     // `VkContext`'s `particle.gpu`; their destruction is the
     // caller's responsibility.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
-        self.framebuffers.clear();
-        self.late_framebuffers.clear();
         self.view_ubos.clear();
     }
 }
@@ -559,63 +454,7 @@ impl EmitterSetFreeList {
     }
 }
 
-// Render pass / descriptor / pipeline construction
-
-fn create_render_pass(
-    device: &VkDevice,
-    format: vk::Format,
-    mask: Option<ReactiveWrite>,
-) -> RenderResult<OwnedRenderPass> {
-    // The resolved HDR scene (and the reactive mask), rendered as an attachment and
-    // returned to SHADER_READ_ONLY for the post passes.
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::LOAD)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let attachments = device.writer_targets().attachments(attachment, mask);
-    let color_refs: Vec<_> = (0..u32::saturating_from(attachments.len()))
-        .map(|i| {
-            vk::AttachmentReference::default()
-                .attachment(i)
-                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        })
-        .collect();
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(&color_refs);
-    let dep_in = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
-        );
-    let dep_out = vk::SubpassDependency::default()
-        .src_subpass(0)
-        .dst_subpass(vk::SUBPASS_EXTERNAL)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    let deps = [dep_in, dep_out];
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(&attachments)
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| super::error::map_vk_result(e, "particle render pass"))
-}
+// Descriptor / pipeline construction
 
 // Compute set 0: the pool SSBO.
 // Compute set 1, per frame: the frame's rows.
@@ -743,7 +582,6 @@ fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
 // gl_InstanceIndex, so there are no vertex buffers.
 fn create_render_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
@@ -754,7 +592,7 @@ fn create_render_pipeline(
             vert_spv,
             frag_spv,
             layout,
-            render_pass,
+            device.writer_targets().formats(HDR_FORMAT),
             device.writer_targets().blends(),
         )
     }
@@ -894,12 +732,12 @@ impl VkContext {
             return false;
         }
 
-        // The render pass's dependencies cover the scene's layout round trip.
-        let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
-        let framebuffers = if late {
-            &resources.late_framebuffers
+        // The early emitters blend into the resolved scene, the late ones into
+        // the pre-TAA scene the see-through surfaces drew into.
+        let scene = if late {
+            self.post_scene_image(frame_idx)
         } else {
-            &resources.framebuffers
+            &self.targets.hdr_resolve_images[frame_idx]
         };
         // Negative-height viewport, matching the main pass's +Y-up clip space.
         let viewport = vk::Viewport {
@@ -912,55 +750,57 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        rec.begin_render_pass(
-            resources.render_passes.get(mask),
-            &framebuffers[frame_idx],
-            scissor,
-            &clears,
-        );
-        rec.set_viewport(&viewport);
-        rec.set_scissor(&scissor);
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &resources.render_pipeline);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &resources.render_pipeline_layout,
-            0,
-            std::slice::from_ref(&resources.view_sets[frame_idx]),
-            &[],
-        );
-
-        let mut lit = false;
-        for emitter in visible {
-            let Some(gpu) = self.particle.gpu.get(emitter.id) else {
-                continue;
-            };
-            let (record, params) = (emitter.record, &emitter.params);
-            if record.lit != lit {
-                lit = record.lit;
-                let pipeline = if lit {
-                    &resources.render_pipeline_lit
-                } else {
-                    &resources.render_pipeline
-                };
-                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
-            }
+        let pass = reactive_mask::WriterPass {
+            scene,
+            scene_from: ImageUse::Sampled,
+            mask: self.targets.reactive_mask_images.get(frame_idx),
+            write: mask,
+            extent,
+        };
+        self.hw.device.writer_targets().render(rec, pass, |rec| {
+            rec.set_viewport(&viewport);
+            rec.set_scissor(&scissor);
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &resources.render_pipeline);
             rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::GRAPHICS,
                 &resources.render_pipeline_layout,
-                1,
-                std::slice::from_ref(&gpu.render_set),
+                0,
+                std::slice::from_ref(&resources.view_sets[frame_idx]),
                 &[],
             );
-            rec.push_constants(
-                &resources.render_pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                params,
-            );
-            rec.draw(4, record.max_particles, 0, 0);
-            self.inc_draw_calls(1);
-        }
-        rec.end_render_pass();
+
+            let mut lit = false;
+            for emitter in visible {
+                let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                    continue;
+                };
+                let (record, params) = (emitter.record, &emitter.params);
+                if record.lit != lit {
+                    lit = record.lit;
+                    let pipeline = if lit {
+                        &resources.render_pipeline_lit
+                    } else {
+                        &resources.render_pipeline
+                    };
+                    rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+                }
+                rec.bind_descriptor_sets(
+                    vk::PipelineBindPoint::GRAPHICS,
+                    &resources.render_pipeline_layout,
+                    1,
+                    std::slice::from_ref(&gpu.render_set),
+                    &[],
+                );
+                rec.push_constants(
+                    &resources.render_pipeline_layout,
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    params,
+                );
+                rec.draw(4, record.max_particles, 0, 0);
+                self.inc_draw_calls(1);
+            }
+        });
         true
     }
 }
@@ -1037,26 +877,11 @@ impl EmitterPass for VkContext {
     // add.
     fn ensure_emitter_pass(&mut self) -> RenderResult<()> {
         if self.particle.resources.is_none() {
-            let hdr_resolve_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
                 .iter()
                 .map(|img| img.view)
-                .collect();
-            let reactive_mask_views: Vec<vk::ImageView> = self
-                .targets
-                .reactive_mask_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
-            let scene_views: Vec<vk::ImageView> = (0..self.frames_in_flight)
-                .map(|i| self.post_scene_image(i).view)
                 .collect();
             let resources = ParticleResources::new(
                 &GpuUploadContext {
@@ -1067,11 +892,7 @@ impl EmitterPass for VkContext {
                 },
                 self.frames_in_flight,
                 ParticlePassTargets {
-                    hdr_resolve_views: &hdr_resolve_views,
-                    scene_views: &scene_views,
-                    reactive_mask_views: &reactive_mask_views,
                     depth_views: &depth_views,
-                    extent: self.targets.render_extent,
                 },
                 self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 self.hot_reload.enabled,

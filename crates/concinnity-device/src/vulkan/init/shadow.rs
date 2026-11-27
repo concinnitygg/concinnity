@@ -1,4 +1,4 @@
-//! Shadows: the cascade shadow map with its render pass and uniform ring, and
+//! Shadows: the cascade shadow map with its uniform ring, and
 //! the spot shadow array that reuses them.
 
 use ash::vk;
@@ -14,11 +14,9 @@ use crate::vulkan::context::{FarShadowState, ShadowState, SpotShadowState};
 use crate::vulkan::descriptor_layout::{PoolSizes, shadow_global_set};
 use crate::vulkan::draw::upload_shadow_uniforms;
 use crate::vulkan::owned::OwnedSetLayout;
-use crate::vulkan::render_pass::create_shadow_render_pass;
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::resources::create_descriptor_set_layout;
 use crate::vulkan::set_writes::SetWrites;
-use crate::vulkan::swapchain::create_shadow_framebuffers;
 use crate::vulkan::texture::{
     create_far_shadow_map, create_sampler_shadow, create_shadow_map_array,
 };
@@ -35,16 +33,15 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         shadows.map_size,
         u32::saturating_from(NUM_SHADOW_CASCADES),
     )?;
-    let render_pass = create_shadow_render_pass(device, vk::Format::D32_SFLOAT)?;
     let sampler = create_sampler_shadow(device)?;
     // Shadow global set (set 0 for shadow pass): ShadowUniforms UBO.
     let global_set_layout = create_descriptor_set_layout(device, &shadow_global_set())?;
-    // No framebuffers with shadows off: create_shadow_map_array already rests
-    // the (1x1 fallback) shadow_map in SHADER_READ_ONLY, the layout the
-    // main-pass descriptor expects, and with no shadow loop nothing ever moves
-    // it out of that layout.
-    let framebuffers = if shadows.map_size > 0 {
-        create_shadow_framebuffers(device, render_pass.handle(), &map, shadows.map_size)?
+    // No slices with shadows off: create_shadow_map_array already rests the
+    // (1x1 fallback) shadow_map in SHADER_READ_ONLY, the layout the main-pass
+    // descriptor expects, and with no shadow loop nothing ever moves it out of
+    // that layout.
+    let slices = if shadows.map_size > 0 {
+        map.aux_views.clone()
     } else {
         Vec::new()
     };
@@ -82,10 +79,9 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         None
     };
     Ok(ShadowState {
-        render_pass,
         map,
         map_size: shadows.map_size,
-        framebuffers,
+        slices,
         global_set_layout,
         sampler,
         ubos,
@@ -95,7 +91,7 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     })
 }
 
-// The far shadow's map, render pass and framebuffer, and one uniforms slot and
+// The far shadow's map, and one uniforms slot and
 // set per frame in flight: the view redraws every few frames through a fresh
 // projection, so each frame writes its own slot.
 fn build_far_shadow(
@@ -106,16 +102,6 @@ fn build_far_shadow(
     let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;
     let map = create_far_shadow_map(&gpu.upload(), size)?;
-    let render_pass = create_shadow_render_pass(device, vk::Format::D16_UNORM)?;
-    let framebuffer = device.framebuffer(
-        render_pass.handle(),
-        &[map.view],
-        vk::Extent2D {
-            width: size,
-            height: size,
-        },
-        "far shadow framebuffer",
-    )?;
 
     let ubo_size = size_of::<ShadowUniforms>() as u64;
     let mut ubos = Vec::with_capacity(frames);
@@ -153,15 +139,13 @@ fn build_far_shadow(
     Ok(FarShadowState {
         map,
         size,
-        render_pass,
-        framebuffer,
         ubos,
         sets,
         _descriptor_pool: descriptor_pool,
     })
 }
 
-// Spot shadows reuse the cascade pass's render pass and set layout. Built even
+// Spot shadows reuse the cascade pass's formats and set layout. Built even
 // with no shadowed spot, so the main pass's bindings 12 and 13 are valid.
 pub(super) fn build_spot_shadow(
     gpu: &InitGpu<'_>,
@@ -185,7 +169,6 @@ pub(super) fn build_spot_shadow(
             device: &hw.device,
             physical_device: hw.physical_device,
             map,
-            render_pass: shadow.render_pass.handle(),
             set_layout: shadow.global_set_layout.handle(),
             slice_size,
             spot_shadows,

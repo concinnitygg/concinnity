@@ -29,7 +29,7 @@ use super::descriptor_layout::{PROBE_RECORDS_SSBO_BINDING, PoolSizes, global_set
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
 use super::graph_exec::GraphFrameParams;
-use super::probe::{CaptureCull, FaceArea, FacePacking, FaceView};
+use super::probe::{CaptureCull, FacePacking, FaceView};
 use super::probe_prefilter::{CaptureFaces, PrefilterGpu, PrefilterTarget};
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
@@ -37,8 +37,10 @@ use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
-use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use crate::vulkan::main_pass::{MainAttachments, Target};
+use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
 use crate::vulkan::record::Recorder;
+use crate::vulkan::rendering::ImageUse;
 
 const FACE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
@@ -67,11 +69,12 @@ struct PropProbeGpu {
     key: CaptureKey,
     plan: PrefilterPlan,
     prefilter: PrefilterGpu,
-    // Held for the framebuffers: the multisampled color (with MSAA) and the
-    // depth every face renders through.
-    _color: Option<GpuImage>,
-    _depth: GpuImage,
-    framebuffers: Vec<OwnedFramebuffer>,
+    // The multisampled color (with MSAA) and the depth every face renders
+    // through, and each face's layer of the capture, which the face renders or
+    // resolves into.
+    color: Option<GpuImage>,
+    depth: GpuImage,
+    face_views: Vec<vk::ImageView>,
     frames: usize,
     // Per (face, frame), at `face * frames + frame`: the face's view block and
     // the global set binding it with that frame's lighting and probes.
@@ -295,11 +298,10 @@ impl VkContext {
                     capture_tiles: self.state.placement.capture_tiles,
                 },
             );
-            Self::order_prop_face_render(rec);
             self.encode_main_into_face(
                 rec,
-                &gpu.framebuffers[face],
-                FaceArea::whole(extent),
+                &gpu.attachments(face, extent),
+                extent,
                 FaceView {
                     global_set: gpu.global_sets[ring],
                     storage: FaceStorage::PROBE,
@@ -332,36 +334,30 @@ impl VkContext {
             &[],
         );
     }
-
-    // Order a face's render after the last writes to its attachments: the
-    // shared depth and multisampled color the previous face rendered, and the
-    // capture layer the last convolution read. `main_render_pass` takes both
-    // in `UNDEFINED` and its external dependency makes nothing available, so
-    // this barrier is what orders them.
-    fn order_prop_face_render(rec: &Recorder<'_>) {
-        let barrier = vk::MemoryBarrier::default()
-            .src_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            )
-            .dst_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            );
-        rec.pipeline_barrier(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
-                | vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-            std::slice::from_ref(&barrier),
-            &[],
-            &[],
-        );
-    }
 }
 
 impl PropProbeGpu {
+    // The images face `face` renders over, all of `extent`: the shared color
+    // resolving into the face's capture layer with MSAA, else that layer itself.
+    fn attachments(&self, face: usize, extent: vk::Extent2D) -> MainAttachments {
+        let layer = Target::layer(
+            self.prefilter.capture_image(),
+            self.face_views[face],
+            u32::saturating_from(face),
+        );
+        let (color, resolve) = match &self.color {
+            Some(color) => (Target::of(color), Some(layer)),
+            None => (layer, None),
+        };
+        // The last convolution sampled the capture.
+        MainAttachments::off_camera(
+            (color, resolve),
+            ImageUse::Sampled,
+            &self.depth,
+            vk::Rect2D::default().extent(extent),
+        )
+    }
+
     fn new(ctx: &VkContext, key: CaptureKey) -> RenderResult<Self> {
         let device = &ctx.hw.device;
         let alloc = &ctx.hw.alloc;
@@ -406,7 +402,7 @@ impl PropProbeGpu {
             CaptureFaces::Rendered,
         )?;
         // The capture rests sampled between frames, the layout the pyramid
-        // build takes it from; its faces' render passes discard the top mip.
+        // build takes it from; its faces' renders discard the top mip.
         one_shot_submit(
             device,
             ctx.commands.command_pool,
@@ -467,23 +463,9 @@ impl PropProbeGpu {
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             key.samples,
         )?;
-        let mut framebuffers = Vec::with_capacity(CAPTURE_FACES);
-        for face in 0..CAPTURE_FACES {
-            let layer = prefilter.capture_face_view(device, u32::saturating_from(face))?;
-            let attachments: Vec<vk::ImageView> = match &color {
-                Some(c) => vec![c.view, depth.view, layer],
-                None => vec![layer, depth.view],
-            };
-            framebuffers.push(device.framebuffer(
-                ctx.targets.main_render_pass.handle(),
-                &attachments,
-                vk::Extent2D {
-                    width: size,
-                    height: size,
-                },
-                "prop probe framebuffer",
-            )?);
-        }
+        let face_views = (0..CAPTURE_FACES)
+            .map(|face| prefilter.capture_face_view(device, u32::saturating_from(face)))
+            .collect::<RenderResult<Vec<_>>>()?;
 
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let ring = CAPTURE_FACES * frames;
@@ -594,9 +576,9 @@ impl PropProbeGpu {
             key,
             plan,
             prefilter,
-            _color: color,
-            _depth: depth,
-            framebuffers,
+            color,
+            depth,
+            face_views,
             frames,
             view_bufs,
             global_sets,

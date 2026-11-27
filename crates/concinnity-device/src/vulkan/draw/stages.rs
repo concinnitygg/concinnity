@@ -68,14 +68,14 @@ impl VkContext {
         // what guarantees a range freed `retire_depth` ticks ago is no longer
         // referenced.
         self.hw.alloc.begin_frame();
-        // Same tick for the owned pipeline / layout / render-pass handles a
+        // Same tick for the owned pipeline / layout / set-layout handles a
         // rebuild displaced, on the same reasoning.
         self.hw.device.begin_frame();
         // Same tick for the staged geometry writes' ring and command buffers.
         self.geometry_uploads.get_mut().begin_frame();
-        // Past the same fence: re-point this slot's sets and framebuffers at
-        // whatever a settings change since its last frame rebuilt.
-        self.rewire_features(frame)?;
+        // Past the same fence: re-point this slot's sets at whatever a
+        // settings change since its last frame rebuilt.
+        self.rewire_features(frame);
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.

@@ -6,7 +6,7 @@ use crate::held_window::HeldWindow;
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components;
-use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::{backend::init, backend::pass_timing, output::hdr};
 use std::cell::Cell;
@@ -102,15 +102,22 @@ pub(super) fn acquire_hardware(
 
     let app_name = CString::new(title).unwrap_or_default();
     let engine_name = c"Concinnity";
-    // Vulkan 1.2 at least for FSR's SPIR-V 1.5, or XeSS's higher floor, clamped to
-    // what the loader supports.
+    // Vulkan 1.3 for dynamic rendering and synchronization2, or an upscaler SDK's
+    // higher floor, clamped to what the loader supports.
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash
     // sizes the output vector from the count the driver reports.
     let loader_version = unsafe { entry.try_enumerate_instance_version() }
         .ok()
         .flatten()
-        .unwrap_or(vk::API_VERSION_1_2);
-    let api_version = vk::API_VERSION_1_2
+        .unwrap_or(vk::API_VERSION_1_0);
+    if loader_version < vk::API_VERSION_1_3 {
+        return Err(RenderError::Other(format!(
+            "the Vulkan loader supports {}.{}, and this renderer needs 1.3",
+            vk::api_version_major(loader_version),
+            vk::api_version_minor(loader_version),
+        )));
+    }
+    let api_version = vk::API_VERSION_1_3
         .max(upscale_sdk.min_api_version())
         .min(loader_version);
     let app_info = vk::ApplicationInfo::default()

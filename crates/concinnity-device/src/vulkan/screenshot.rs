@@ -2,7 +2,7 @@
 //!
 //! A frame asked to capture (`FrameParams::capture`) copies its swapchain image
 //! into a reused host-visible buffer at the tail of its own end command buffer,
-//! after the composite render pass left the image in `PRESENT_SRC_KHR`. The
+//! after the composite pass left the image in `PRESENT_SRC_KHR`. The
 //! capture is parked under its frame slot and handed to the shared capture
 //! writer once that slot's fence has been waited, so the presenting thread
 //! neither waits nor encodes.

@@ -3,10 +3,10 @@
 //! object, and the packing (`vulkan/compact.rs`) writes the kept ones'
 //! `VkDrawIndexedIndirectCommand`s into one list per stream of this frame's
 //! indirect buffer. The bindless Main pass then draws each list with one
-//! indirect draw. Must run outside any render pass
-//! (Vulkan disallows compute dispatch inside a render pass), which is
+//! indirect draw. Must run outside any rendering scope
+//! (Vulkan disallows compute dispatch inside one), which is
 //! why the graph dispatch site in `vulkan/draw.rs::record_frame` sits
-//! before `cmd_begin_render_pass` for Shadow / Main.
+//! before `cmd_begin_rendering` for Shadow / Main.
 //!
 //! The shape mirrors `metal/cull.rs::encode_cull`; the graph executor
 //! in [`graph_exec.rs`](graph_exec.rs) dispatches `PassId::Cull` here.
@@ -108,13 +108,6 @@ impl VkContext {
             Some(pipelines) => Some(&pipelines.main),
             None => self.cull.bindless_pipeline.as_ref(),
         }
-    }
-
-    // True when two-pass Hi-Z occlusion runs this frame: requested, built, and on
-    // the bindless path with geometry. The graph's HizEarly / CullLate / MainLate
-    // chain and every encoder gate on exactly this.
-    pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
-        self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
     }
 
     // Whether launch built two-pass occlusion: requested, with the phase-two
@@ -234,7 +227,7 @@ impl VkContext {
     }
 
     // Cull every record against each re-rendered cascade's light frustum, outside
-    // any render pass, at the top of `encode_shadow_pass`.
+    // any rendering scope, at the top of `encode_shadow_pass`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
         rec: &Recorder<'_>,

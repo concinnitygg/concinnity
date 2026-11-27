@@ -1,4 +1,4 @@
-//! Vulkan swapchain, attachment, and framebuffer creation, plus the
+//! Vulkan swapchain and attachment creation, plus the
 //! swapchain rebuild path.
 
 use ash::vk;
@@ -25,7 +25,7 @@ use super::texture::{
     create_msaa_color_image,
 };
 use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
-use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
+use crate::vulkan::owned::VkDevice;
 
 impl VkContext {
     pub(super) fn destroy_swapchain_resources(&mut self) {
@@ -48,11 +48,6 @@ impl VkContext {
                     .destroy_swapchain(self.swapchain.handle, None);
             };
         }
-        self.targets.framebuffers.clear();
-        // The shared post passes' cached framebuffers name views dropped here
-        // (the HDR scene the SSGI composite writes) or rebuilt along with them.
-        self.post.cache.forget_views();
-        self.composite.framebuffers.clear();
         // Dropping the attachment images retires them through the allocator.
         self.targets.color_images.clear();
         self.targets.depth_images.clear();
@@ -228,21 +223,6 @@ impl VkContext {
             render_ext,
             self.frames_in_flight,
         )?;
-        self.targets.framebuffers = create_main_framebuffers(
-            &self.hw.device,
-            self.targets.main_render_pass.handle(),
-            &self.targets.color_images,
-            &self.targets.depth_images,
-            &self.targets.hdr_resolve_images,
-            render_ext,
-            self.targets.msaa_samples,
-        )?;
-        self.composite.framebuffers = create_composite_framebuffers(
-            &self.hw.device,
-            self.composite.render_pass.handle(),
-            &self.swapchain.image_views,
-            ext,
-        )?;
 
         // Rebuild the octaves below the bloom chain's top at the new output
         // resolution; the top itself is the pool's, rebuilt above.
@@ -265,8 +245,8 @@ impl VkContext {
         // Rebuild the G-buffer targets first: every reader below re-points at them.
         if let Some(mut gb) = self.gbuffer.take() {
             // The three color channels are pool-owned and were reallocated by
-            // the pool rebuild above, so the framebuffers built here reference
-            // the new images.
+            // the pool rebuild above, so the targets rebuilt here name the new
+            // images.
             let pooled = self
                 .targets
                 .transient_pool
@@ -364,72 +344,47 @@ impl VkContext {
     // Rebuild the render-resolution targets of the passes that draw into the
     // scene against the rebuilt attachments.
     fn rebuild_scene_pass_targets(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
-        // Rebuild the decal framebuffers and re-point the per-frame depth binding.
-        if let Some(mut decals) = self.decal.resources.take() {
-            let hdr_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
+        // Re-point the decal pass's per-frame depth binding.
+        if let Some(decals) = self.decal.resources.take() {
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            decals.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
+            decals.repoint_depth(&self.hw.device, &depth_views);
             self.decal.resources = Some(decals);
         }
 
-        // Rebuild the line framebuffers + re-point the per-frame depth
-        // descriptor. Mirrors the decal rebuild; only present once a frame
-        // published lines and the lazy build ran.
-        if let Some(mut lines) = self.lines.resources.take() {
-            let hdr_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
+        // Re-point the line pass's per-frame depth descriptor; only present once
+        // a frame published lines and the lazy build ran.
+        if let Some(lines) = self.lines.resources.take() {
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            lines.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
+            lines.repoint_depth(&self.hw.device, &depth_views);
             self.lines.resources = Some(lines);
         }
 
-        // Rebuild the fog framebuffers + re-point the per-frame depth
-        // descriptor at the rebuilt depth view. Mirrors the decal rebuild;
-        // the pipeline, layouts, UBOs, and sampler all survive.
-        if let Some(mut fog) = self.fog.resources.take() {
-            let hdr_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
+        // Re-point the fog's per-frame depth descriptor at the rebuilt depth
+        // view. Mirrors the decal rebuild; the pipeline, layouts, UBOs, and
+        // sampler all survive.
+        if let Some(fog) = self.fog.resources.take() {
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            fog.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
+            fog.repoint_depth(&self.hw.device, &depth_views);
             self.fog.resources = Some(fog);
         }
 
         // The haze pass draws into the scene and reads its depth, like fog.
         if let Some(mut atmosphere) = self.atmosphere.take() {
-            let hdr_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
@@ -443,7 +398,6 @@ impl VkContext {
                     command_pool: self.commands.command_pool,
                     queue: self.hw.graphics_queue,
                 },
-                &hdr_views,
                 &depth_views,
                 render_ext,
                 self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
@@ -453,8 +407,7 @@ impl VkContext {
 
         // Recreate the raymarch scene snapshot at the new resolution + re-point
         // the `scene_color` binding of every view set. The pipelines, layouts,
-        // UBOs, cube buffers, and render passes survive; the pass reuses the
-        // rebuilt main framebuffers, so only the snapshot moved.
+        // UBOs and cube buffers survive, so only the snapshot moved.
         if let Some(mut rm) = self.raymarch.take() {
             rm.rebuild(
                 RaymarchDeviceContext {
@@ -470,7 +423,7 @@ impl VkContext {
         }
 
         // Rebuild the planar mirror targets first, then the transparent pass's
-        // snapshot and framebuffers, re-resolving the scene target that moved with the
+        // snapshot, re-resolving the scene target that moved with the
         // reflection composite or HDR resolve.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.rebuild(
@@ -489,20 +442,7 @@ impl VkContext {
             .planar_reflection
             .as_ref()
             .map_or_default(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect());
-        let mask_views: Vec<vk::ImageView> = self
-            .targets
-            .reactive_mask_images
-            .iter()
-            .map(|img| img.view)
-            .collect();
         if let Some(mut transparent) = self.transparent.take() {
-            let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..self
-                .frames_in_flight)
-                .map(|i| {
-                    let scene = self.post_scene_image(i);
-                    (scene.view, scene.image)
-                })
-                .unzip();
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
@@ -521,9 +461,6 @@ impl VkContext {
                 render_ext.width,
                 render_ext.height,
                 TransparentRebuildTargets {
-                    scene_views: &scene_views,
-                    scene_images: &scene_images,
-                    reactive_mask_views: &mask_views,
                     depth_views: &depth_views,
                     planar_target_views: &planar_target_views,
                     reflection_divisor: self
@@ -590,41 +527,22 @@ impl VkContext {
             bake.rewrite_hiz_view(&self.hw.device, hiz.read_set_view());
         }
 
-        // Rebuild the particle framebuffers + re-point the per-frame depth
-        // descriptor at the new resolution. The pipelines, layouts, view UBOs,
-        // per-emitter pools, and per-emitter descriptor sets all survive.
-        if let Some(mut p) = self.particle.resources.take() {
-            let hdr_views: Vec<vk::ImageView> = self
-                .targets
-                .hdr_resolve_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
+        // Re-point the particle pass's per-frame depth descriptor at the new
+        // resolution. The pipelines, layouts, view UBOs, per-emitter pools, and
+        // per-emitter descriptor sets all survive.
+        if let Some(p) = self.particle.resources.take() {
             let depth_views: Vec<vk::ImageView> = self
                 .targets
                 .depth_images
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            let mask_views: Vec<vk::ImageView> = self
-                .targets
-                .reactive_mask_images
-                .iter()
-                .map(|img| img.view)
-                .collect();
-            let scene_views: Vec<vk::ImageView> = (0..self.frames_in_flight)
-                .map(|i| self.post_scene_image(i).view)
-                .collect();
-            p.rebuild(
+            p.repoint_depth(
                 &self.hw.device,
                 crate::vulkan::particle::ParticlePassTargets {
-                    hdr_resolve_views: &hdr_views,
-                    scene_views: &scene_views,
-                    reactive_mask_views: &mask_views,
                     depth_views: &depth_views,
-                    extent: render_ext,
                 },
-            )?;
+            );
             self.particle.resources = Some(p);
         }
 
@@ -757,7 +675,7 @@ fn resolve_swapchain_extent(
 }
 
 // Whether `extent` can carry a swapchain. Vulkan rejects a zero dimension on
-// the swapchain and on every attachment, framebuffer, render area, and viewport
+// the swapchain and on every attachment, render area, and viewport
 // sized from it.
 pub(super) fn extent_is_presentable(extent: vk::Extent2D) -> bool {
     extent.width > 0 && extent.height > 0
@@ -809,7 +727,7 @@ pub(super) fn create_swapchain_inner(
         vk::Format::B8G8R8A8_UNORM,
         vk::ColorSpaceKHR::SRGB_NONLINEAR,
     );
-    // PQ candidates, float first so the composite render pass + screenshot
+    // PQ candidates, float first so the composite pass + screenshot
     // read-back stay on the same `R16G16B16A16_SFLOAT` swapchain the scRGB
     // path uses; the 10-bit packed format is the secondary option.
     let pq_pairs = [
@@ -922,11 +840,6 @@ pub(super) fn create_swapchain_image_views(
         .collect()
 }
 
-// Main scene render pass. Renders linear-light HDR into an off-screen
-// `R16G16B16A16_SFLOAT` target (the MSAA color image when multisampled, or
-// the resolve image directly otherwise) and ends with the resolve image in
-// `SHADER_READ_ONLY_OPTIMAL` so the composite pass can sample it.
-
 // Vulkan handles needed to allocate + transition off-screen attachment images.
 pub(super) struct AttachmentDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
@@ -972,59 +885,6 @@ pub(super) fn create_attachments(
         }
     }
     Ok((color_images, depth_images, resolve_images))
-}
-
-// Main-pass framebuffers, one per frame-in-flight slot. Each attaches the HDR
-// color (MSAA color + resolve, or just the resolve image) and depth.
-pub(super) fn create_main_framebuffers(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    color_images: &[GpuImage],
-    depth_images: &[GpuImage],
-    resolve_images: &[GpuImage],
-    extent: vk::Extent2D,
-    msaa: vk::SampleCountFlags,
-) -> RenderResult<Vec<OwnedFramebuffer>> {
-    (0..resolve_images.len())
-        .map(|i| {
-            let attachments: Vec<vk::ImageView> = if msaa == vk::SampleCountFlags::TYPE_1 {
-                vec![resolve_images[i].view, depth_images[i].view]
-            } else {
-                vec![
-                    color_images[i].view,
-                    depth_images[i].view,
-                    resolve_images[i].view,
-                ]
-            };
-            device.framebuffer(
-                render_pass,
-                &attachments,
-                extent,
-                &format!("framebuffer[{i}]"),
-            )
-        })
-        .collect()
-}
-
-// Composite-pass framebuffers, one per swapchain image.
-pub(super) fn create_composite_framebuffers(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    swapchain_views: &[vk::ImageView],
-    extent: vk::Extent2D,
-) -> RenderResult<Vec<OwnedFramebuffer>> {
-    swapchain_views
-        .iter()
-        .enumerate()
-        .map(|(i, &sc_view)| {
-            device.framebuffer(
-                render_pass,
-                &[sc_view],
-                extent,
-                &format!("composite framebuffer[{i}]"),
-            )
-        })
-        .collect()
 }
 
 // Write a composite descriptor set: binding 0 = HDR resolve image,
@@ -1123,26 +983,6 @@ fn write_composite_images(
             w.sampled_image(b, view)
         })
         .apply(device);
-}
-
-// Create one framebuffer per cascade slice of the array shadow map. Each
-// framebuffer attaches a single-layer depth view from
-// `shadow_map.aux_views`. Returns one framebuffer per available slice.
-pub(super) fn create_shadow_framebuffers(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    shadow_map: &GpuImage,
-    size: u32,
-) -> RenderResult<Vec<OwnedFramebuffer>> {
-    device.single_view_framebuffers(
-        render_pass,
-        shadow_map.aux_views.iter().copied(),
-        vk::Extent2D {
-            width: size,
-            height: size,
-        },
-        "shadow framebuffer",
-    )
 }
 
 #[cfg(test)]

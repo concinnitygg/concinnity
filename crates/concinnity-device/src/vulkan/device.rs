@@ -30,14 +30,30 @@ pub(super) fn pick_physical_device(
                 let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
                 name.to_bytes() == b"VK_KHR_swapchain"
             });
-            if has_swapchain {
+            if has_swapchain && renders_dynamically(instance, pd) {
                 return Ok((pd, gf, pf));
             }
         }
     }
     Err(RenderError::Other(
-        "no suitable Vulkan physical device found".to_string(),
+        "no Vulkan 1.3 device with dynamic rendering and synchronization2 found".to_string(),
     ))
+}
+
+// Whether `pd` is Vulkan 1.3 with the two 1.3 features every pass records with.
+fn renders_dynamically(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
+    // SAFETY: a property query on a live handle; it only reads.
+    let api = unsafe { instance.get_physical_device_properties(pd) }.api_version;
+    if api < vk::API_VERSION_1_3 {
+        return false;
+    }
+    let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
+    {
+        let mut probe = vk::PhysicalDeviceFeatures2::default().push_next(&mut v13);
+        // SAFETY: a property query on a live handle; it only reads.
+        unsafe { instance.get_physical_device_features2(pd, &mut probe) };
+    }
+    v13.dynamic_rendering != 0 && v13.synchronization2 != 0
 }
 
 pub(super) fn query_queue_families(
@@ -454,8 +470,12 @@ pub(super) fn create_logical_device(
         }
         private_data_probe.private_data != 0
     };
-    let mut private_data_enable =
-        vk::PhysicalDevicePrivateDataFeatures::default().private_data(true);
+    // Dynamic rendering and synchronization2 for every pass, with Streamline's
+    // private data slot riding the same 1.3 struct.
+    let mut v13_enable = vk::PhysicalDeviceVulkan13Features::default()
+        .dynamic_rendering(true)
+        .synchronization2(true)
+        .private_data(want_private_data);
     // The probed portability subset, reused as the enable struct so every
     // feature the driver supports is on. Its `p_next` still points into the
     // probe chain, so clear it before it is pushed onto a different chain.
@@ -486,11 +506,11 @@ pub(super) fn create_logical_device(
         let mut head =
             upscaler_sdk.xess_device_features(instance, pd, (&raw mut features2).cast::<c_void>());
         enable_bindless_features(head);
-        // XeSS may chain a `Vulkan13Features`, which then carries the feature
-        // instead of a struct of its own.
-        if want_private_data && !enable_private_data(head) {
-            private_data_enable.p_next = head;
-            head = (&raw mut private_data_enable).cast::<c_void>();
+        // XeSS may chain a `Vulkan13Features`, which then carries the 1.3
+        // features instead of a struct of its own.
+        if !enable_vulkan13(head, want_private_data) {
+            v13_enable.p_next = head;
+            head = (&raw mut v13_enable).cast::<c_void>();
         }
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
@@ -545,9 +565,7 @@ pub(super) fn create_logical_device(
     if has_portability_subset {
         device_info = device_info.push_next(&mut portability_enable);
     }
-    if want_private_data {
-        device_info = device_info.push_next(&mut private_data_enable);
-    }
+    device_info = device_info.push_next(&mut v13_enable);
 
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
@@ -589,15 +607,19 @@ fn enable_bindless_features(head: *mut c_void) {
     f.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
 }
 
-// Turn `privateData` on in a `Vulkan13Features` already in the chain at `head`,
-// whether one was there.
-fn enable_private_data(head: *mut c_void) -> bool {
+// Turn dynamic rendering, synchronization2 and, when wanted, `privateData` on
+// in a `Vulkan13Features` already in the chain at `head`, whether one was there.
+fn enable_vulkan13(head: *mut c_void, private_data: bool) -> bool {
     let Some(node) = chained(head, vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) else {
         return false;
     };
     // SAFETY: as in `enable_bindless_features`, for the 1.3 struct.
     let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan13Features<'_>>() };
-    f.private_data = vk::TRUE;
+    f.dynamic_rendering = vk::TRUE;
+    f.synchronization2 = vk::TRUE;
+    if private_data {
+        f.private_data = vk::TRUE;
+    }
     true
 }
 
@@ -690,22 +712,31 @@ mod tests {
         );
     }
 
-    // XeSS's chain carries the 1.3 struct, which then takes the feature; a
+    // XeSS's chain carries the 1.3 struct, which then takes the features; a
     // chain without one reports so, and the caller chains its own.
     #[test]
-    fn private_data_rides_a_chained_vulkan13_struct() {
+    fn the_1_3_features_ride_a_chained_vulkan13_struct() {
         let mut v13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut v12 = vk::PhysicalDeviceVulkan12Features {
             p_next: (&raw mut v13).cast::<c_void>(),
             ..Default::default()
         };
         let head = (&raw mut v12).cast::<c_void>();
-        assert!(enable_private_data(head));
+        assert!(enable_vulkan13(head, false));
+        assert_eq!(
+            (
+                v13.dynamic_rendering,
+                v13.synchronization2,
+                v13.private_data
+            ),
+            (vk::TRUE, vk::TRUE, vk::FALSE)
+        );
+        assert!(enable_vulkan13(head, true));
         assert_eq!(v13.private_data, vk::TRUE);
 
         let mut alone = vk::PhysicalDeviceVulkan12Features::default();
-        assert!(!enable_private_data((&raw mut alone).cast::<c_void>()));
-        assert!(!enable_private_data(std::ptr::null_mut()));
+        assert!(!enable_vulkan13((&raw mut alone).cast::<c_void>(), true));
+        assert!(!enable_vulkan13(std::ptr::null_mut(), true));
     }
 
     #[test]

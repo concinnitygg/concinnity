@@ -50,7 +50,7 @@ impl SsgiResources {
     }
 
     // Recreate the targets at a new render extent. The caller has already idled
-    // the device and dropped the framebuffers naming the old views.
+    // the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkPostDevice<'_>,
@@ -120,21 +120,7 @@ impl VkContext {
             params,
         ) {
             tracing::error!("SSGI resolve: {e}");
-            return;
         }
-        // The output rests shader-readable like every pass-owned post target,
-        // but the main render pass's dependency orders no color write before
-        // its fragment reads, so make the resolve's writes visible to them here.
-        let visible = vk::MemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ);
-        rec.pipeline_barrier(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
-            std::slice::from_ref(&visible),
-            &[],
-            &[],
-        );
     }
 
     // Encode SSGI after the main pass: the depth pyramid, the age, the trace

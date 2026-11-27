@@ -95,14 +95,12 @@ impl VkContext {
     pub(in crate::vulkan) fn bucket_pipeline_targets(&self) -> Option<BucketPipelineTargets> {
         let layout = self.cull.bindless_pipeline_layout.as_ref()?;
         let prepass = match (self.cull.prepass_layout.as_ref(), self.gbuffer.as_ref()) {
-            (Some(prepass), Some(gb)) => Some(PrepassTargets {
-                render_pass: gb.prepass_render_pass.handle(),
+            (Some(prepass), Some(_)) => Some(PrepassTargets {
                 layout: prepass.pipeline_layout.handle(),
             }),
             _ => None,
         };
         Some(BucketPipelineTargets {
-            render_pass: self.targets.main_render_pass.handle(),
             layout: layout.handle(),
             prepass,
             msaa_samples: self.targets.msaa_samples,

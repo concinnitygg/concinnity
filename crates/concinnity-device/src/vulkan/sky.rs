@@ -1,5 +1,5 @@
 // The background sky: a fullscreen draw at the tail of each opaque scene pass
-// (main camera, probe face, planar mirror) inside its own render pass, and one
+// (main camera, probe face, planar mirror) inside its own scope, and one
 // at the tail of the G-buffer pre-pass for motion. It reads the set 0 the pass
 // already bound for its viewpoint.
 
@@ -27,7 +27,6 @@ impl SkyState {
     pub(in crate::vulkan) fn build(
         device: &VkDevice,
         global_set_layout: vk::DescriptorSetLayout,
-        main_render_pass: vk::RenderPass,
         samples: vk::SampleCountFlags,
         background: bool,
         hot_reload: bool,
@@ -40,7 +39,6 @@ impl SkyState {
             device,
             &super::builtin_shaders::SKY_FRAG,
             layout.handle(),
-            main_render_pass,
             samples,
             hot_reload,
         )?;
@@ -68,7 +66,6 @@ pub(in crate::vulkan) fn build_sky_pipeline(
     device: &VkDevice,
     fragment: &concinnity_engine::render::shader::programs::ShaderProgram,
     layout: vk::PipelineLayout,
-    main_render_pass: vk::RenderPass,
     samples: vk::SampleCountFlags,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
@@ -77,13 +74,19 @@ pub(in crate::vulkan) fn build_sky_pipeline(
     GraphicsPipelineDesc {
         depth: Depth::read_only(),
         samples,
-        ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, main_render_pass, &[Blend::Opaque])
+        ..GraphicsPipelineDesc::fullscreen(
+            &vs,
+            &fs,
+            layout,
+            super::main_pass::MAIN_FORMATS,
+            &[Blend::Opaque],
+        )
     }
     .build(device, "sky")
 }
 
 // Draw the fullscreen sky triangle under `pipeline` with `sets` bound from set 0, inside an open
-// render pass the pipeline is compatible with on a recording `cmd`.
+// main-pass scope on a recording `cmd`.
 fn draw_sky_triangle(
     rec: &Recorder<'_>,
     pipeline: &OwnedPipeline,
@@ -110,8 +113,8 @@ impl VkContext {
         )
     }
 
-    // Draw the environment behind everything drawn so far in the open render
-    // pass, which must be `main_render_pass`-compatible, from the viewpoint
+    // Draw the environment behind everything drawn so far in the open main-pass
+    // scope, from the viewpoint
     // `global_set` describes. `frame_idx` picks the atmosphere's constants.
     pub(in crate::vulkan) fn encode_sky(
         &self,

@@ -107,7 +107,7 @@ pub(super) enum CaptureFaces {
     /// Copied or written in by a kernel, arriving in `TRANSFER_DST`.
     Copied,
     /// Rendered straight into its layers, arriving in
-    /// `SHADER_READ_ONLY_OPTIMAL` as the main render pass leaves its color.
+    /// `SHADER_READ_ONLY_OPTIMAL` as the main pass leaves its color.
     Rendered,
 }
 
@@ -328,7 +328,7 @@ impl PrefilterGpu {
         cube_range(0, self.mips)
     }
 
-    /// A view of face `face` of the capture's top mip, for a render pass to
+    /// A view of face `face` of the capture's top mip, for a face render to
     /// draw that face into. It lives as long as the capture.
     pub(super) fn capture_face_view(
         &self,
